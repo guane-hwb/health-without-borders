@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Variables de entorno
+.env
+
+# Data Science (Datos crudos no se suben)
+data_science/raw/
+
+# IDE
+.vscode/
+
+# Google Cloud credentials
+gcp_key.json
