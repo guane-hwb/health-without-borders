@@ -1,8 +1,8 @@
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, Field
+from typing import List, Optional, Any
 from datetime import date
 
-# --- Sub-modelos (Para los objetos anidados) ---
+# --- Sub-models (Nested Objects) ---
 
 class Address(BaseModel):
     street: str
@@ -14,15 +14,15 @@ class Address(BaseModel):
 class PatientInfo(BaseModel):
     lastName: str
     firstName: str
-    dob: date # date of birth
+    dob: date # Date of Birth
     gender: str
     bloodType: str
     address: Address
-    # Agregamos alergias aquí aunque no venga en el JSON original, 
-    # para que el Front sepa que lo esperamos a futuro.
+    
+    # Optional fields (Frontend might not send them initially)
     allergies: Optional[str] = "NINGUNA" 
-    weight: Optional[float] = None  # En Kilogramos (ej. 12.5)
-    height: Optional[float] = None  # En Centímetros (ej. 95.0)
+    weight: Optional[float] = Field(None, description="Weight in Kg (e.g. 12.5)")
+    height: Optional[float] = Field(None, description="Height in cm (e.g. 95.0)")
 
 class GuardianInfo(BaseModel):
     name: str
@@ -44,15 +44,21 @@ class MedicalHistoryItem(BaseModel):
 class VaccinationRecordItem(BaseModel):
     date: date
     vaccineName: str
-    vaccineCode: str  # El código CVX (ej. "90707")
+    vaccineCode: str  # CVX Code (e.g., "90707")
     dose: int
     lotNumber: str
     status: str
 
-# --- Modelo Principal (El JSON completo) ---
+# --- Main Model (Incoming JSON Payload) ---
 
 class PatientFullRecord(BaseModel):
     patientId: str
+    
+    # New Field: NFC Chip UID
+    # Optional for now to maintain backward compatibility during dev, 
+    # but should be required in production.
+    nfc_uid: Optional[str] = None 
+    
     patientInfo: PatientInfo
     guardianInfo: GuardianInfo
     medicalHistory: List[MedicalHistoryItem] = []
@@ -61,8 +67,10 @@ class PatientFullRecord(BaseModel):
     class Config:
         from_attributes = True
 
+# --- API Responses ---
 
 class PatientSyncResponse(BaseModel):
     status: str
     internal_id: str
+    gcp_status: Optional[str] = "unknown" # Added to match endpoint logic
     message: str

@@ -1,60 +1,67 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Date, ForeignKey, Text, JSON
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Date, Text, JSON, Float
 from sqlalchemy.sql import func
 from app.db.base import Base
-from sqlalchemy import Float
-
 
 class Patient(Base):
+    """
+    Main Patient Entity.
+    Stores both relational data for quick lookups and the raw JSON 
+    for complete medical history (Hybrid Pattern).
+    """
     __tablename__ = "patients"
 
-    # ID Interno (ej. "UNICEF-COL-84321")
+    # Internal ID (e.g., "UNICEF-COL-84321")
     id = Column(String, primary_key=True, index=True)
     
-    # ID del chip NFC
+    # NFC Chip UID (Factory ID) - Critical for security
     nfc_uid = Column(String, unique=True, index=True, nullable=False)
     
-    # Datos Demográficos Básicos (Para búsquedas rápidas en SQL)
+    # Basic Demographics (Indexed for SQL search performance)
     first_name = Column(String, index=True)
     last_name = Column(String, index=True)
     birth_date = Column(Date)
     blood_type = Column(String(5))
     
-    weight = Column(Float, nullable=True)
-    height = Column(Float, nullable=True)
+    # Anthropometric Data (Critical for malnutrition tracking)
+    weight = Column(Float, nullable=True) # kg
+    height = Column(Float, nullable=True) # cm
 
-    # Guardamos el JSON completo crudo para tener todo el historial clínico 
-    # sin complicar la estructura relacional por ahora (Patrón Híbrido)
+    # Raw Full JSON Storage
+    # Preserves the exact payload received from mobile for audit/HL7 generation
     full_record_json = Column(JSON) 
     
-    # Metadatos de auditoría
+    # Audit Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     is_synced_with_cloud = Column(Boolean, default=False)
 
+    def __repr__(self):
+        return f"<Patient(id={self.id}, name={self.first_name} {self.last_name})>"
+
 # ---------------------------------------------------------
-# CATÁLOGO: DIAGNÓSTICOS (CIE-10)
+# CATALOG: DIAGNOSES (ICD-10 / CIE-10)
 # ---------------------------------------------------------
 class DiagnosisCIE10(Base):
     __tablename__ = "catalog_cie10"
 
-    # El código oficial (ej. "A09.9")
+    # Official Code (e.g., "A09.9")
     code = Column(String(10), primary_key=True, index=True)
     
-    # Descripción (ej. "Gastroenteritis y colitis...")
+    # Description (e.g., "Gastroenteritis...")
     description = Column(Text, nullable=False)
     
-    # Para optimización: Marcar las enfermedades más comunes en frontera
+    # Optimization: Flag for common diseases in border areas
     is_common = Column(Boolean, default=False)
 
 # ---------------------------------------------------------
-# CATÁLOGO: VACUNAS (CVX - HL7)
+# CATALOG: VACCINES (CVX - HL7 Standard)
 # ---------------------------------------------------------
 class VaccineCVX(Base):
     __tablename__ = "catalog_vaccines"
 
-    # Código numérico CVX (ej. 90707)
+    # CVX Numeric Code (e.g., 90707)
     code = Column(Integer, primary_key=True, index=True)
     
-    # Nombre de la vacuna (ej. "Triple Viral")
+    # Vaccine Name (e.g., "MMR")
     name = Column(String, nullable=False)
     
     is_active = Column(Boolean, default=True)

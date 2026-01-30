@@ -1,20 +1,20 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-import os
-from dotenv import load_dotenv
+from app.core.config import settings
 
-load_dotenv() # Carga las variables del .env
+# pool_pre_ping=True helps handle DB connection drops gracefully
+engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
 
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
-
-# Crear el motor de conexión
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
-
-# Crear la fábrica de sesiones
+# Create SessionLocal class
+# autocommit=False: We want to control when to commit transactions
+# autoflush=False: We want to control when changes are sent to SQL
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Función de dependencia para obtener la DB en cada request
 def get_db():
+    """
+    Dependency generator for FastAPI.
+    Creates a new database session for each request and closes it afterwards.
+    """
     db = SessionLocal()
     try:
         yield db
