@@ -59,7 +59,7 @@ class VaccineCVX(Base):
     __tablename__ = "catalog_vaccines"
 
     # CVX Numeric Code (e.g., 90707)
-    code = Column(Integer, primary_key=True, index=True)
+    code = Column(String(10), primary_key=True, index=True)
     
     # Vaccine Name (e.g., "MMR")
     name = Column(String, nullable=False)

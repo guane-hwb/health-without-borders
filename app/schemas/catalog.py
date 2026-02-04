@@ -12,7 +12,7 @@ class DiagnosisBase(BaseModel):
 
 # --- CVX (Vaccines) ---
 class VaccineBase(BaseModel):
-    code: int
+    code: str
     name: str
     is_active: bool
 
