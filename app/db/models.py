@@ -65,3 +65,18 @@ class VaccineCVX(Base):
     name = Column(String, nullable=False)
     
     is_active = Column(Boolean, default=True)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    full_name = Column(String, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    
+    hashed_password = Column(String, nullable=False)
+    
+    # Roles: "admin", "doctor", "nurse"
+    role = Column(String, default="doctor")
+    
+    is_active = Column(Boolean, default=True)

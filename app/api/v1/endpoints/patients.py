@@ -4,6 +4,9 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.db.models import User
+from app.api.deps import get_current_user
+
 from app.db.session import get_db
 from app.schemas.patient import PatientFullRecord, PatientSyncResponse
 from app.services.patient_service import (
@@ -19,7 +22,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("/nfc/{nfc_uid}", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
-def get_patient_by_nfc_scan(nfc_uid: str, db: Session = Depends(get_db)):
+def get_patient_by_nfc_scan(
+    nfc_uid: str, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """
     Get patient details by scanning the NFC bracelet.
     
@@ -27,7 +34,7 @@ def get_patient_by_nfc_scan(nfc_uid: str, db: Session = Depends(get_db)):
     If the bracelet is registered, returns the full medical record.
     If not, returns 404 Not Found.
     """
-    logger.info(f"Scanning NFC Request: {nfc_uid}")
+    logger.info(f"User {current_user.email} is scanning NFC UID: {nfc_uid}")
     
     # Delegate database lookup to the service layer
     patient_db = get_patient_by_nfc(db, nfc_uid)
@@ -45,7 +52,11 @@ def get_patient_by_nfc_scan(nfc_uid: str, db: Session = Depends(get_db)):
 
 
 @router.post("/sync", response_model=PatientSyncResponse, status_code=status.HTTP_201_CREATED)
-def sync_patient(patient_data: PatientFullRecord, db: Session = Depends(get_db)):
+def sync_patient(
+    patient_data: PatientFullRecord, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """
     Synchronize patient data from mobile app.
     
@@ -59,7 +70,7 @@ def sync_patient(patient_data: PatientFullRecord, db: Session = Depends(get_db))
     """
     try:
         # 1. Save to Local DB
-        logger.info(f"Receiving sync request for patient ID: {patient_data.patientId}")
+        logger.info(f"User {current_user.email} is syncing patient {patient_data.patientId}")
         saved_patient = create_or_update_patient(db, patient_data)
         
         # 2. HL7 Conversion
@@ -95,7 +106,8 @@ def sync_patient(patient_data: PatientFullRecord, db: Session = Depends(get_db))
 @router.get("/search", response_model=List[PatientFullRecord], status_code=status.HTTP_200_OK)
 def search_patients(
     q: str = Query(..., min_length=3, description="Search by Name or ID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Search patients by Name (First/Last) or Patient ID.
@@ -107,7 +119,8 @@ def search_patients(
     Returns:
         List[PatientFullRecord]: A list of matching patients (max 10).
     """
-    logger.info(f"Searching patients with query: {q}")
+    
+    logger.info(f"User {current_user.email} is searching patients with query: {q}")
     
     # Call the Service Layer
     results = search_patients_by_query(db, q, limit=10)
