@@ -39,6 +39,7 @@ La documentación detallada del proyecto se encuentra organizada en la carpeta `
 
 * [**Guía de Infraestructura y Despliegue**](docs/infrastructure/gcp-deploy.md): Instrucciones paso a paso para desplegar en Google Cloud Platform.
 * [**Arquitectura de Base de Datos**](docs/infrastructure/database.md): Modelado de datos y diccionario de tablas.
+* [**Interoperabilidad HL7v2**](docs/infrastructure/healthcare-api.md): configuración de Google Cloud Healthcare API.
 * [**Seguridad**](docs/infrastructure/security.md): Protocolos de autenticación y manejo de datos sensibles.
 
 ---
