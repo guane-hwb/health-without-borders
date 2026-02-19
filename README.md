@@ -33,75 +33,49 @@ This repository contains the source code for the **Backend**, a RESTful API deve
 
 ---
 
+## 📂 Project Structure
+
+*[TO BE GENERATED]*
+
+---
+
 ## 📚 Documentation
 
 Detailed project documentation is organized in the `docs/` folder:
 
-* [**Infrastructure and Deployment Guide**](docs/infrastructure/gcp-deploy.md): Step-by-step instructions for deploying on Google Cloud Platform.
-* [**Database Architecture**](docs/infrastructure/database.md): Data modeling and table dictionary.
-* [**HL7v2 Interoperability**](docs/infrastructure/healthcare-api.md): Google Cloud Healthcare API configuration.
-* [**Security**](docs/infrastructure/security.md): Authentication protocols and sensitive data handling.
+* **Development:**
+  * [**Local Setup Guide**](docs/development/setup.md): Instructions for configuring Docker and running the API locally.
+* **Infrastructure & Security:**
+  * [**GCP Deployment Guide**](docs/infrastructure/gcp-deploy.md): Step-by-step instructions for deploying to Google Cloud Run.
+  * [**Database Architecture**](docs/infrastructure/database.md): Data modeling, JSONB usage, and table dictionary.
+  * [**Security Protocols**](docs/infrastructure/security.md): JWT configuration, RBAC, and data encryption standards.
+* **Interoperability:**
+  * [**Cloud Healthcare API**](docs/infrastructure/healthcare-api.md): GCP HL7v2 Store and Pub/Sub configuration.
+  * [**HL7v2 Strategy (ADR)**](docs/architecture/hl7v2-strategy.md): Architectural Decision Record comparing GCP, Mirth Connect, and In-House solutions.
 
 ---
 
 ## ⚡ Quick Start (Local Development)
 
-Follow these steps to set up the development environment on your local machine.
+Please refer to the comprehensive [**Local Setup Guide**](docs/development/setup.md) for detailed instructions on spinning up the local Docker database and seeding the clinical catalogs.
 
-### Prerequisites
-* Python 3.11 or higher.
-* Docker Desktop (for the local database).
-* `uv` tool installed (`pip install uv`).
-
-### 1. Clone the repository
+**Basic commands summary:**
 ```bash
+# 1. Clone repository
 git clone [https://github.com/organization/health-without-borders.git](https://github.com/organization/health-without-borders.git)
 cd health-without-borders
 
-```
-
-### 2. Configure Environment Variables
-
-Create a `.env` file in the root directory based on the example:
-
-```bash
-cp .env.example .env
-
-```
-
-*Make sure to configure the `DATABASE_URL` to point to your local instance.*
-
-### 3. Start the Database (Docker)
-
-Run a temporary PostgreSQL instance:
-
-```bash
-docker run --name hwb-db-local \
-    -e POSTGRES_PASSWORD=password \
-    -e POSTGRES_DB=hwb_local \
-    -p 5432:5432 \
-    -d postgres:15
-
-```
-
-### 4. Install Dependencies and Initialize
-
-```bash
-# Install libraries
+# 2. Install dependencies
 uv sync
 
-# Create tables and admin user
-uv run python scripts/create_tables.py
-uv run python scripts/create_generic_user.py
+# 3. Start local database
+docker run --name hwb-db-local -e POSTGRES_PASSWORD=password -e POSTGRES_DB=hwb_local -p 5432:5432 -d postgres:15
 
-# Load medical catalogs (This may take a few minutes)
+# 4. Initialize schema and catalogs
+uv run python scripts/create_tables.py
 uv run python scripts/load_catalogs.py
 
-```
-
-### 5. Run the Server
-
-```bash
+# 5. Run the server
 uv run uvicorn app.main:app --reload
 
 ```
@@ -112,7 +86,7 @@ The service will be available at: http://localhost:8000/docs
 
 ## 🧪 Testing
 
-To run the automated test suite:
+To run the automated test suite before opening a Pull Request:
 
 ```bash
 uv run pytest
@@ -138,3 +112,5 @@ For more details, read [CONTRIBUTING.md](https://www.google.com/search?q=CONTRIB
 This project is licensed under the MIT License - see the [LICENSE](https://www.google.com/search?q=LICENSE) file for details.
 
 ---
+
+**Developed for Health Without Borders**

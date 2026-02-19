@@ -7,14 +7,14 @@ class Settings(BaseSettings):
     Application Configuration.
     Reads settings from environment variables or .env file.
     """
-    PROJECT_NAME: str = "UNICEF Border Health Backend"
+    PROJECT_NAME: str = "Health Without Borders API"
     API_V1_STR: str = "/api/v1"
 
     # --- DATABASE CONFIGURATION ---
     # We allow individual components to support Cloud SQL socket connections.
-    DB_USER: str = "postgres"
-    DB_PASS: str = "password"
-    DB_NAME: str = "postgres"
+    DB_USER: str
+    DB_PASS: str
+    DB_NAME: str
     
     # This variable is automatically injected by Google Cloud Run when using 
     # the flag --add-cloudsql-instances. It triggers the Unix Socket connection strategy.

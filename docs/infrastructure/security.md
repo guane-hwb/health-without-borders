@@ -1,76 +1,79 @@
 # Security Architecture & Protocols
 
-This document outlines the security measures, cryptographic standards, and access control models implemented in the **UNICEF Border Health Backend**. The system follows a "Defense in Depth" strategy, securing data at the application, transport, and storage levels.
+This document outlines the security measures, cryptographic standards, and access control models implemented in the **Health Without Borders API**. The system follows a strict "Defense in Depth" strategy, securing Protected Health Information (PHI) and Personally Identifiable Information (PII) at the application, transport, and storage levels.
 
 ---
 
 ## 1. Authentication (AuthN)
 
-Authentication is handled via the **OAuth2** standard using the **Password Flow**. This approach was selected to facilitate integration with mobile clients that may require offline operation capabilities.
+Authentication is handled via the **OAuth2** standard using the **Password Flow**. This approach facilitates seamless integration with mobile and tablet clients operating in disconnected environments.
 
 ### 1.1. Token Management
 * **Mechanism:** Stateless authentication is achieved using **JSON Web Tokens (JWT)**.
-* **Signing Algorithm:** Tokens are signed using **HS256** (HMAC with SHA-256) with a high-entropy `SECRET_KEY` injected at runtime via environment variables.
-* **Payload:** The token payload contains the user's subject (`sub`) (email) and expiration time (`exp`). No sensitive medical data is included in the token payload.
-* **Expiration Policy:** Access tokens are configured with a **30-day lifespan** (`ACCESS_TOKEN_EXPIRE_MINUTES`).
-    * *Rationale:* This extended duration is required to support health units in border areas with intermittent internet connectivity, allowing medical staff to operate offline for extended periods without forced re-authentication.
+* **Signing Algorithm:** Tokens are signed using **HS256** (HMAC with SHA-256) utilizing a high-entropy `SECRET_KEY` injected securely at runtime.
+* **Payload Privacy:** The token payload strictly contains the user's subject identifier (`sub` / email) and expiration time (`exp`). **No sensitive medical data or PII is ever included in the token payload.**
+* **Expiration Policy:** Access tokens are configured with an extended **30-day lifespan** (`ACCESS_TOKEN_EXPIRE_MINUTES = 43200`).
+    * *Architectural Rationale:* This extended duration is a specific requirement to support health units in border areas with severe, intermittent internet connectivity. It allows medical staff to operate locally (offline-first) for extended periods without forced network-dependent re-authentication.
 
 ### 1.2. Credential Storage
 * **Hashing:** User passwords are **never** stored in plaintext.
-* **Algorithm:** **Bcrypt** is utilized for password hashing. This algorithm automatically handles salting and is computationally expensive to resist brute-force and rainbow table attacks.
-* **Library:** The `passlib` context is configured to use the `bcrypt` scheme, ensuring compatibility with current cryptographic standards.
+* **Algorithm:** **Bcrypt** is utilized for password hashing. This algorithm inherently handles cryptographic salting and is computationally expensive, effectively mitigating brute-force and rainbow table attacks.
 
 ---
 
 ## 2. Authorization (AuthZ)
 
-Access control is enforced via a **Role-Based Access Control (RBAC)** model. Authorization logic is decoupled from business logic using FastAPI Dependencies.
+Access control is enforced via a **Role-Based Access Control (RBAC)** model. Authorization logic is decoupled from business logic using FastAPI's Dependency Injection system.
 
-### 2.1. Roles
-The system currently defines the following roles:
-1.  **Admin:** Full access to user management (creating doctors/coordinators) and system configuration.
-2.  **Doctor:** Operational access to patient records, synchronization endpoints, and medical catalogs. Read/Write access is scoped to clinical data.
+### 2.1. System Roles
+1.  **Admin:** Full access to user management (provisioning doctors/coordinators) and system-wide configuration.
+2.  **Doctor:** Operational access limited to patient records, synchronization endpoints, and medical catalogs. Read/Write access is scoped exclusively to clinical data workflows.
 
-### 2.2. Enforcement
-* **Dependency Injection:** A `RoleChecker` class is injected into protected endpoints.
-* **Flow:**
-    1.  The JWT is validated and decoded.
-    2.  The user's active status (`is_active`) is verified.
-    3.  The user's role is extracted from the database.
-    4.  If the user's role does not match the allowed roles for the specific endpoint, a `403 Forbidden` exception is raised before the request is processed.
+### 2.2. Policy Enforcement
+* A `RoleChecker` dependency class is injected into all protected endpoints.
+* **Execution Flow:**
+    1.  The JWT signature is validated and decoded.
+    2.  The user's active status (`is_active`) is verified to prevent access from revoked accounts.
+    3.  The user's database role is evaluated against the endpoint's allowed roles.
+    4.  Unauthorized requests are immediately rejected with a `403 Forbidden` exception prior to any business logic execution.
 
 ---
 
-## 3. Data Security
+## 3. Data & Clinical Security
 
 ### 3.1. Encryption at Rest
-* **Database:** The PostgreSQL database hosted on **Google Cloud SQL** is encrypted at rest by default using Google-managed AES-256 keys. This covers all user data, medical records, and transaction logs.
-* **Backups:** Automated backups generated by Cloud SQL are also encrypted.
+* **Relational Data:** The PostgreSQL database hosted on **Google Cloud SQL** is encrypted at rest by default using Google-managed AES-256 keys. This covers user data, demographic records, and transaction logs.
+* **Automated Backups:** All automated snapshots and backups generated by Cloud SQL are identically encrypted.
 
 ### 3.2. Encryption in Transit
-* **HTTPS/TLS:** All external communication between the Mobile App and the Backend (Cloud Run) is encrypted via **TLS 1.3**. Google Cloud Run manages the SSL certificates automatically, and non-HTTPS traffic is rejected.
-* **Database Connection:** The connection between the Application Container (Cloud Run) and the Database (Cloud SQL) is secured using the **Cloud SQL Auth Proxy** mechanism (in development) or direct **Unix Sockets** (in production). This ensures that database traffic remains within Google's internal network and is encrypted.
+* **HTTPS/TLS 1.3:** All external communication between the mobile clients and the Cloud Run backend is strictly encrypted via **TLS 1.3**. Non-HTTPS traffic is automatically dropped at the load balancer level.
+* **Internal VPC Traffic:** The connection between the Application Container (Cloud Run) and the Database (Cloud SQL) is secured using **Unix Sockets**. This guarantees that database traffic remains entirely within Google's private internal network and cannot be intercepted from the public internet.
+
+### 3.3. Clinical Interoperability Security (HL7v2)
+Clinical messages routed to the **Google Cloud Healthcare API** are protected under stringent compliance standards (HIPAA/GDPR-ready):
+* **IAM Service Accounts:** The backend does not use user credentials to access the HL7 store. It uses a strictly scoped Service Account possessing only the `roles/healthcare.hl7V2StoreEditor` permission.
+* **Cloud Audit Logs:** Every ingestion, read, or deletion of an HL7v2 message triggers an immutable log entry in Google Cloud Audit Logging, ensuring non-repudiation of all medical data transactions.
 
 ---
 
 ## 4. Infrastructure Security
 
-The infrastructure is designed to minimize the attack surface by leveraging serverless technologies.
+The infrastructure is designed to minimize the attack surface by leveraging stateless, serverless technologies.
 
 ### 4.1. Network Isolation
-* **No Public Database IP:** The Cloud SQL instance is configured to be accessed primarily via the internal GCP network or secured tunnels. It is not exposed directly to the public internet.
-* **Ephemeral Containers:** Google Cloud Run instances are ephemeral. They are spun up on demand and destroyed when idle, preventing long-term persistence of malware or compromised states.
+* **No Public Database IP:** The Cloud SQL instance does not have a public IP address enabled. It is configured to be accessed exclusively via secure GCP tunnels or internal VPC routing.
+* **Ephemeral Compute:** Google Cloud Run instances are ephemeral. Containers are spun up dynamically and destroyed when idle, effectively neutralizing advanced persistent threats (APTs) or long-term malware residency.
 
 ### 4.2. Secret Management
-* **Environment Variables:** Sensitive configuration (Database credentials, Secret Keys) is injected into the container environment at runtime.
-* **Source Control:** No secrets are committed to the Git repository. A `.env.example` file is provided for templates, while actual secrets are managed via the Google Cloud Run revision settings.
+* **Environment Injection:** Sensitive configurations (Database URIs, JWT Secret Keys) are injected into the container memory at runtime.
+* **Zero-Trust Source Control:** No secrets, credentials, or `.env` files are ever committed to the Git repository. A `.env.example` file is provided for developer reference only.
 
 ---
 
-## 5. Operational Security
+## 5. Operational Security & Governance
 
-To support the decentralized nature of the humanitarian operation, a **Delegated Administration** model is recommended:
+To support the decentralized nature of humanitarian deployments, a **Delegated Administration** model is strictly enforced:
 
-1.  **Super Admin (UNICEF HQ):** Responsible for creating "Coordinator" accounts for local health entities.
-2.  **Coordinators (Health Providers):** Responsible for creating and managing accounts for their respective medical staff/tablets.
-3.  **Auditability:** Although a generic user approach is technically supported for rapid deployment, individual accounts per device/tablet are enforced to ensure that actions (such as creating or modifying patient records) can be traced back to a specific source in the system logs.
+1.  **Central Administration (Global HQ):** Responsible for creating "Coordinator" accounts for regional health entities and NGOs.
+2.  **Regional Coordinators (Health Providers):** Responsible for provisioning, auditing, and revoking accounts for their respective medical staff and deployed tablet devices.
+3.  **Traceability:** The use of shared or generic accounts is strictly prohibited in production. Individual accounts per device/practitioner are enforced to guarantee that all clinical actions (creating, modifying, or synchronizing patient records) maintain a perfect cryptographic audit trail linked to a specific human operator.

@@ -9,7 +9,7 @@ setup_logging()
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version="1.0.0",
-    description="Backend for UNICEF Health Migration Project - Open Source",
+    description="Backend Health Without Borders Project - Open Source",
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
 
