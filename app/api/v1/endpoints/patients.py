@@ -1,6 +1,7 @@
 # app/api/v1/endpoints/patients.py
 import logging
-from typing import List
+from typing import List, Optional
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -12,7 +13,7 @@ from app.schemas.patient import PatientFullRecord, PatientSyncResponse
 from app.services.patient_service import (
     create_or_update_patient, 
     get_patient_by_nfc, 
-    search_patients_by_query
+    search_patients_advanced
 )
 from app.services.hl7_service import convert_to_hl7
 from app.services.gcp_service import send_to_google_healthcare
@@ -105,29 +106,37 @@ def sync_patient(
 
 @router.get("/search", response_model=List[PatientFullRecord], status_code=status.HTTP_200_OK)
 def search_patients(
-    q: str = Query(..., min_length=3, description="Search by Name or ID"),
+    first_name: Optional[str] = Query(None, min_length=2, description="Patient's first name"),
+    last_name: Optional[str] = Query(None, min_length=2, description="Patient's last name"),
+    birth_date: Optional[date] = Query(None, description="Patient's date of birth (YYYY-MM-DD)"),
+    guardian_name: Optional[str] = Query(None, min_length=3, description="Guardian's full or partial name"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Search patients by Name (First/Last) or Patient ID.
-    
-    Use Case:
-    - Primary fallback when the patient has lost their NFC bracelet.
-    - Allows the doctor to find the record and link a new bracelet via the Sync endpoint.
-    
-    Returns:
-        List[PatientFullRecord]: A list of matching patients (max 10).
+    Flexible advanced search. Allows missing fields (e.g., unaccompanied minors).
+    At least one search parameter must be provided.
     """
     
-    logger.info(f"User {current_user.email} is searching patients with query: {q}")
+    # Validación de seguridad: Evitar búsquedas vacías que saturen la BD
+    if not any([first_name, last_name, birth_date, guardian_name]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one search parameter (first_name, last_name, birth_date, or guardian_name) must be provided."
+        )
+
+    logger.info(f"User {current_user.email} searching. Params -> First: {first_name}, Last: {last_name}, DOB: {birth_date}, Guardian: {guardian_name}")
     
-    # Call the Service Layer
-    results = search_patients_by_query(db, q, limit=10)
+    results = search_patients_advanced(
+        db=db, 
+        first_name=first_name, 
+        last_name=last_name, 
+        birth_date=birth_date, 
+        guardian_name=guardian_name,
+        limit=10
+    )
     
     if not results:
-        # Return empty list is standard for search APIs (200 OK)
         return []
         
-    # Extract the full JSON blob from the SQL model objects
     return [p.full_record_json for p in results]

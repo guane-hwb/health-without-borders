@@ -1,4 +1,4 @@
-# Salud Sin Fronteras - Backend
+# Health Without Borders - Backend
 
 ![Python Version](https://img.shields.io/badge/python-3.11-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109.0-009688.svg)
@@ -6,113 +6,113 @@
 ![GCP](https://img.shields.io/badge/Google_Cloud-Run-4285F4.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-**Plataforma Interoperable de Historias Médicas para Niños, Niñas y Adolescentes Migrantes.**
+**Interoperable Medical Records Platform for Migrant Children and Adolescents.**
 
-Este repositorio contiene el código fuente del **Backend**, una API RESTful desarrollada para UNICEF Colombia. Su objetivo es garantizar la continuidad de la atención médica de población migrante mediante un sistema seguro, estandarizado (HL7/FHIR) y resiliente a condiciones de conectividad intermitente en zonas fronterizas.
-
----
-
-## 🚀 Características Principales
-
-* **Arquitectura Serverless:** Desplegado en Google Cloud Run para escalabilidad automática y eficiencia de costos.
-* **Seguridad Robusta:** Autenticación vía JWT (JSON Web Tokens) con rotación segura y encriptación de contraseñas con Bcrypt.
-* **Estandarización Médica:** Catálogos internacionales integrados (CIE-10 para diagnósticos y CVX para vacunación).
-* **Offline-First:** Endpoints optimizados para sincronización de datos desde dispositivos móviles con conectividad limitada.
-* **Gestión de Roles:** Sistema RBAC (Role-Based Access Control) para administradores y personal médico.
+This repository contains the source code for the **Backend**, a RESTful API developed for the Health Without Borders initiative. Its goal is to guarantee the continuity of medical care for migrant populations through a secure, standardized (HL7/FHIR) system that is resilient to intermittent connectivity conditions in border areas.
 
 ---
 
-## 🛠️ Stack Tecnológico
+## 🚀 Key Features
 
-* **Lenguaje:** Python 3.11+
-* **Framework Web:** FastAPI
-* **Base de Datos:** PostgreSQL 15 (Cloud SQL en Producción)
+* **Serverless Architecture:** Deployed on Google Cloud Run for automatic scalability and cost efficiency.
+* **Robust Security:** Authentication via JWT (JSON Web Tokens) with secure rotation and password encryption using Bcrypt.
+* **Medical Standardization:** Integrated international catalogs (ICD-10 for diagnoses and CVX for vaccination).
+* **Offline-First:** Optimized endpoints for data synchronization from mobile devices with limited connectivity.
+* **Role Management:** RBAC (Role-Based Access Control) system for administrators and medical staff.
+
+---
+
+## 🛠️ Tech Stack
+
+* **Language:** Python 3.11+
+* **Web Framework:** FastAPI
+* **Database:** PostgreSQL 15 (Cloud SQL in Production)
 * **ORM:** SQLAlchemy 2.0
-* **Gestor de Paquetes:** `uv` (Astral)
-* **Infraestructura:** Docker, Google Artifact Registry, Google Cloud Build.
+* **Package Manager:** `uv` (Astral)
+* **Infrastructure:** Docker, Google Artifact Registry, Google Cloud Build.
 
 ---
 
-## 📚 Documentación
+## 📚 Documentation
 
-La documentación detallada del proyecto se encuentra organizada en la carpeta `docs/`:
+Detailed project documentation is organized in the `docs/` folder:
 
-* [**Guía de Infraestructura y Despliegue**](docs/infrastructure/gcp-deploy.md): Instrucciones paso a paso para desplegar en Google Cloud Platform.
-* [**Arquitectura de Base de Datos**](docs/infrastructure/database.md): Modelado de datos y diccionario de tablas.
-* [**Interoperabilidad HL7v2**](docs/infrastructure/healthcare-api.md): configuración de Google Cloud Healthcare API.
-* [**Seguridad**](docs/infrastructure/security.md): Protocolos de autenticación y manejo de datos sensibles.
+* [**Infrastructure and Deployment Guide**](docs/infrastructure/gcp-deploy.md): Step-by-step instructions for deploying on Google Cloud Platform.
+* [**Database Architecture**](docs/infrastructure/database.md): Data modeling and table dictionary.
+* [**HL7v2 Interoperability**](docs/infrastructure/healthcare-api.md): Google Cloud Healthcare API configuration.
+* [**Security**](docs/infrastructure/security.md): Authentication protocols and sensitive data handling.
 
 ---
 
-## ⚡ Quick Start (Desarrollo Local)
+## ⚡ Quick Start (Local Development)
 
-Siga estos pasos para levantar el entorno de desarrollo en su máquina local.
+Follow these steps to set up the development environment on your local machine.
 
-### Prerrequisitos
-* Python 3.11 o superior.
-* Docker Desktop (para la base de datos local).
-* Herramienta `uv` instalada (`pip install uv`).
+### Prerequisites
+* Python 3.11 or higher.
+* Docker Desktop (for the local database).
+* `uv` tool installed (`pip install uv`).
 
-### 1. Clonar el repositorio
+### 1. Clone the repository
 ```bash
-git clone [https://github.com/organizacion/unicef-backend.git](https://github.com/organizacion/unicef-backend.git)
-cd unicef-backend
+git clone [https://github.com/organization/health-without-borders.git](https://github.com/organization/health-without-borders.git)
+cd health-without-borders
 
 ```
 
-### 2. Configurar Variables de Entorno
+### 2. Configure Environment Variables
 
-Cree un archivo `.env` en la raíz basado en el ejemplo:
+Create a `.env` file in the root directory based on the example:
 
 ```bash
 cp .env.example .env
 
 ```
 
-*Asegúrese de configurar `DATABASE_URL` apuntando a su instancia local.*
+*Make sure to configure the `DATABASE_URL` to point to your local instance.*
 
-### 3. Levantar Base de Datos (Docker)
+### 3. Start the Database (Docker)
 
-Ejecute una instancia temporal de PostgreSQL:
+Run a temporary PostgreSQL instance:
 
 ```bash
-docker run --name unicef-db-local \
+docker run --name hwb-db-local \
     -e POSTGRES_PASSWORD=password \
-    -e POSTGRES_DB=unicef_local \
+    -e POSTGRES_DB=hwb_local \
     -p 5432:5432 \
     -d postgres:15
 
 ```
 
-### 4. Instalar Dependencias e Inicializar
+### 4. Install Dependencies and Initialize
 
 ```bash
-# Instalar librerías
+# Install libraries
 uv sync
 
-# Crear tablas y usuario administrador
+# Create tables and admin user
 uv run python scripts/create_tables.py
 uv run python scripts/create_generic_user.py
 
-# Cargar catálogos médicos (Puede tardar unos minutos)
+# Load medical catalogs (This may take a few minutes)
 uv run python scripts/load_catalogs.py
 
 ```
 
-### 5. Ejecutar Servidor
+### 5. Run the Server
 
 ```bash
 uv run uvicorn app.main:app --reload
 
 ```
 
-El servicio estará disponible en: [http://localhost:8000/docs](https://www.google.com/search?q=http://localhost:8000/docs)
+The service will be available at: http://localhost:8000/docs
 
 ---
 
 ## 🧪 Testing
 
-Para ejecutar la suite de pruebas automatizadas:
+To run the automated test suite:
 
 ```bash
 uv run pytest
@@ -121,23 +121,20 @@ uv run pytest
 
 ---
 
-## 🤝 Contribución
+## 🤝 Contributing
 
-Este proyecto sigue estándares estrictos de desarrollo. Antes de enviar un Pull Request, asegúrese de:
+This project follows strict development standards. Before submitting a Pull Request, please ensure you:
 
-1. Seguir la guía de estilo PEP-8.
-2. No subir credenciales o secretos al repositorio.
-3. Documentar cualquier endpoint nuevo en Swagger.
+1. Follow the PEP-8 style guide.
+2. Do not commit credentials or secrets to the repository.
+3. Document any new endpoint in Swagger.
 
-Para más detalles, lea [CONTRIBUTING.md](https://www.google.com/search?q=CONTRIBUTING.md).
-
----
-
-## 📄 Licencia
-
-Este proyecto está bajo la Licencia MIT - ver el archivo [LICENSE](https://www.google.com/search?q=LICENSE) para más detalles.
+For more details, read [CONTRIBUTING.md](https://www.google.com/search?q=CONTRIBUTING.md).
 
 ---
 
-**Desarrollado para UNICEF Colombia - 2026**
-```
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](https://www.google.com/search?q=LICENSE) file for details.
+
+---

@@ -1,7 +1,8 @@
 import logging
-import json
+from datetime import date
 from typing import Optional, List
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from app.db.models import Patient
 from app.schemas.patient import PatientFullRecord
 
@@ -14,20 +15,36 @@ def get_patient_by_nfc(db: Session, nfc_uid: str) -> Optional[Patient]:
     """
     return db.query(Patient).filter(Patient.nfc_uid == nfc_uid).first()
 
-def search_patients_by_query(db: Session, query_str: str, limit: int = 10) -> List[Patient]:
+def search_patients_advanced(
+    db: Session, 
+    first_name: Optional[str] = None, 
+    last_name: Optional[str] = None, 
+    birth_date: Optional[date] = None, 
+    guardian_name: Optional[str] = None, 
+    limit: int = 10
+) -> List[Patient]:
     """
-    Searches for patients by partial match on ID, First Name, or Last Name.
-    Case-insensitive search (ILIKE).
+    Dynamic search for patients. Filters are only applied if provided.
+    """
+    # Empezamos con la consulta base
+    query = db.query(Patient)
     
-    Args:
-        query_str (str): The search term (e.g., "Sofia" or "84321").
-        limit (int): Max number of results to return.
-    """
-    return db.query(Patient).filter(
-        (Patient.id.ilike(f"%{query_str}%")) |
-        (Patient.first_name.ilike(f"%{query_str}%")) |
-        (Patient.last_name.ilike(f"%{query_str}%"))
-    ).limit(limit).all()
+    # Vamos agregando los filtros dinámicamente ("if" existe el dato)
+    if first_name:
+        query = query.filter(Patient.first_name.ilike(f"%{first_name}%"))
+        
+    if last_name:
+        query = query.filter(Patient.last_name.ilike(f"%{last_name}%"))
+        
+    if birth_date:
+        query = query.filter(Patient.birth_date == birth_date)
+        
+    if guardian_name:
+        query = query.filter(
+            func.json_extract_path_text(Patient.full_record_json, 'guardianInfo', 'name').ilike(f"%{guardian_name}%")
+        )
+    
+    return query.limit(limit).all()
 
 def create_or_update_patient(db: Session, patient_in: PatientFullRecord) -> Patient:
     """
