@@ -11,10 +11,11 @@ WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
 
-# Instalar dependencias del sistema (necesarias para compilar drivers de Postgres)
-RUN apt-get update && apt-get install -y \
+# Actualizar repositorios, aplicar parches de seguridad (upgrade) e instalar dependencias
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Copiar SOLO los archivos de dependencias primero (para aprovechar el caché de Docker)
@@ -23,13 +24,13 @@ COPY pyproject.toml uv.lock ./
 # Instalar dependencias usando uv
 # --frozen: Falla si el lockfile no coincide (seguridad para producción)
 # --no-dev: No instala pytest ni herramientas de desarrollo
-# --no-install-project: Solo instala las librerías, no tu código todavía
+# --no-install-project: Solo instala las librerías
 RUN uv sync --frozen --no-dev --no-install-project
 
 # Copiar el resto del código
 COPY . .
 
-# Sincronizar el proyecto final (instala tu propia app si es un paquete, o verifica todo)
+# Sincronizar el proyecto final
 RUN uv sync --frozen --no-dev
 
 # 9. Agregar el entorno virtual al PATH
