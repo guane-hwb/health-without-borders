@@ -17,7 +17,7 @@ Authentication is handled via the **OAuth2** standard using the **Password Flow*
 
 ### 1.2. Credential Storage
 * **Hashing:** User passwords are **never** stored in plaintext.
-* **Algorithm:** **Bcrypt** is utilized for password hashing. This algorithm inherently handles cryptographic salting and is computationally expensive, effectively mitigating brute-force and rainbow table attacks.
+* **Algorithm:** **Bcrypt** is utilized for password hashing.
 
 ---
 

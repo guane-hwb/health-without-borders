@@ -35,7 +35,88 @@ This repository contains the source code for the **Backend**, a RESTful API deve
 
 ## 📂 Project Structure
 
-*[TO BE GENERATED]*
+```
+health-without-borders/
+├── app/                              # Main application package
+│   ├── __init__.py
+│   ├── main.py                       # FastAPI application entry point
+│   ├── api/                          # API versioning and routing
+│   │   ├── __init__.py
+│   │   ├── deps.py                   # Shared dependencies (DB session, auth)
+│   │   └── v1/                       # API v1 endpoints
+│   │       ├── __init__.py
+│   │       ├── api.py                # Route aggregation
+│   │       └── endpoints/            # Endpoint modules
+│   │           ├── __init__.py
+│   │           ├── catalogs.py       # ICD-10, CVX catalog endpoints
+│   │           ├── login.py          # Authentication & JWT
+│   │           └── patients.py       # Patient CRUD & medical records
+│   ├── core/                         # Core configuration & utilities
+│   │   ├── __init__.py
+│   │   ├── config.py                 # Environment variables & settings
+│   │   ├── logging.py                # Structured logging
+│   │   └── security.py               # JWT, password hashing, RBAC
+│   ├── db/                           # Database layer
+│   │   ├── __init__.py
+│   │   ├── base.py                   # SQLAlchemy declarative base
+│   │   ├── models.py                 # ORM models (Users, Patients, Records)
+│   │   └── session.py                # Database session management
+│   ├── schemas/                      # Pydantic models (request/response)
+│   │   ├── __init__.py
+│   │   ├── catalog.py                # Catalog schemas
+│   │   ├── patient.py                # Patient schemas
+│   │   ├── token.py                  # JWT token schemas
+│   │   └── user.py                   # User schemas
+│   ├── services/                     # Business logic layer
+│   │   ├── __init__.py
+│   │   ├── catalog_service.py        # Catalog operations
+│   │   ├── gcp_service.py            # GCP Cloud Healthcare API integration
+│   │   ├── hl7_service.py            # HL7v2 parsing & generation
+│   │   └── patient_service.py        # Patient business logic
+│   └── data/                         # Static data files
+│       └── cie10.json                # ICD-10 catalog data
+├── docs/                             # Project documentation
+│   ├── architecture/
+│   │   └── hl7v2-strategy.md         # Architectural Decision Record (ADR)
+│   ├── development/
+│   │   └── setup.md                  # Local development setup guide
+│   └── infrastructure/
+│       ├── database.md               # Database schema & modeling
+│       ├── gcp-deploy.md             # Google Cloud Run deployment
+│       ├── healthcare-api.md         # GCP Cloud Healthcare API config
+│       └── security.md               # Security protocols & encryption
+├── scripts/                          # Utility scripts
+│   ├── __init__.py
+│   ├── create_tables.py              # Initialize database schema
+│   ├── create_generic_user.py        # Create default user for testing
+│   └── load_catalogs.py              # Populate clinical catalogs (ICD-10, CVX)
+├── tests/                            # Automated test suite
+│   ├── conftest.py                   # Pytest fixtures & configuration
+│   └── api/
+│       └── v1/
+│           └── test_patients.py      # Patient endpoint tests
+├── .venv/                            # Python virtual environment
+├── cloud-sql-proxy                   # Cloud SQL Proxy binary
+├── Dockerfile                        # Container image definition
+├── gcp_key.json                      # GCP service account credentials
+├── pyproject.toml                    # Project metadata & dependencies
+├── pytest.ini                        # Pytest configuration
+└── README.md                         # This file
+```
+
+### Directory Purpose Summary
+
+| Directory | Purpose |
+|-----------|---------|
+| `app/` | Main application code with API, business logic, and database models |
+| `app/api/` | FastAPI routers and endpoint definitions |
+| `app/core/` | Configuration, security, logging utilities |
+| `app/db/` | SQLAlchemy ORM models and database session management |
+| `app/schemas/` | Pydantic models for request/response validation |
+| `app/services/` | Business logic and external integrations (GCP, HL7) |
+| `docs/` | Architecture, deployment, and development guides |
+| `scripts/` | Database initialization and data loading utilities |
+| `tests/` | Automated test cases using pytest |
 
 ---
 
