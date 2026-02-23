@@ -77,3 +77,70 @@ To support the decentralized nature of humanitarian deployments, a **Delegated A
 1.  **Central Administration (Global HQ):** Responsible for creating "Coordinator" accounts for regional health entities and NGOs.
 2.  **Regional Coordinators (Health Providers):** Responsible for provisioning, auditing, and revoking accounts for their respective medical staff and deployed tablet devices.
 3.  **Traceability:** The use of shared or generic accounts is strictly prohibited in production. Individual accounts per device/practitioner are enforced to guarantee that all clinical actions (creating, modifying, or synchronizing patient records) maintain a perfect cryptographic audit trail linked to a specific human operator.
+
+### 6. Data Map
+
+#### 1. Clasificación de los Datos (¿Qué recolectamos?)
+
+El sistema procesa tres niveles de información:
+
+* **Datos de Autenticación (Sensibles):** Correos electrónicos (`email`), contraseñas hasheadas (`hashed_password`) y roles de los médicos/coordinadores.
+* **PII (Personally Identifiable Information):** Nombres completos del paciente (`first_name`, `last_name`), fecha de nacimiento (`birth_date`), nombres de los tutores legales (`guardianInfo`).
+* **PHI (Protected Health Information - Crítico):** ID del paciente (`patientId`), ID del hardware (`device_uid`), peso, talla, tipo de sangre, y el historial clínico completo en formato JSON (diagnósticos CIE-10 y vacunas CVX).
+
+#### 2. Flujo de los Datos (Data Flow - ¿Por dónde viajan?)
+
+El ciclo de vida de un registro médico cuando se sincroniza desde la frontera es el siguiente:
+
+1. **Origen (Frontend):** La tablet del médico genera el JSON con el registro médico (offline u online).
+2. **Tránsito 1 (Internet a la Nube):** La tablet envía el JSON al Backend (Google Cloud Run) a través del endpoint `POST /api/v1/sync`. **Seguridad:** Viaja cifrado obligatoriamente bajo el protocolo **TLS 1.3 (HTTPS)**.
+3. **Procesamiento (Backend):** Cloud Run recibe el JSON, valida los permisos del médico vía JWT (JSON Web Token) y prepara el guardado.
+4. **Tránsito 2 (Backend a Base de Datos):** Cloud Run envía los datos a PostgreSQL (Cloud SQL). **Seguridad:** Viaja por la red interna privada de Google mediante **Unix Sockets** (nunca toca el internet público).
+5. **Tránsito 3 (Backend a Interoperabilidad):** El Backend convierte el JSON a formato HL7v2 y lo envía a la API de Google Cloud Healthcare. **Seguridad:** Autenticación de servidor a servidor vía Service Accounts de GCP (IAM).
+
+#### 3. Almacenamiento (Data at Rest - ¿Dónde "duermen" los datos?)
+
+* **Base de Datos Principal (PostgreSQL - Cloud SQL):** Almacena todo el PII, PHI y credenciales.
+* **Protección:** Cifrado en reposo automático por Google (AES-256). Las contraseñas se almacenan con hashing iterativo **Bcrypt**. La base de datos no tiene IP pública (solo IP privada).
+
+
+* **Almacén Clínico (Cloud Healthcare API - HL7v2 Store):** Almacena los mensajes médicos estandarizados para interoperabilidad.
+* **Protección:** Certificación HIPAA out-of-the-box. Cifrado en reposo (AES-256) y logs de auditoría inmutables (Cloud Audit Logs).
+
+
+
+#### 4. Control de Acceso (¿Quién puede ver los datos?)
+
+* **Médicos (Doctors):** Solo pueden leer y escribir datos de pacientes a través de la API (con un JWT válido que expira en 30 días). No tienen acceso a la consola de Google.
+* **Administradores (Admins):** Pueden crear usuarios médicos.
+* **Infraestructura (DevOps/Google):** El acceso a la base de datos de producción está restringido mediante Google Cloud IAM (Identity and Access Management) y requiere el uso de `cloud-sql-proxy` con credenciales autorizadas.
+
+---
+
+```mermaid
+flowchart TD
+    %% Definición de Estilos
+    classDef mobile fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+    classDef backend fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef database fill:#fff3e0,stroke:#e65100,stroke-width:2px;
+    classDef healthcare fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px;
+
+    %% Zonas de Confianza (Trust Zones)
+    subgraph FieldZone ["📍 Field Operations (Public/Untrusted Network)"]
+        Tablet["📱 Mobile App (Offline-First)\nGenerates: patientId & device_uid"]:::mobile
+    end
+
+    subgraph GCPZone ["☁️ Google Cloud Platform (Private VPC - Secure Zone)"]
+        API["🚀 FastAPI Backend (Cloud Run)\nStateless JWT Auth & Logic"]:::backend
+        DB[("🗄️ PostgreSQL (Cloud SQL)\nStores: PII, PHI & Credentials\nEncrypted at Rest (AES-256)")]:::database
+    end
+
+    subgraph HL7Zone ["🏥 Google Managed Services (HIPAA Compliant Zone)"]
+        HL7Store[("🗃️ Cloud Healthcare API\nHL7v2 Message Store\nImmutable Audit Logs")]:::healthcare
+    end
+
+    %% Flujos de Datos (Data in Transit)
+    Tablet -- "1. Sync JSON Payload\n[PII, PHI, Auth]\n🔒 HTTPS (TLS 1.3)" --> API
+    API -- "2. Read/Write Data\n[Credentials, PII, PHI]\n🔒 Unix Sockets (Internal)" --> DB
+    API -- "3. Push Medical Record\n[HL7v2 Format - PHI Only]\n🔒 HTTPS (GCP IAM Service Account)" --> HL7Store
+```

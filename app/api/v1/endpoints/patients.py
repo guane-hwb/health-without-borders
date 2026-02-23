@@ -11,8 +11,8 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.schemas.patient import PatientFullRecord, PatientSyncResponse
 from app.services.patient_service import (
-    create_or_update_patient, 
-    get_patient_by_nfc, 
+    create_or_update_patient,
+    get_patient_by_device_uid, 
     search_patients_advanced
 )
 from app.services.hl7_service import convert_to_hl7
@@ -22,33 +22,32 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.get("/nfc/{nfc_uid}", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
-def get_patient_by_nfc_scan(
-    nfc_uid: str, 
+@router.get("/scan/{device_uid}", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
+def get_patient_by_device_uid_scan(
+    device_uid: str, 
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get patient details by scanning the NFC bracelet.
+    Get patient details by scanning a hardware identifier (NFC, QR, Barcode, etc.).
     
-    Used in the 'Read NFC' view of the mobile app.
-    If the bracelet is registered, returns the full medical record.
+    Used in the 'Scan Device' view of the mobile app.
+    If the device UID is registered, returns the full medical record.
     If not, returns 404 Not Found.
     """
-    logger.info(f"User {current_user.email} is scanning NFC UID: {nfc_uid}")
+    logger.info(f"User {current_user.email} is scanning Device UID: {device_uid}")
     
     # Delegate database lookup to the service layer
-    patient_db = get_patient_by_nfc(db, nfc_uid)
+    patient_db = get_patient_by_device_uid(db, device_uid)
     
     if not patient_db:
-        logger.warning(f"NFC UID {nfc_uid} not found in database.")
+        logger.warning(f"Device UID {device_uid} not found in database.")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Patient not found. This bracelet is not registered."
+            detail="Patient not found. This tag/device is not registered."
         )
     
     # We return the stored JSON directly. 
-    # Pydantic will validate it against PatientFullRecord schema automatically.
     return patient_db.full_record_json
 
 
@@ -106,25 +105,17 @@ def sync_patient(
 
 @router.get("/search", response_model=List[PatientFullRecord], status_code=status.HTTP_200_OK)
 def search_patients(
-    first_name: Optional[str] = Query(None, min_length=2, description="Patient's first name"),
-    last_name: Optional[str] = Query(None, min_length=2, description="Patient's last name"),
-    birth_date: Optional[date] = Query(None, description="Patient's date of birth (YYYY-MM-DD)"),
+    first_name: str = Query(..., min_length=2, description="Patient's first name"),
+    last_name: str = Query(..., min_length=2, description="Patient's last name"),
+    birth_date: date = Query(..., description="Patient's date of birth (YYYY-MM-DD)"),
     guardian_name: Optional[str] = Query(None, min_length=3, description="Guardian's full or partial name"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Flexible advanced search. Allows missing fields (e.g., unaccompanied minors).
-    At least one search parameter must be provided.
+    Strict search for patients. First name, last name, and date of birth are MANDATORY
     """
     
-    # Validación de seguridad: Evitar búsquedas vacías que saturen la BD
-    if not any([first_name, last_name, birth_date, guardian_name]):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one search parameter (first_name, last_name, birth_date, or guardian_name) must be provided."
-        )
-
     logger.info(f"User {current_user.email} searching. Params -> First: {first_name}, Last: {last_name}, DOB: {birth_date}, Guardian: {guardian_name}")
     
     results = search_patients_advanced(

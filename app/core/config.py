@@ -12,9 +12,9 @@ class Settings(BaseSettings):
 
     # --- DATABASE CONFIGURATION ---
     # We allow individual components to support Cloud SQL socket connections.
-    DB_USER: str
-    DB_PASS: str
-    DB_NAME: str
+    DB_USER: Optional[str] = None 
+    DB_PASS: Optional[str] = None 
+    DB_NAME: Optional[str] = None 
     
     # This variable is automatically injected by Google Cloud Run when using 
     # the flag --add-cloudsql-instances. It triggers the Unix Socket connection strategy.

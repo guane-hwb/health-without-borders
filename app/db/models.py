@@ -13,8 +13,8 @@ class Patient(Base):
     # Internal ID (e.g., "UNICEF-COL-84321")
     id = Column(String, primary_key=True, index=True)
     
-    # NFC Chip UID (Factory ID) - Critical for security
-    nfc_uid = Column(String, unique=True, index=True, nullable=False)
+    # Chip UID (Factory ID) - Critical for security
+    device_uid = Column(String, unique=True, index=True, nullable=False)
     
     # Basic Demographics (Indexed for SQL search performance)
     first_name = Column(String, index=True)

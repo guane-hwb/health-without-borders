@@ -9,11 +9,11 @@ from app.schemas.patient import PatientFullRecord
 # Setup Logger
 logger = logging.getLogger(__name__)
 
-def get_patient_by_nfc(db: Session, nfc_uid: str) -> Optional[Patient]:
+def get_patient_by_device_uid(db: Session, device_uid: str) -> Optional[Patient]:
     """
-    Retrieves a patient record looking up by the NFC Chip UID.
+    Fetches a patient using a hardware tag unique identifier (e.g., NFC UID, QR code string).
     """
-    return db.query(Patient).filter(Patient.nfc_uid == nfc_uid).first()
+    return db.query(Patient).filter(Patient.device_uid == device_uid).first()
 
 def search_patients_advanced(
     db: Session, 
@@ -26,18 +26,11 @@ def search_patients_advanced(
     """
     Dynamic search for patients. Filters are only applied if provided.
     """
-    # Empezamos con la consulta base
-    query = db.query(Patient)
-    
-    # Vamos agregando los filtros dinámicamente ("if" existe el dato)
-    if first_name:
-        query = query.filter(Patient.first_name.ilike(f"%{first_name}%"))
-        
-    if last_name:
-        query = query.filter(Patient.last_name.ilike(f"%{last_name}%"))
-        
-    if birth_date:
-        query = query.filter(Patient.birth_date == birth_date)
+    query = db.query(Patient).filter(
+        Patient.first_name.ilike(f"%{first_name}%"),
+        Patient.last_name.ilike(f"%{last_name}%"),
+        Patient.birth_date == birth_date
+    )
         
     if guardian_name:
         query = query.filter(
@@ -52,8 +45,8 @@ def create_or_update_patient(db: Session, patient_in: PatientFullRecord) -> Pati
     
     Strategy:
     - Check if patient exists by ID.
-    - If exists -> Update fields AND check if NFC UID changed (Bracelet replacement).
-    - If new -> Create record with provided NFC UID.
+    - If exists -> Update fields AND check if Device UID changed (Tag/Bracelet replacement).
+    - If new -> Create record with provided Device UID.
     
     Args:
         db (Session): Database session.
@@ -80,14 +73,14 @@ def create_or_update_patient(db: Session, patient_in: PatientFullRecord) -> Pati
         existing_patient.weight = patient_in.patientInfo.weight
         existing_patient.height = patient_in.patientInfo.height
         
-        # --- NFC Replacement Logic (Critical for lost bracelets) ---
-        # If the payload has an NFC UID, and it's different from the stored one, update it.
-        if patient_in.nfc_uid and patient_in.nfc_uid != existing_patient.nfc_uid:
+        # --- Device Replacement Logic (Critical for lost bracelets/QRs) ---
+        # If the payload has a Device UID, and it's different from the stored one, update it.
+        if patient_in.device_uid and patient_in.device_uid != existing_patient.device_uid:
             logger.warning(
-                f"NFC Replacement detected for patient {patient_in.patientId}. "
-                f"Old: {existing_patient.nfc_uid} -> New: {patient_in.nfc_uid}"
+                f"Device Replacement detected for patient {patient_in.patientId}. "
+                f"Old: {existing_patient.device_uid} -> New: {patient_in.device_uid}"
             )
-            existing_patient.nfc_uid = patient_in.nfc_uid
+            existing_patient.device_uid = patient_in.device_uid
         
         # Update the raw JSON blob to keep history complete
         existing_patient.full_record_json = full_record_dump
@@ -99,12 +92,12 @@ def create_or_update_patient(db: Session, patient_in: PatientFullRecord) -> Pati
     else:
         logger.info(f"Creating new patient record: {patient_in.patientId}")
         
-        # Use provided NFC UID or generate a placeholder if missing (legacy support)
-        nfc_to_save = patient_in.nfc_uid if patient_in.nfc_uid else f"PENDING-{patient_in.patientId}"
+        # Use provided Device UID or generate a placeholder if missing (legacy support)
+        device_to_save = patient_in.device_uid if patient_in.device_uid else f"PENDING-{patient_in.patientId}"
 
         db_patient = Patient(
             id=patient_in.patientId,
-            nfc_uid=nfc_to_save, 
+            device_uid=device_to_save, 
             first_name=patient_in.patientInfo.firstName,
             last_name=patient_in.patientInfo.lastName,
             birth_date=patient_in.patientInfo.dob,

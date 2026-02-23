@@ -53,12 +53,7 @@ class VaccinationRecordItem(BaseModel):
 
 class PatientFullRecord(BaseModel):
     patientId: str
-    
-    # New Field: NFC Chip UID
-    # Optional for now to maintain backward compatibility during dev, 
-    # but should be required in production.
-    nfc_uid: Optional[str] = None 
-    
+    device_uid: str = Field(..., description="Unique identifier from the hardware tag (NFC UID, QR code string, etc.)")
     patientInfo: PatientInfo
     guardianInfo: GuardianInfo
     medicalHistory: List[MedicalHistoryItem] = []
