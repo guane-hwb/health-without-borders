@@ -119,28 +119,36 @@ El ciclo de vida de un registro médico cuando se sincroniza desde la frontera e
 
 ```mermaid
 flowchart TD
-    %% Definición de Estilos
-    classDef mobile fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
-    classDef backend fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
-    classDef database fill:#fff3e0,stroke:#e65100,stroke-width:2px;
-    classDef healthcare fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px;
+    %% --- Definición de Estilos para Modo Oscuro de GitHub ---
+    %% Usamos colores de relleno oscuros y forzamos el texto a blanco para un contraste perfecto.
+    classDef mobile fill:#1565c0,stroke:#0d47a1,stroke-width:2px,color:white;
+    classDef backend fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:white;
+    classDef database fill:#e65100,stroke:#bf360c,stroke-width:2px,color:white;
+    classDef healthcare fill:#6a1b9a,stroke:#4a148c,stroke-width:2px,color:white;
 
-    %% Zonas de Confianza (Trust Zones)
+    %% Estilo para las cajas de las zonas (subgraphs)
+    classDef subgraphStyle fill:none,stroke:#ccc,stroke-width:1px,color:#ccc,stroke-dasharray: 5 5;
+
+    %% --- Zonas de Confianza (Trust Zones) ---
     subgraph FieldZone ["📍 Field Operations (Public/Untrusted Network)"]
-        Tablet["📱 Mobile App (Offline-First)\nGenerates: patientId & device_uid"]:::mobile
+        style FieldZone fill:none,stroke:#ccc,stroke-width:1px,color:#ccc,stroke-dasharray: 5 5
+        Tablet["📱 Mobile App (Offline-First)<br/>Generates: patientId & device_uid"]:::mobile
     end
 
     subgraph GCPZone ["☁️ Google Cloud Platform (Private VPC - Secure Zone)"]
-        API["🚀 FastAPI Backend (Cloud Run)\nStateless JWT Auth & Logic"]:::backend
-        DB[("🗄️ PostgreSQL (Cloud SQL)\nStores: PII, PHI & Credentials\nEncrypted at Rest (AES-256)")]:::database
+        style GCPZone fill:none,stroke:#ccc,stroke-width:1px,color:#ccc,stroke-dasharray: 5 5
+        API["🚀 FastAPI Backend (Cloud Run)<br/>Stateless JWT Auth & Logic"]:::backend
+        DB[("🗄️ PostgreSQL (Cloud SQL)<br/>Stores: PII, PHI & Credentials<br/>Encrypted at Rest (AES-256)")]:::database
     end
 
     subgraph HL7Zone ["🏥 Google Managed Services (HIPAA Compliant Zone)"]
-        HL7Store[("🗃️ Cloud Healthcare API\nHL7v2 Message Store\nImmutable Audit Logs")]:::healthcare
+        style HL7Zone fill:none,stroke:#ccc,stroke-width:1px,color:#ccc,stroke-dasharray: 5 5
+        HL7Store[("🗃️ Cloud Healthcare API<br/>HL7v2 Message Store<br/>Immutable Audit Logs")]:::healthcare
     end
 
-    %% Flujos de Datos (Data in Transit)
-    Tablet -- "1. Sync JSON Payload\n[PII, PHI, Auth]\n🔒 HTTPS (TLS 1.3)" --> API
-    API -- "2. Read/Write Data\n[Credentials, PII, PHI]\n🔒 Unix Sockets (Internal)" --> DB
-    API -- "3. Push Medical Record\n[HL7v2 Format - PHI Only]\n🔒 HTTPS (GCP IAM Service Account)" --> HL7Store
+    %% --- Flujos de Datos (Data in Transit) ---
+    %% Usamos <br/> para saltos de línea seguros
+    Tablet -- "1. Sync JSON Payload<br/>[PII, PHI, Auth]<br/>🔒 HTTPS (TLS 1.3)" --> API
+    API -- "2. Read/Write Data<br/>[Credentials, PII, PHI]<br/>🔒 Unix Sockets (Internal)" --> DB
+    API -- "3. Push Medical Record<br/>[HL7v2 Format - PHI Only]<br/>🔒 HTTPS (GCP IAM Service Account)" --> HL7Store
 ```
