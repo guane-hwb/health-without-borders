@@ -82,38 +82,36 @@ To support the decentralized nature of humanitarian deployments, a **Delegated A
 
 ## 6. Data Map
 
-### 1. Clasificación de los Datos (¿Qué recolectamos?)
+### 1. Data Classification (What do we collect?)
 
-El sistema procesa tres niveles de información:
+The system processes three levels of information:
 
-* **Datos de Autenticación (Sensibles):** Correos electrónicos (`email`), contraseñas hasheadas (`hashed_password`) y roles de los médicos/coordinadores.
-* **PII (Personally Identifiable Information):** Nombres completos del paciente (`first_name`, `last_name`), fecha de nacimiento (`birth_date`), nombres de los tutores legales (`guardianInfo`).
-* **PHI (Protected Health Information - Crítico):** ID del paciente (`patientId`), ID del hardware (`device_uid`), peso, talla, tipo de sangre, y el historial clínico completo en formato JSON (diagnósticos CIE-10 y vacunas CVX).
+* **Authentication Data (Sensitive):** Emails (`email`), hashed passwords (`hashed_password`), and doctor/coordinator roles.
+* **PII (Personally Identifiable Information):** Patient's full name (`first_name`, `last_name`), date of birth (`birth_date`), and legal guardians' names (`guardianInfo`).
+* **PHI (Protected Health Information - Critical):** Patient ID (`patientId`), hardware ID (`device_uid`), weight, height, blood type, and the complete medical history in JSON format (ICD-10 diagnoses and CVX vaccines).
 
-### 2. Flujo de los Datos (Data Flow - ¿Por dónde viajan?)
+### 2. Data Flow (Where do they travel?)
 
-El ciclo de vida de un registro médico cuando se sincroniza desde la frontera es el siguiente:
+The lifecycle of a medical record when synchronized from the field is as follows:
 
-1. **Origen (Frontend):** La tablet del médico genera el JSON con el registro médico (offline u online).
-2. **Tránsito 1 (Internet a la Nube):** La tablet envía el JSON al Backend (Google Cloud Run) a través del endpoint `POST /api/v1/sync`. **Seguridad:** Viaja cifrado obligatoriamente bajo el protocolo **TLS 1.3 (HTTPS)**.
-3. **Procesamiento (Backend):** Cloud Run recibe el JSON, valida los permisos del médico vía JWT (JSON Web Token) y prepara el guardado.
-4. **Tránsito 2 (Backend a Base de Datos):** Cloud Run envía los datos a PostgreSQL (Cloud SQL). **Seguridad:** Viaja por la red interna privada de Google mediante **Unix Sockets** (nunca toca el internet público).
-5. **Tránsito 3 (Backend a Interoperabilidad):** El Backend convierte el JSON a formato HL7v2 y lo envía a la API de Google Cloud Healthcare. **Seguridad:** Autenticación de servidor a servidor vía Service Accounts de GCP (IAM).
+1. **Origin (Frontend):** The doctor's tablet generates the JSON payload with the medical record (offline or online).
+2. **Transit 1 (Internet to Cloud):** The tablet sends the JSON to the Backend (Google Cloud Run) via the `POST /api/v1/sync` endpoint. **Security:** It travels mandatorily encrypted under the **TLS 1.3 (HTTPS)** protocol.
+3. **Processing (Backend):** Cloud Run receives the JSON, validates the doctor's permissions via JWT (JSON Web Token), and prepares the data for storage.
+4. **Transit 2 (Backend to Database):** Cloud Run sends the data to PostgreSQL (Cloud SQL). **Security:** It travels through Google's private internal network via **Unix Sockets** (never touching the public internet).
+5. **Transit 3 (Backend to Interoperability):** The Backend converts the JSON to HL7v2 format and sends it to the Google Cloud Healthcare API. **Security:** Server-to-server authentication via GCP Service Accounts (IAM).
 
-### 3. Almacenamiento (Data at Rest - ¿Dónde "duermen" los datos?)
+### 3. Storage (Data at Rest - Where do the data "sleep"?)
 
-* **Base de Datos Principal (PostgreSQL - Cloud SQL):** Almacena todo el PII, PHI y credenciales.
-* **Protección:** Cifrado en reposo automático por Google (AES-256). Las contraseñas se almacenan con hashing iterativo **Bcrypt**. La base de datos no tiene IP pública (solo IP privada).
+* **Main Database (PostgreSQL - Cloud SQL):** Stores all PII, PHI, and credentials.
+* **Protection:** Automatic encryption at rest by Google (AES-256). Passwords are stored using iterative **Bcrypt** hashing. The database has no public IP (private IP only).
+* **Clinical Data Repository (Cloud Healthcare API - HL7v2 Store):** Stores standardized medical messages for interoperability.
+* **Protection:** Out-of-the-box HIPAA compliance. Encryption at rest (AES-256) and immutable audit logs (Cloud Audit Logs).
 
+### 4. Access Control (Who can view the data?)
 
-* **Almacén Clínico (Cloud Healthcare API - HL7v2 Store):** Almacena los mensajes médicos estandarizados para interoperabilidad.
-* **Protección:** Certificación HIPAA out-of-the-box. Cifrado en reposo (AES-256) y logs de auditoría inmutables (Cloud Audit Logs).
-
-### 4. Control de Acceso (¿Quién puede ver los datos?)
-
-* **Médicos (Doctors):** Solo pueden leer y escribir datos de pacientes a través de la API (con un JWT válido que expira en 30 días). No tienen acceso a la consola de Google.
-* **Administradores (Admins):** Pueden crear usuarios médicos.
-* **Infraestructura (DevOps/Google):** El acceso a la base de datos de producción está restringido mediante Google Cloud IAM (Identity and Access Management) y requiere el uso de `cloud-sql-proxy` con credenciales autorizadas.
+* **Doctors:** Can only read and write patient data through the API (using a valid JWT that expires in 30 days). They do not have access to the Google Cloud Console.
+* **Administrators (Admins):** Can create doctor user accounts.
+* **Infrastructure (DevOps/Google):** Access to the production database is restricted via Google Cloud IAM (Identity and Access Management) and requires the use of `cloud-sql-proxy` with authorized credentials.
 
 ---
 

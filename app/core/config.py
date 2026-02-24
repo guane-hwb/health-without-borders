@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     GCP_HL7_STORE_ID: Optional[str] = None
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None
 
+    # HL7 CONFIG
+    HL7_SENDING_APP: Optional[str] = None
+    HL7_SENDING_FACILITY: Optional[str] = None
+    HL7_RECEIVING_APP: Optional[str] = None
+    HL7_RECEIVING_FACILITY: Optional[str] = None
+    HL7_PROCESSING_ID: Optional[str] = None
+    HL7_VERSION_ID: Optional[str] = None
+    
     # --- SECURITY ---
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
