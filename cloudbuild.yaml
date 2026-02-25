@@ -2,8 +2,6 @@ steps:
   # ======================================================
   # PASO 1: EJECUTAR PRUEBAS UNITARIAS (EL ESCUDO)
   # ======================================================
-  # Usamos una imagen ligera de Python para correr las pruebas.
-  # Si pytest falla, el pipeline se detiene inmediatamente (Fail-Fast).
   - name: 'python:3.11-slim'
     entrypoint: 'bash'
     args:
@@ -11,7 +9,6 @@ steps:
       - |
         pip install uv
         uv sync
-        # --- MOCK ENV VARIABLES PARA QUE PASEN LOS TESTS ---
         export SECRET_KEY="dummy_secret_for_testing_only"
         export DB_PASS="dummy_pass"
         export DATABASE_URL="sqlite:///./test.db"
@@ -30,7 +27,7 @@ steps:
     args: 
       - 'build'
       - '-t'
-      - 'gcr.io/$PROJECT_ID/hwb-backend:$COMMIT_SHA'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/hwb-repo/hwb-backend:$COMMIT_SHA'
       - '.'
 
   # ======================================================
@@ -39,7 +36,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: 
       - 'push'
-      - 'gcr.io/$PROJECT_ID/hwb-backend:$COMMIT_SHA'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/hwb-repo/hwb-backend:$COMMIT_SHA'
 
   # ======================================================
   # PASO 4: DESPLEGAR EN CLOUD RUN
@@ -51,15 +48,15 @@ steps:
       - 'deploy'
       - 'hwb-backend-dev'
       - '--image'
-      - 'gcr.io/$PROJECT_ID/hwb-backend:$COMMIT_SHA'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/hwb-repo/hwb-backend:$COMMIT_SHA'
       - '--region'
       - 'us-central1'
-      # Conectamos las variables sensibles con Secret Manager
       - '--update-secrets'
       - 'DB_PASS=hwb-db-pass:latest,SECRET_KEY=hwb-secret-key:latest'
 
-# Tiempo máximo de ejecución del pipeline (15 minutos)
+# Tiempo máximo de ejecución del pipeline
 timeout: '900s'
 
+# Configuracion de logs obligatoria
 options:
   logging: CLOUD_LOGGING_ONLY
