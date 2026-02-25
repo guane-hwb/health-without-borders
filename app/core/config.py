@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Health Without Borders API"
     API_V1_STR: str = "/api/v1"
 
+    # --- INITIAL SUPERUSER ---
+    FIRST_SUPERUSER_EMAIL: str = "admin@default.org"
+    FIRST_SUPERUSER_PASSWORD: str = "changeme"
+    
     # --- DATABASE CONFIGURATION ---
     # We allow individual components to support Cloud SQL socket connections.
     DB_USER: Optional[str] = None 

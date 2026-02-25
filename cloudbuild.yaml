@@ -1,49 +1,59 @@
 steps:
-  # 1. Fase de Integración Continua (CI): Correr Pruebas Automáticas
+  # ======================================================
+  # PASO 1: EJECUTAR PRUEBAS UNITARIAS (EL ESCUDO)
+  # ======================================================
+  # Usamos una imagen ligera de Python para correr las pruebas.
+  # Si pytest falla, el pipeline se detiene inmediatamente (Fail-Fast).
   - name: 'python:3.11-slim'
-    id: 'Run Tests'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
         pip install uv
-        uv sync --frozen
+        uv sync
+        # Inyectamos variables dummy solo para que la app pase los tests
+        export SECRET_KEY="dummy_secret_for_testing_only"
+        export DB_PASS="dummy_pass"
+        export DATABASE_URL="sqlite:///./test.db"
+        export HL7_SENDING_APP="TEST_APP"
+        export HL7_PROCESSING_ID="D"
+        # ¡Corremos las pruebas!
         uv run pytest
 
-  # 2. Fase de Construcción (Build): Crear la imagen Docker
-  # Nota: Usamos $SHORT_SHA (el código del commit de git) como etiqueta inmutable
+  # ======================================================
+  # PASO 2: CONSTRUIR LA IMAGEN DE DOCKER
+  # ======================================================
   - name: 'gcr.io/cloud-builders/docker'
-    id: 'Build Docker Image'
     args: 
       - 'build'
       - '-t'
-      - 'us-central1-docker.pkg.dev/$PROJECT_ID/hwb-repo/backend:$SHORT_SHA'
+      - 'gcr.io/$PROJECT_ID/hwb-backend:$COMMIT_SHA'
       - '.'
 
-  # 3. Fase de Almacenamiento (Push): Subir la imagen a Artifact Registry
+  # ======================================================
+  # PASO 3: SUBIR LA IMAGEN AL REGISTRY (NUBE)
+  # ======================================================
   - name: 'gcr.io/cloud-builders/docker'
-    id: 'Push Docker Image'
     args: 
       - 'push'
-      - 'us-central1-docker.pkg.dev/$PROJECT_ID/hwb-repo/backend:$SHORT_SHA'
+      - 'gcr.io/$PROJECT_ID/hwb-backend:$COMMIT_SHA'
 
-  # 4. Fase de Despliegue Continuo (CD): Actualizar Cloud Run
+  # ======================================================
+  # PASO 4: DESPLEGAR EN CLOUD RUN
+  # ======================================================
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    id: 'Deploy to Cloud Run'
     entrypoint: gcloud
     args:
       - 'run'
       - 'deploy'
       - 'hwb-backend-dev'
       - '--image'
-      - 'us-central1-docker.pkg.dev/$PROJECT_ID/hwb-repo/backend:$SHORT_SHA'
+      - 'gcr.io/$PROJECT_ID/hwb-backend:$COMMIT_SHA'
       - '--region'
       - 'us-central1'
+      # Conectamos las variables sensibles con Secret Manager
+      - '--update-secrets'
+      - 'DB_PASS=hwb-db-pass:latest,SECRET_KEY=hwb-secret-key:latest'
 
-# Opciones adicionales:
-# Logging y fallos rápidos
-options:
-  logging: CLOUD_LOGGING_ONLY
-
-# Timeout de seguridad (Si tarda más de 15 mins, se cancela)
+# Tiempo máximo de ejecución del pipeline (15 minutos)
 timeout: '900s'
