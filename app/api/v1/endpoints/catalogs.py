@@ -6,7 +6,7 @@ from app.db.models import User
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.schemas.catalog import CatalogSyncResponse
-from app.services.catalog_service import get_all_diagnoses, get_all_vaccines, initialize_catalogs
+from app.services.catalog_service import get_all_diagnoses, get_all_vaccines
 
 logger = logging.getLogger(__name__)
 
@@ -26,17 +26,13 @@ def sync_catalogs(
     """
     logger.info(f"Catalogs requested by User {current_user.email}")
     
-    # 1. Ensure DB has data (Auto-Seeding for development convenience)
-    initialize_catalogs(db)
-    
-    # 2. Fetch data
+    # 1. Fetch data directly
     diagnoses = get_all_diagnoses(db)
     vaccines = get_all_vaccines(db)
     
-    logger.info(f"Returning {len(diagnoses)} diagnoses and {len(vaccines)} vaccines.")
-
+    # 2. Return payload
     return CatalogSyncResponse(
         diagnoses=diagnoses,
         vaccines=vaccines,
-        version="v1.0" # Hardcoded version for now
+        version="v1.0"
     )
