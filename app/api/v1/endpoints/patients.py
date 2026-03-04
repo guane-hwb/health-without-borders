@@ -29,25 +29,33 @@ def get_patient_by_device_uid_scan(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get patient details by scanning a hardware identifier (NFC, QR, Barcode, etc.).
+    Get patient details by scanning a hardware identifier (NFC, Barcode, etc.).
     
     Used in the 'Scan Device' view of the mobile app.
     If the device UID is registered, returns the full medical record.
     If not, returns 404 Not Found.
+
+    Security: Only 'org_admin', 'doctor' and 'nurse' can view clinical records.
     """
-    logger.info(f"User {current_user.email} is scanning Device UID: {device_uid}")
-    
-    # Delegate database lookup to the service layer
-    patient_db = get_patient_by_device_uid(db, device_uid)
-    
-    if not patient_db:
-        logger.warning(f"Device UID {device_uid} not found in database.")
+
+    if current_user.role not in ["doctor", "nurse", "org_admin"]:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Patient not found. This tag/device is not registered."
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only medical staff can view patient records."
         )
     
-    # We return the stored JSON directly. 
+    logger.info(f"User {current_user.email} (Org: {current_user.organization_id}) scanning Device: {device_uid}")
+    
+    # Delegate database lookup to the service layer
+    patient_db = get_patient_by_device_uid(db, device_uid, current_user.organization_id)
+    
+    if not patient_db:
+        logger.warning(f"Device UID {device_uid} not found for Org {current_user.organization_id}.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Patient not found. This tag is not registered in your organization."
+        )
+    
     return patient_db.full_record_json
 
 
@@ -61,17 +69,25 @@ def sync_patient(
     Synchronize patient data from mobile app.
     
     Process Flow:
-    1. Persist data locally in PostgreSQL.
+    1. Persist data in PostgreSQL.
     2. Convert to HL7v2 standard format.
     3. Push to Google Cloud Healthcare API.
     
+    Security: Only users with the 'doctor' role can write/update medical records.
     Returns:
         PatientSyncResponse: Standardized JSON response with synchronization status.
     """
+    if current_user.role != "doctor":
+        logger.warning(f"Unauthorized write attempt on patient data by {current_user.email} (Role: {current_user.role})")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only doctors can create or update patient records."
+        )
+    
     try:
-        # 1. Save to Local DB
-        logger.info(f"User {current_user.email} is syncing patient {patient_data.patientId}")
-        saved_patient = create_or_update_patient(db, patient_data)
+        # 1. Save DB
+        logger.info(f"Doctor {current_user.email} is syncing patient {patient_data.patientId}")
+        saved_patient = create_or_update_patient(db, patient_data, current_user.organization_id)
         
         # 2. HL7 Conversion
         hl7_message = convert_to_hl7(patient_data)
@@ -113,13 +129,21 @@ def search_patients(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Strict search for patients. First name, last name, and date of birth are MANDATORY
+    Strict search for patients.
+    First name, last name, and date of birth are MANDATORY
+    Security: Only 'org_admin', 'doctor' and 'nurse' can view clinical records.
     """
+    if current_user.role not in ["doctor", "nurse", "org_admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only medical staff can view patient records."
+        )
     
     logger.info(f"User {current_user.email} searching. Params -> First: {first_name}, Last: {last_name}, DOB: {birth_date}, Guardian: {guardian_name}")
     
     results = search_patients_advanced(
         db=db, 
+        org_id=current_user.organization_id,
         first_name=first_name, 
         last_name=last_name, 
         birth_date=birth_date, 
