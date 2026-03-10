@@ -25,11 +25,13 @@ router = APIRouter()
 @router.get("/scan/{device_uid}", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
 def get_patient_by_device_uid_scan(
     device_uid: str, 
+    guardian_device_uid: Optional[str] = Query(None, description="Scanned ID from guardian's bracelet"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
     Get patient details by scanning a hardware identifier (NFC, Barcode, etc.).
+    Includes 2FA Hardware check for minors using the guardian's NFC tag.
     
     Used in the 'Scan Device' view of the mobile app.
     If the device UID is registered, returns the full medical record.
@@ -56,6 +58,29 @@ def get_patient_by_device_uid_scan(
             detail="Patient not found. This tag is not registered in your organization."
         )
     
+    # Calcular edad actual
+    today = date.today()
+    dob = patient_db.birth_date
+    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+
+    # Si es menor de 18 años, aplicar restricciones
+    if age < 18:
+        if not guardian_device_uid:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Guardian bracelet scan required for minors."
+            )
+        
+        # Extraemos el UID del guardián guardado en el JSON de este paciente
+        stored_guardian_uid = patient_db.full_record_json.get("guardianInfo", {}).get("device_uid")
+        
+        if guardian_device_uid != stored_guardian_uid:
+            logger.warning(f"Failed guardian authentication for patient {patient_db.id}")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Guardian tag mismatch. Access denied."
+            )
+
     return patient_db.full_record_json
 
 
@@ -77,17 +102,17 @@ def sync_patient(
     Returns:
         PatientSyncResponse: Standardized JSON response with synchronization status.
     """
-    if current_user.role != "doctor":
+    if current_user.role not in ["doctor", "nurse"]:
         logger.warning(f"Unauthorized write attempt on patient data by {current_user.email} (Role: {current_user.role})")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access Denied: Only doctors can create or update patient records."
+            detail="Access Denied: Only doctors and nurses can create or update patient records."
         )
     
     try:
         # 1. Save DB
         logger.info(f"Doctor {current_user.email} is syncing patient {patient_data.patientId}")
-        saved_patient = create_or_update_patient(db, patient_data, current_user.organization_id)
+        saved_patient = create_or_update_patient(db, patient_data, current_user.organization_id, current_user.role)
         
         # 2. HL7 Conversion
         hl7_message = convert_to_hl7(patient_data)

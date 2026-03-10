@@ -73,17 +73,14 @@ class Patient(Base):
     last_name = Column(String, index=True)
     birth_date = Column(Date)
     blood_type = Column(String(5))
+    guardian_name = Column(String)
+    guardian_phone = Column(String)
     
-    # Anthropometric Data
-    weight = Column(Float, nullable=True) # kg
-    height = Column(Float, nullable=True) # cm
-
     # Raw Full JSON Storage (Medical history / FHIR / HL7 payload)
     full_record_json = Column(JSON) 
     
     # Audit Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    is_synced_with_cloud = Column(Boolean, default=False)
 
     # Relationships
     organization = relationship("Organization", back_populates="patients")

@@ -16,9 +16,6 @@ class PatientInfo(BaseModel):
     gender: str
     bloodType: str
     address: Address
-    
-    # Optional fields
-    allergies: Optional[str] = "NINGUNA" 
     weight: Optional[float] = Field(None, description="Weight in Kg (e.g. 12.5)")
     height: Optional[float] = Field(None, description="Height in cm (e.g. 95.0)")
 
@@ -26,6 +23,7 @@ class GuardianInfo(BaseModel):
     name: str
     relationship: str
     phone: str
+    device_uid: Optional[str] = Field(None, description="Hardware ID of the guardian's NFC tag")
 
 class DiagnosisData(BaseModel):
     icd10Code: str
@@ -44,8 +42,16 @@ class VaccinationRecordItem(BaseModel):
     vaccineName: str
     vaccineCode: str  # CVX Code
     dose: int
-    lotNumber: str
+    administratedBy: str
+    administratedAt: str
     status: str
+
+class AllergyInfo(BaseModel):
+    allergen: str
+    icd10Code: str
+    reaction: str
+    severity: str
+    notes: Optional[str] = None
 
 # --- Main Model (Incoming JSON Payload) ---
 class PatientFullRecord(BaseModel):
@@ -53,6 +59,7 @@ class PatientFullRecord(BaseModel):
     device_uid: str = Field(..., description="Unique identifier from the hardware tag (NFC UID, QR code string, etc.)")
     patientInfo: PatientInfo
     guardianInfo: GuardianInfo
+    allergies: List[AllergyInfo] = []
     medicalHistory: List[MedicalHistoryItem] = []
     vaccinationRecord: List[VaccinationRecordItem] = []
 
