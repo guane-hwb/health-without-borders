@@ -21,7 +21,7 @@ def create_superadmin():
     org_name = settings.ROOT_ORGANIZATION_NAME 
     
     try:
-        # 1. Asegurar que exista la Organización Maestra
+        # Check if the root organization exists, if not create it
         master_org = db.query(Organization).filter(Organization.name == org_name).first()
         
         if not master_org:
@@ -32,7 +32,7 @@ def create_superadmin():
             db.refresh(master_org)
             logger.info(f"Root Organization created with ID: {master_org.id}")
 
-        # 2. Verificar si el usuario ya existe
+        # Check if the superadmin user already exists, if so, update password and role
         user = db.query(User).filter(User.email == email).first()
         if user:
             logger.info(f"User {email} already exists.")
@@ -43,7 +43,7 @@ def create_superadmin():
             logger.info(f"Password and roles updated for existing user: {email}")
             return
 
-        # 3. Crear el nuevo SuperAdmin
+        # Create the superadmin user
         logger.info(f"Creating superadmin user: {email}")
         new_user = User(
             email=email,

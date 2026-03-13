@@ -1,27 +1,27 @@
 steps:
   # ======================================================
-  # PASO 1: EJECUTAR PRUEBAS UNITARIAS (EL ESCUDO)
+  # STEP 1: RUN TESTS
   # ======================================================
-  # - name: 'python:3.11-slim'
-  #   entrypoint: 'bash'
-  #   args:
-  #     - '-c'
-  #     - |
-  #       pip install uv
-  #       uv sync
-  #       export SECRET_KEY="dummy_secret_for_testing_only"
-  #       export DB_PASS="dummy_pass"
-  #       export DATABASE_URL="sqlite:///./test.db"
-  #       export HL7_SENDING_APP="HWB_BACKEND"
-  #       export HL7_SENDING_FACILITY="HWB_FIELD_CLINIC"
-  #       export HL7_RECEIVING_APP="GCP_HEALTHCARE"
-  #       export HL7_RECEIVING_FACILITY="GCP_DATALAKE"
-  #       export HL7_PROCESSING_ID="D"
-  #       export HL7_VERSION_ID="2.5.1"
-  #       uv run pytest
+  - name: 'python:3.11-slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        pip install uv
+        uv sync
+        export SECRET_KEY="dummy_secret_for_testing_only"
+        export DB_PASS="dummy_pass"
+        export DATABASE_URL="sqlite:///./test.db"
+        export HL7_SENDING_APP="HWB_BACKEND"
+        export HL7_SENDING_FACILITY="HWB_FIELD_CLINIC"
+        export HL7_RECEIVING_APP="GCP_HEALTHCARE"
+        export HL7_RECEIVING_FACILITY="GCP_DATALAKE"
+        export HL7_PROCESSING_ID="D"
+        export HL7_VERSION_ID="2.5.1"
+        uv run pytest
 
   # ======================================================
-  # PASO 2: CONSTRUIR LA IMAGEN DE DOCKER
+  # STEP 2: BUILD THE DOCKER IMAGE
   # ======================================================
   - name: 'gcr.io/cloud-builders/docker'
     args: 
@@ -31,7 +31,7 @@ steps:
       - '.'
 
   # ======================================================
-  # PASO 3: SUBIR LA IMAGEN AL REGISTRY (NUBE)
+  # STEP 3: PUSH THE IMAGE TO THE REGISTRY (CLOUD)
   # ======================================================
   - name: 'gcr.io/cloud-builders/docker'
     args: 
@@ -39,7 +39,7 @@ steps:
       - 'us-central1-docker.pkg.dev/$PROJECT_ID/hwb-repo/hwb-backend:$COMMIT_SHA'
 
   # ======================================================
-  # PASO 4: DESPLEGAR EN CLOUD RUN
+  # STEP 4: DEPLOY TO CLOUD RUN
   # ======================================================
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
@@ -54,9 +54,9 @@ steps:
       - '--update-secrets'
       - 'DB_PASS=hwb-db-pass:latest,SECRET_KEY=hwb-secret-key:latest'
 
-# Tiempo máximo de ejecución del pipeline
+# Maximum build time (15 minutes)
 timeout: '900s'
 
-# Configuracion de logs obligatoria
+# Use Cloud Logging only to avoid unnecessary logs in Cloud Build
 options:
   logging: CLOUD_LOGGING_ONLY

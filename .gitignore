@@ -1,14 +1,22 @@
-# Python
 __pycache__/
 *.py[cod]
+*$py.class
 .venv/
+
 .pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
 
-# Variables de entorno
 .env
-
-# IDE
-.vscode/
-
-# Google Cloud credentials
 gcp_key.json
+*.pem
+
+cloud-sql-proxy
+
+site/
+
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

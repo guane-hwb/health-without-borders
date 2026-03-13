@@ -53,7 +53,7 @@ def create_user(
 
     ## 4. Enforce Multi-Tenancy based on Role
     if current_user.role == "superadmin":
-        # El SuperAdmin debe especificar a qué ONG enviará este nuevo usuario
+        # SuperAdmin can create users for any organization, but must specify the target organization
         if not user_in.organization_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -61,7 +61,7 @@ def create_user(
             )
         target_org_id = user_in.organization_id
     else:
-        # Si es un org_admin, ignoramos lo que envíe e inyectamos su propia organización
+        # This ensures that org_admins can only create users within their own organization, regardless of the input.
         target_org_id = current_user.organization_id
 
     # 5. Create the DB User object

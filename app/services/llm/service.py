@@ -89,8 +89,7 @@ class GenerativeProcessor:
             return [
                 DiagnosisItem(
                     icd10Code="Z00.0", 
-                    description="Examen médico general (Fallo en extracción IA)", 
-                    is_ai_generated=True
+                    description="Examen médico general (Fallo en extracción IA)"
                 )
             ]
 

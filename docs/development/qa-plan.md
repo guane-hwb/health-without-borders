@@ -40,38 +40,71 @@ All incoming JSON payloads are parsed into these Pydantic models before interact
 
 ## 3. Sample Test Case
 
-Below is an example of an integration test for our Patient endpoint. It demonstrates how we use the FastAPI `TestClient` alongside our Pydantic data structures to validate the creation of a new medical record.
+Below is an example of an integration test for our Patient endpoint. It demonstrates how we use the FastAPI `TestClient`, dependency overrides for RBAC authentication, and `unittest.mock` to safely test the creation of a new medical record without hitting the production Google Cloud API.
 
 ```python
 # tests/api/v1/test_patients.py
 
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 from app.main import app
+from app.api.deps import get_current_user
 
 client = TestClient(app)
 
-def test_create_patient_success(db_session):
+def test_sync_patient_success():
+    # 1. Mock RBAC Authentication
+    class MockUser:
+        email = "doctor_prueba@hwb.org"
+        id = 1
+        role = "doctor"
+        organization_id = "org-123"
+        
+    app.dependency_overrides[get_current_user] = lambda: MockUser()
+
+    # 2. Valid Pydantic Payload
     payload = {
-        "patientId": "123e4567-e89b-12d3-a456-426614174000",
-        "device_uid": "NFC-9988",
+        "patientId": "TEST-UNIT-001",
+        "device_uid": "04:A2:TEST:UID",
         "patientInfo": {
-            "firstName": "Ana",
-            "lastName": "Perez",
-            "dob": "2015-05-15",
-            "gender": "F",
-            "bloodType": "O+"
-        }
+            "lastName": "Test",
+            "firstName": "User",
+            "dob": "2020-01-01",
+            "gender": "M",
+            "bloodType": "O+",
+            "address": {
+                "street": "Test", "city": "Cucuta", "state": "NS", 
+                "zipCode": "540001", "country": "COL"
+            }
+        },
+        "guardianInfo": {
+            "name": "Mom Test",
+            "relationship": "Mother",
+            "phone": "123456789"
+        },
+        "allergies": [],
+        "medicalHistory": [],
+        "vaccinationRecord": []
     }
     
-    response = client.post(
-        "/api/v1/patients/sync",
-        json=payload,
-        headers={"Authorization": "Bearer test_token"}
-    )
-    
-    assert response.status_code == 201
-    assert response.json()["patientId"] == payload["patientId"]
-    assert "sync_timestamp" in response.json()
+    # 3. Mock External GCP Service & Execute
+    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        
+        response = client.post("/api/v1/patients/sync", json=payload)
+        
+        # Cleanup
+        app.dependency_overrides.pop(get_current_user, None)
+        
+        # 4. Assertions (Matching PatientSyncResponse Schema)
+        assert response.status_code == 201
+        
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["internal_id"] == "TEST-UNIT-001"
+        assert data["gcp_status"] == "success"
+        
+        mock_gcp.assert_called_once()
 
 ```
 

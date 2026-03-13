@@ -1,3 +1,4 @@
+from enum import Enum
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import date
@@ -61,30 +62,30 @@ class VaccinationRecordItem(BaseModel):
     administratedAt: str
     status: str
 
-# TODO
+class AllergyReactionEnum(str, Enum):
+    HABONES = "Habones"
+    EDEMA_MUCOSAS = "Edema de mucosas"
+    DIFICULTAD_RESPIRAR = "Dificultad para respirar"
+    CHOQUE_ANAFILACTICO = "Choque anafiláctico"
+    PARO_CARDIACO = "Paro cardiaco"
+
 class AllergyInfo(BaseModel):
     allergen: str
-    icd10Code: str # quitarlo
-    reaction: str # enum ---> []
-    severity: str # quitarlo
+    reaction: AllergyReactionEnum = Field(..., description="tipo de reacción alérgica")
     notes: Optional[str] = None
 
 class ClinicalEvaluation(BaseModel):
-    """Datos ingresados manualmente por el médico en el formulario de la tablet."""
+    """Datos ingresados manualmente por el médico en el formulario"""
     historyOfCurrentIllness: Optional[str] = Field(None, description="Enfermedad actual: El motivo de consulta de hoy y su evolución.")
     generalPhysicalExamination: Optional[str] = Field(None, description="Examen físico general.")
     systemsExamination: Optional[str] = Field(None, description="Revisión por sistemas.")
     treatmentPlanObservations: Optional[str] = Field(None, description="Plan de tratamiento y observaciones médicas.")
 
 class DiagnosisItem(BaseModel):
-    """Diagnóstico estructurado. Puede venir del frontend (búsqueda manual) o generado por la IA en el backend."""
+    """Diagnóstico estructurado."""
     icd10Code: str
     icd11Code: Optional[str] = None
     description: str
-    is_ai_generated: bool = Field(
-        default=True, 
-        description="Bandera de auditoría: True si el código fue inferido por Gemini, False si el doctor lo eligió manualmente."
-    )
 
 class MedicalHistoryItem(BaseModel):
     """Representa una única visita médica."""

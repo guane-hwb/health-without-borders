@@ -1,4 +1,3 @@
-# app/api/v1/endpoints/patients.py
 import logging
 from typing import List, Optional
 from datetime import date
@@ -59,12 +58,12 @@ def get_patient_by_device_uid_scan(
             detail="Patient not found. This tag is not registered in your organization."
         )
     
-    # Calcular edad actual
+    # Calculate patient's age to determine if guardian authentication is required
     today = date.today()
     dob = patient_db.birth_date
     age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
-    # Si es menor de 18 años, aplicar restricciones
+    # If patient is a minor, require guardian device UID and validate it against the stored guardian info
     if age < 18:
         if not guardian_device_uid:
             raise HTTPException(
@@ -72,7 +71,7 @@ def get_patient_by_device_uid_scan(
                 detail="Guardian bracelet scan required for minors."
             )
         
-        # Extraemos el UID del guardián guardado en el JSON de este paciente
+        # Extract the stored guardian device UID from the patient's full record JSON
         stored_guardian_uid = patient_db.full_record_json.get("guardianInfo", {}).get("device_uid")
         
         if guardian_device_uid != stored_guardian_uid:
@@ -111,13 +110,12 @@ def sync_patient(
         )
     
     try:
-        # TODO: Aquí es donde integramos la IA para inferir diagnósticos faltantes antes de guardar en la base de datos.
         for visit in patient_data.medicalHistory:
-            # Si el frontend envió el array de diagnósticos vacío
+            # If diagnosis is missing, use the LLM to extract it from the clinical evaluation text fields
             if not visit.diagnosis:
                 eval_data = visit.clinicalEvaluation
                 
-                # Llamamos a nuestro nuevo servicio LLM
+                # Requests the medical LLM to analyze the clinical evaluation and extract potential diagnoses
                 ai_diagnoses = medical_llm_processor.extract_diagnoses(
                     history=eval_data.historyOfCurrentIllness,
                     physical=eval_data.generalPhysicalExamination,
@@ -125,7 +123,7 @@ def sync_patient(
                     plan=eval_data.treatmentPlanObservations
                 )
                 
-                # Inyectamos los resultados de la IA en el objeto de la visita
+                # Update the visit's diagnosis field with the LLM's output.
                 visit.diagnosis = ai_diagnoses
 
         # 1. Save DB
@@ -139,7 +137,6 @@ def sync_patient(
         # 3. Send to GCP
         gcp_response = send_to_google_healthcare(hl7_message)
         
-        # Safe extraction of status (defensive programming)
         gcp_status = gcp_response.get("status", "unknown")
         
         if gcp_status != "success":

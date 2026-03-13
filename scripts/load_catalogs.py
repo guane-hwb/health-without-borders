@@ -3,7 +3,6 @@ import logging
 import os
 import sys
 
-# --- Path Configuration ---
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from sqlalchemy.orm import Session
@@ -31,7 +30,7 @@ def load_cie10(db: Session):
 
         logger.info(f"Parsing {len(raw_data)} records...")
 
-        # Usamos diccionarios crudos en lugar de objetos ORM para mayor velocidad
+        # We will create a list of dictionaries to bulk insert. We also add a flag for common diagnoses for potential future use in the UI.
         diagnoses_mappings = []
         common_codes = {"A09", "J00", "E40", "J06.9", "B82.9"}
 
