@@ -1,0 +1,55 @@
+site_name: Health Without Borders - API Docs
+site_description: Interoperable Medical Records Platform for Migrant Children and Adolescents.
+site_url: https://guanes.github.io/health-without-borders/
+repo_url: https://github.com/guanes/health-without-borders
+repo_name: guanes/health-without-borders
+
+theme:
+  name: material
+  palette:
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - search.suggest
+
+# Extensions to support Mermaid diagrams and code blocks
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Home: index.md
+  - Architecture:
+    - HL7v2 Strategy: architecture/hl7v2-strategy.md
+    - AI & NLP Integration: architecture/ai-integration.md
+  - Development:
+    - Setup Guide: development/setup.md
+    - QA & PR Workflow: development/qa-plan.md
+  - Infrastructure:
+    - Database Schema: infrastructure/database.md
+    - Security Protocols: infrastructure/security.md
+    - GCP Deployment: infrastructure/gcp-deploy.md
+    - Healthcare API: infrastructure/healthcare-api.md
