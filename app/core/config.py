@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # --- INITIAL SUPERUSER ---
     FIRST_SUPERUSER_EMAIL: str = "admin@default.org"
     FIRST_SUPERUSER_PASSWORD: str = "changeme"
+    ROOT_ORGANIZATION_NAME: str = "Guane"
     
     # --- DATABASE CONFIGURATION ---
     # We allow individual components to support Cloud SQL socket connections.

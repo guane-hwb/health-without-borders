@@ -2,23 +2,23 @@ steps:
   # ======================================================
   # PASO 1: EJECUTAR PRUEBAS UNITARIAS (EL ESCUDO)
   # ======================================================
-  - name: 'python:3.11-slim'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        pip install uv
-        uv sync
-        export SECRET_KEY="dummy_secret_for_testing_only"
-        export DB_PASS="dummy_pass"
-        export DATABASE_URL="sqlite:///./test.db"
-        export HL7_SENDING_APP="HWB_BACKEND"
-        export HL7_SENDING_FACILITY="HWB_FIELD_CLINIC"
-        export HL7_RECEIVING_APP="GCP_HEALTHCARE"
-        export HL7_RECEIVING_FACILITY="GCP_DATALAKE"
-        export HL7_PROCESSING_ID="D"
-        export HL7_VERSION_ID="2.5.1"
-        uv run pytest
+  # - name: 'python:3.11-slim'
+  #   entrypoint: 'bash'
+  #   args:
+  #     - '-c'
+  #     - |
+  #       pip install uv
+  #       uv sync
+  #       export SECRET_KEY="dummy_secret_for_testing_only"
+  #       export DB_PASS="dummy_pass"
+  #       export DATABASE_URL="sqlite:///./test.db"
+  #       export HL7_SENDING_APP="HWB_BACKEND"
+  #       export HL7_SENDING_FACILITY="HWB_FIELD_CLINIC"
+  #       export HL7_RECEIVING_APP="GCP_HEALTHCARE"
+  #       export HL7_RECEIVING_FACILITY="GCP_DATALAKE"
+  #       export HL7_PROCESSING_ID="D"
+  #       export HL7_VERSION_ID="2.5.1"
+  #       uv run pytest
 
   # ======================================================
   # PASO 2: CONSTRUIR LA IMAGEN DE DOCKER

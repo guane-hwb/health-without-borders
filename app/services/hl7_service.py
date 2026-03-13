@@ -137,9 +137,34 @@ def convert_to_hl7(patient: PatientFullRecord) -> str:
         rxa.rxa_5.rxa_5_2 = vaccine.vaccineName
         rxa.rxa_5.rxa_5_3 = "CVX"
         rxa.rxa_6 = str(vaccine.dose) if vaccine.dose else "1"
-        rxa.rxa_15 = vaccine.lotNumber or ""
-        rxa.rxa_20 = "CP"  # Complete
+    
+        if vaccine.administratedBy:
+            rxa.rxa_10 = vaccine.administratedBy  # Administering Provider
+            
+        if vaccine.administratedAt:
+            rxa.rxa_11 = vaccine.administratedAt  # Administered-at Location    
+
+        rxa.rxa_20 = "CP"  # Completion Status (CP = Complete)
         segments.append(rxa)
+
+    # --- 7. Allergies (AL1) ---
+    for i, allergy in enumerate(patient.allergies, start=1):
+        al1 = Segment("AL1", version=settings.HL7_VERSION_ID)
+        al1.al1_1 = str(i)
+        al1.al1_2 = "DA" # Drug Allergy (puedes dejarlo genérico o mapearlo después)
+        
+        # Código y descripción de la alergia
+        al1.al1_3.al1_3_1 = allergy.icd10Code
+        al1.al1_3.al1_3_2 = allergy.allergen
+        al1.al1_3.al1_3_3 = "I10" # Sistema de codificación (CIE-10)
+        
+        # Severidad
+        al1.al1_4 = allergy.severity
+        
+        # Reacción
+        al1.al1_5 = allergy.reaction
+        
+        segments.append(al1)
 
     # hl7apy's .value attribute extracts the perfectly formatted string for each segment
     final_message = "\r".join([seg.value for seg in segments])
