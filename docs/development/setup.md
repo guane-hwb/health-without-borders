@@ -45,7 +45,11 @@ The application requires specific environment variables to connect to the local 
     # Security (Insecure keys for local development ONLY)
     SECRET_KEY=dev_secret_key_change_in_production
     ALGORITHM=HS256
-    ACCESS_TOKEN_EXPIRE_MINUTES=1440
+    ACCESS_TOKEN_EXPIRE_MINUTES=1440 # 24 hours
+
+    # Vertex AI / LLM Configuration
+    GCP_PROJECT_ID=migrants-unicef
+    LLM_MODEL_NAME=gemini-1.5-pro-002
 
     # General
     PROJECT_NAME="HWB Local Dev"

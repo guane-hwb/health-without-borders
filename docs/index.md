@@ -134,22 +134,22 @@ health-without-borders/
 Detailed project documentation is organized in the `docs/` folder:
 
 * **Development:**
-  * [**Local Setup Guide**](docs/development/setup.md): Instructions for configuring Docker and running the API locally.
+  * [**Local Setup Guide**](development/setup.md): Instructions for configuring Docker and running the API locally.
 * **Infrastructure & Security:**
-  * [**GCP Deployment Guide**](docs/infrastructure/gcp-deploy.md): Step-by-step instructions for deploying to Google Cloud Run.
-  * [**Database Architecture**](docs/infrastructure/database.md): Data modeling, JSONB usage, and table dictionary.
-  * [**Security Protocols**](docs/infrastructure/security.md): JWT configuration, RBAC, and data encryption standards.
+  * [**GCP Deployment Guide**](infrastructure/gcp-deploy.md): Step-by-step instructions for deploying to Google Cloud Run.
+  * [**Database Architecture**](infrastructure/database.md): Data modeling, JSONB usage, and table dictionary.
+  * [**Security Protocols**](infrastructure/security.md): JWT configuration, RBAC, and data encryption standards.
 * **Interoperability:**
-  * [**Cloud Healthcare API**](docs/infrastructure/healthcare-api.md): GCP HL7v2 Store and Pub/Sub configuration.
-  * [**HL7v2 Strategy (ADR)**](docs/architecture/hl7v2-strategy.md): Architectural Decision Record comparing GCP, Mirth Connect, and In-House solutions.
+  * [**Cloud Healthcare API**](infrastructure/healthcare-api.md): GCP HL7v2 Store and Pub/Sub configuration.
+  * [**HL7v2 Strategy (ADR)**](architecture/hl7v2-strategy.md): Architectural Decision Record comparing GCP, Mirth Connect, and In-House solutions.
 * **AI & Natural Language Processing:**
-  * [**Clinical NLP Integration (ADR)**](docs/architecture/ai-integration.md): Architectural decision and Prompt Engineering strategy for automated ICD-10/11 coding using Google Vertex AI.
+  * [**Clinical NLP Integration (ADR)**](architecture/ai-integration.md): Architectural decision and Prompt Engineering strategy for automated ICD-10/11 coding using Google Vertex AI.
 
 ---
 
 ## ⚡ Quick Start (Local Development)
 
-Please refer to the comprehensive [**Local Setup Guide**](docs/development/setup.md) for detailed instructions on spinning up the local Docker database and seeding the clinical catalogs.
+Please refer to the comprehensive [**Local Setup Guide**](development/setup.md) for detailed instructions on spinning up the local Docker database and seeding the clinical catalogs.
 
 **Basic commands summary:**
 ```bash
@@ -196,15 +196,15 @@ We welcome contributions from the community! This project follows strict develop
 3. Document any new endpoint in Swagger.
 4. Target your Pull Requests to the `develop` branch, not `main`.
 
-For full details on how to get involved, please read our official [CONTRIBUTING.md](CONTRIBUTING.md) and review our strict [QA & Pull Request Workflow](docs/development/qa-plan.md).
+For full details on how to get involved, please read our official [CONTRIBUTING.md](https://github.com/guanes/health-without-borders/blob/main/CONTRIBUTING.md) and review our strict [QA & Pull Request Workflow](development/qa-plan.md).
 
-Please note that this project is released with a [Contributor Code of Conduct](CODE_OF_CONDUCT.md). By participating in this project you agree to abide by its terms.
+Please note that this project is released with a [Contributor Code of Conduct](https://github.com/guanes/health-without-borders/blob/main/CODE_OF_CONDUCT.md). By participating in this project you agree to abide by its terms.
 
 ---
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/guanes/health-without-borders/blob/main/LICENSE) file for details.
 
 ---
 
