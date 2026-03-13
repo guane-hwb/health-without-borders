@@ -50,7 +50,9 @@ health-without-borders/
 │   │           ├── __init__.py
 │   │           ├── catalogs.py       # ICD-10, CVX catalog endpoints
 │   │           ├── login.py          # Authentication & JWT
-│   │           └── patients.py       # Patient CRUD & medical records
+│   │           ├── organizations.py  # Organization management endpoints
+│   │           ├── patients.py       # Patient CRUD & medical records
+│   │           └── users.py          # User management endpoints
 │   ├── core/                         # Core configuration & utilities
 │   │   ├── __init__.py
 │   │   ├── config.py                 # Environment variables & settings
@@ -64,11 +66,17 @@ health-without-borders/
 │   ├── schemas/                      # Pydantic models (request/response)
 │   │   ├── __init__.py
 │   │   ├── catalog.py                # Catalog schemas
+│   │   ├── organization.py           # Organization schemas
 │   │   ├── patient.py                # Patient schemas
 │   │   ├── token.py                  # JWT token schemas
 │   │   └── user.py                   # User schemas
 │   ├── services/                     # Business logic layer
 │   │   ├── __init__.py
+│   │   ├── llm/                      # LLM integration services
+│   │   │   ├── __init__.py
+│   │   │   ├── prompts.py            # LLM prompt templates
+│   │   │   ├── schemas.py            # LLM request/response schemas
+│   │   │   └── service.py            # LLM service implementation
 │   │   ├── catalog_service.py        # Catalog operations
 │   │   ├── gcp_service.py            # GCP Cloud Healthcare API integration
 │   │   ├── hl7_service.py            # HL7v2 parsing & generation
@@ -113,7 +121,8 @@ health-without-borders/
 | `app/core/` | Configuration, security, logging utilities |
 | `app/db/` | SQLAlchemy ORM models and database session management |
 | `app/schemas/` | Pydantic models for request/response validation |
-| `app/services/` | Business logic and external integrations (GCP, HL7) |
+| `app/services/` | Business logic and external integrations (GCP, HL7, LLM) |
+| `app/services/llm/` | LLM integration for AI-powered medical assistance |
 | `docs/` | Architecture, deployment, and development guides |
 | `scripts/` | Database initialization and data loading utilities |
 | `tests/` | Automated test cases using pytest |

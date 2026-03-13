@@ -10,6 +10,7 @@ from app.api.deps import get_current_user
 
 from app.db.session import get_db
 from app.schemas.patient import PatientFullRecord, PatientSyncResponse
+from app.services.llm.service import medical_llm_processor
 from app.services.patient_service import (
     create_or_update_patient,
     get_patient_by_device_uid, 
@@ -110,6 +111,23 @@ def sync_patient(
         )
     
     try:
+        # TODO: Aquí es donde integramos la IA para inferir diagnósticos faltantes antes de guardar en la base de datos.
+        for visit in patient_data.medicalHistory:
+            # Si el frontend envió el array de diagnósticos vacío
+            if not visit.diagnosis:
+                eval_data = visit.clinicalEvaluation
+                
+                # Llamamos a nuestro nuevo servicio LLM
+                ai_diagnoses = medical_llm_processor.extract_diagnoses(
+                    history=eval_data.historyOfCurrentIllness,
+                    physical=eval_data.generalPhysicalExamination,
+                    systems=eval_data.systemsExamination,
+                    plan=eval_data.treatmentPlanObservations
+                )
+                
+                # Inyectamos los resultados de la IA en el objeto de la visita
+                visit.diagnosis = ai_diagnoses
+
         # 1. Save DB
         logger.info(f"Doctor {current_user.email} is syncing patient {patient_data.patientId}")
         saved_patient = create_or_update_patient(db, patient_data, current_user.organization_id, current_user.role)
