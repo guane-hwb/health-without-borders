@@ -45,6 +45,7 @@ nav:
   - Architecture:
     - HL7v2 Strategy: architecture/hl7v2-strategy.md
     - AI & NLP Integration: architecture/ai-integration.md
+    - HL7v2 Mapping: architecture/hl7-mapping.md
   - Development:
     - Setup Guide: development/setup.md
     - QA & PR Workflow: development/qa-plan.md
