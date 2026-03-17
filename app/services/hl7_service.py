@@ -15,7 +15,7 @@ def convert_to_hl7(patient: PatientFullRecord) -> str:
     segments = []
     now = datetime.now()
 
-    # --- 1. MSH (Message Header) ---
+    # MSH (Message Header)
     msh = Segment("MSH", version=settings.HL7_VERSION_ID)
     msh.msh_3 = settings.HL7_SENDING_APP
     msh.msh_4 = settings.HL7_SENDING_FACILITY
@@ -27,7 +27,7 @@ def convert_to_hl7(patient: PatientFullRecord) -> str:
     msh.msh_12 = settings.HL7_VERSION_ID
     segments.append(msh)
 
-    # --- 2. PID (Patient Identification) ---
+    # PID (Patient Identification)
     pid = Segment("PID", version=settings.HL7_VERSION_ID)
     pid.pid_1 = "1"
     pid.pid_3 = patient.patientId
@@ -48,7 +48,7 @@ def convert_to_hl7(patient: PatientFullRecord) -> str:
         pid.pid_11.pid_11_6 = addr.country or ""
     segments.append(pid)
 
-    # --- 3. NK1 (Guardian) ---
+    # NK1 (Guardian)
     if patient.guardianInfo:
         nk1 = Segment("NK1", version=settings.HL7_VERSION_ID)
         nk1.nk1_1 = "1"
@@ -58,7 +58,7 @@ def convert_to_hl7(patient: PatientFullRecord) -> str:
             nk1.nk1_5 = patient.guardianInfo.phone
         segments.append(nk1)
 
-    # --- 4. Medical History (PV1, DG1) ---
+    # Medical History (PV1, DG1)
     for i, visit in enumerate(patient.medicalHistory, start=1):
         # Each visit gets a PV1 segment, and each diagnosis within that visit gets a DG1 segment. 
         # This allows us to capture multiple visits and their associated diagnoses in a structured way.
@@ -83,7 +83,7 @@ def convert_to_hl7(patient: PatientFullRecord) -> str:
             dg1.dg1_6 = "F"  # Final
             segments.append(dg1)
 
-    # --- 5. Vitals (Global OBX) ---
+    # Vitals (Global OBX)
     if patient.patientInfo.weight:
         obx_w = Segment("OBX", version=settings.HL7_VERSION_ID)
         obx_w.obx_1 = "W1"
@@ -108,7 +108,7 @@ def convert_to_hl7(patient: PatientFullRecord) -> str:
         obx_h.obx_11 = "F"
         segments.append(obx_h)
 
-    # --- 6. Vaccines (RXA) ---
+    # Vaccines (RXA)
     for i, vaccine in enumerate(patient.vaccinationRecord, start=1):
         rxa = Segment("RXA", version=settings.HL7_VERSION_ID)
         rxa.rxa_1 = "0"
@@ -127,7 +127,7 @@ def convert_to_hl7(patient: PatientFullRecord) -> str:
         rxa.rxa_20 = "CP"
         segments.append(rxa)
 
-    # --- 7. Allergies (AL1) ---
+    # Allergies (AL1)
     for i, allergy in enumerate(patient.allergies, start=1):
         al1 = Segment("AL1", version=settings.HL7_VERSION_ID)
         al1.al1_1 = str(i)

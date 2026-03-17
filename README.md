@@ -84,9 +84,13 @@ health-without-borders/
 │   └── data/                         # Static data files
 │       └── cie10.json                # ICD-10 catalog data
 ├── docs/                             # Project documentation
+│   ├── index.md                      # Main documentation index
 │   ├── architecture/
+│   │   ├── ai-integration.md         # AI/LLM integration documentation
+│   │   ├── hl7-mapping.md            # HL7 message mapping specifications
 │   │   └── hl7v2-strategy.md         # Architectural Decision Record (ADR)
 │   ├── development/
+│   │   ├── qa-plan.md                # Quality assurance and testing plan
 │   │   └── setup.md                  # Local development setup guide
 │   └── infrastructure/
 │       ├── database.md               # Database schema & modeling
@@ -133,15 +137,20 @@ health-without-borders/
 
 Detailed project documentation is organized in the `docs/` folder:
 
+* [**Documentation Index**](docs/index.md): Main documentation overview and navigation.
+* **Architecture:**
+  * [**AI Integration Guide**](docs/architecture/ai-integration.md): LLM integration and AI-powered medical assistance.
+  * [**HL7 Mapping Specifications**](docs/architecture/hl7-mapping.md): HL7 message mapping and interoperability standards.
+  * [**HL7v2 Strategy (ADR)**](docs/architecture/hl7v2-strategy.md): Architectural Decision Record comparing GCP, Mirth Connect, and In-House solutions.
 * **Development:**
   * [**Local Setup Guide**](docs/development/setup.md): Instructions for configuring Docker and running the API locally.
+  * [**QA Plan**](docs/development/qa-plan.md): Quality assurance and testing procedures.
 * **Infrastructure & Security:**
   * [**GCP Deployment Guide**](docs/infrastructure/gcp-deploy.md): Step-by-step instructions for deploying to Google Cloud Run.
   * [**Database Architecture**](docs/infrastructure/database.md): Data modeling, JSONB usage, and table dictionary.
   * [**Security Protocols**](docs/infrastructure/security.md): JWT configuration, RBAC, and data encryption standards.
 * **Interoperability:**
   * [**Cloud Healthcare API**](docs/infrastructure/healthcare-api.md): GCP HL7v2 Store and Pub/Sub configuration.
-  * [**HL7v2 Strategy (ADR)**](docs/architecture/hl7v2-strategy.md): Architectural Decision Record comparing GCP, Mirth Connect, and In-House solutions.
 * **AI & Natural Language Processing:**
   * [**Clinical NLP Integration (ADR)**](docs/architecture/ai-integration.md): Architectural decision and Prompt Engineering strategy for automated ICD-10/11 coding using Google Vertex AI.
 

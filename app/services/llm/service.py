@@ -13,15 +13,15 @@ logger = logging.getLogger(__name__)
 
 class GenerativeProcessor:
     """
-    Servicio NLP clínico impulsado por Google Vertex AI.
-    Maneja la conexión a Gemini para tareas de extracción estructurada.
+    Clinical NLP service powered by Google Vertex AI.
+    Handles Gemini connection for structured extraction tasks.
     """
     def __init__(
         self,
         model_name: str,
         system_instruction: str,
     ) -> None:
-        logger.info(f"Inicializando GenerativeProcessor con modelo: {model_name}")
+        logger.info(f"Initializing GenerativeProcessor with model: {model_name}")
         self.client = genai.Client(
             vertexai=True,
             project=settings.GCP_PROJECT_ID,
@@ -32,9 +32,9 @@ class GenerativeProcessor:
         
     def _get_safety_settings(self, threshold: types.HarmBlockThreshold) -> list[types.SafetySetting]:
         """
-        Configura los filtros de seguridad. En entornos médicos, 
-        suele ser necesario apagar/bajar los filtros para evitar que 
-        términos anatómicos legítimos bloqueen la respuesta.
+        Configures safety filters. In medical environments, 
+        it is usually necessary to turn off/lower the filters to prevent 
+        legitimate anatomical terms from blocking the response.
         """
         return [
             types.SafetySetting(category=category, threshold=threshold)
@@ -54,7 +54,7 @@ class GenerativeProcessor:
         plan: Optional[str]
     ) -> List[DiagnosisItem]:
         """
-        Procesa las notas clínicas y extrae los códigos CIE-10/11 en formato JSON estructurado.
+        Processes clinical notes and extracts ICD-10/11 codes in structured JSON format.
         """
         prompt = build_clinical_prompt(history, physical, systems, plan)
         
@@ -76,16 +76,16 @@ class GenerativeProcessor:
                 config=config
             )
             
-            # Pydantic parsea el JSON validando que cumpla la estructura
+            # Pydantic parses the JSON validating that it complies with the structure
             diagnoses_dicts = json.loads(response.text)
             diagnoses = [DiagnosisItem(**d) for d in diagnoses_dicts]
             
-            logger.info(f"Gemini extrajo {len(diagnoses)} diagnósticos exitosamente.")
+            logger.info(f"Gemini successfully extracted {len(diagnoses)} diagnoses.")
             return diagnoses
             
         except Exception as e:
-            logger.error(f"Error crítico extrayendo diagnósticos con Vertex AI: {str(e)}")
-            # Fallback de emergencia seguro para que el proceso de sincronización no se rompa
+            logger.error(f"Critical error extracting diagnoses with Vertex AI: {str(e)}")
+            # Safe emergency fallback so the sync process doesn't break
             return [
                 DiagnosisItem(
                     icd10Code="Z00.0", 

@@ -9,6 +9,7 @@ venv/
 env/
 
 # Python Cache & Build
+datalake/
 __pycache__/
 *.pyc
 *.pyo

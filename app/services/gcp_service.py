@@ -12,9 +12,7 @@ def send_to_google_healthcare(hl7_content: str):
     Sends an HL7v2 message string to Google Cloud Healthcare API.
     Supports both Local (JSON file) and Cloud Run (Metadata Server) authentication.
     """
-    # 1. VALIDACIÓN AJUSTADA
-    # Eliminamos el chequeo de GOOGLE_APPLICATION_CREDENTIALS.
-    # Solo validamos que tengamos el ID del proyecto y la configuración del Healthcare API.
+  
     if not settings.GCP_PROJECT_ID or not settings.GCP_HL7_STORE_ID:
         logger.warning("Missing GCP Project Configuration. Skipping cloud upload.")
         return {"status": "skipped", "reason": "No GCP configuration"}
@@ -22,17 +20,17 @@ def send_to_google_healthcare(hl7_content: str):
     logger.info(f"Sending HL7 to GCP Store: {settings.GCP_HL7_STORE_ID}...")
 
     try:
-        # 2. AUTENTICACIÓN HÍBRIDA
-        # google.auth.default() busca automáticamente en este orden:
-        # A. Variable de entorno GOOGLE_APPLICATION_CREDENTIALS (local)
-        # B. Metadata Server de Cloud Run (Nube - Automático)
+        # HYBRID AUTHENTICATION
+        # google.auth.default() automatically searches in this order:
+        # A. GOOGLE_APPLICATION_CREDENTIALS environment variable (local)
+        # B. Cloud Run Metadata Server (Cloud - Automatic)
         scopes = ['https://www.googleapis.com/auth/cloud-platform']
         creds, project = google.auth.default(scopes=scopes)
 
-        # Forzamos la obtención del token actual (necesario para el header Authorization)
+        # Force token refresh (necessary for Authorization header)
         creds.refresh(Request())
 
-        # 3. CONSTRUIR URL
+        # BUILD URL
         location = settings.GCP_LOCATION or "us-central1"
         
         base_url = (
@@ -41,8 +39,8 @@ def send_to_google_healthcare(hl7_content: str):
             f"hl7V2Stores/{settings.GCP_HL7_STORE_ID}/messages"
         )
         
-        # 4. PREPARAR PAYLOAD
-        # La API exige que el mensaje HL7 vaya codificado en Base64
+        # PREPARAR PAYLOAD
+        # API requires the HL7 message to be Base64 encoded
         b64_message = base64.b64encode(hl7_content.encode('utf-8')).decode('utf-8')
         payload = {"message": {"data": b64_message}}
         
@@ -51,16 +49,14 @@ def send_to_google_healthcare(hl7_content: str):
             "Content-Type": "application/json; charset=utf-8"
         }
 
-        # 5. ENVIAR REQUEST
-        # Usamos el método :ingest que es el estándar para subir mensajes
         ingest_url = f"{base_url}:ingest"
         
         logger.debug(f"Posting to: {ingest_url}")
         
         response = requests.post(ingest_url, headers=headers, json=payload)
-        response.raise_for_status() # Lanza error si es 400, 401, 403, 500...
+        response.raise_for_status()
 
-        logger.info("✅ Successfully ingested message to Google Cloud.")
+        logger.info("Successfully ingested message to Google Cloud.")
         return {
             "status": "success", 
             "google_response": response.json()

@@ -68,26 +68,74 @@ gcloud services enable \
 
 ## 3. Database Provisioning (Cloud SQL)
 
-Cloud Run requires an external persistence layer for relational data.
+Cloud Run requires an external persistence layer for relational data. Since we enforce a strict "No Public IP" policy, we must first establish a VPC Peering connection between our network and Google's internal services.
 
-**1. Create the Cloud SQL Instance (Server):**
+**1. Establish VPC Peering (Run Once per Project):**
+
+```bash
+# Reserve private IP range for Google Services
+gcloud compute addresses create google-managed-services-default \
+    --global \
+    --purpose=VPC_PEERING \
+    --prefix-length=16 \
+    --description="peering range for Google" \
+    --network=default
+
+# Connect the peering
+gcloud services vpc-peerings connect \
+    --service=servicenetworking.googleapis.com \
+    --ranges=google-managed-services-default \
+    --network=default \
+    --project=<GCP_PROJECT_ID>
+
+```
+
+**2. Create the Cloud SQL Instance (Server):**
+
+Choose the appropriate command based on your target environment.
+
+*Option A: Development / Sandbox (Cost-Optimized)*
 
 ```bash
 gcloud sql instances create <DB_INSTANCE_NAME> \
     --database-version=POSTGRES_15 \
-    --cpu=1 --memory=4GB \
+    --tier=db-f1-micro \
     --region=<REGION> \
+    --storage-size=10GB \
+    --storage-type=SSD \
+    --no-storage-auto-increase \
+    --network=default \
+    --no-assign-ip \
     --root-password="<DB_PASSWORD>"
 
 ```
 
-**2. Create the Logical Database:**
+*Option B: Production (High Availability & Performance)*
+
+```bash
+gcloud sql instances create <DB_INSTANCE_NAME> \
+    --database-version=POSTGRES_15 \
+    --tier=db-custom-2-8192 \
+    --region=<REGION> \
+    --availability-type=REGIONAL \
+    --storage-size=100GB \
+    --storage-type=SSD \
+    --storage-auto-increase \
+    --enable-point-in-time-recovery \
+    --network=default \
+    --no-assign-ip \
+    --root-password="<DB_PASSWORD>"
+
+```
+
+*(Note: Production uses a dedicated 2-core 8GB RAM machine, is replicated across two zones for High Availability, and enables Point-in-Time recovery).*
+
+**3. Create the Logical Database:**
 
 ```bash
 gcloud sql databases create <DB_NAME> --instance=<DB_INSTANCE_NAME>
 
 ```
-
 ---
 
 ## 4. Security & Secret Manager Setup 🔒
@@ -207,17 +255,25 @@ Once the bootstrap deployment is successful, subsequent deployments should be fu
 
 ## 8. Data Initialization (Schema & Seeding)
 
-Because Cloud Run is stateless, database migrations and initial catalog seeding must be executed via a secure tunnel from your local machine to the production database.
+Because our database lacks a public IP for security reasons, initializing the database from a local laptop requires a temporary security bypass. We will temporarily assign a public IP, run our scripts securely through the encrypted Auth Proxy, and then lock the instance down again.
 
-**1. Start the Cloud SQL Auth Proxy:**
-In a new terminal window, open the secure tunnel:
+**1. Temporarily Open the Vault (Assign Public IP):**
+```bash
+gcloud sql instances patch <DB_INSTANCE_NAME> --assign-ip
+
+```
+
+*(Wait 1-2 minutes for the instance to update).*
+
+**2. Start the Cloud SQL Auth Proxy:**
+In a new terminal window, open the secure encrypted tunnel:
 
 ```bash
 ./cloud-sql-proxy <GCP_PROJECT_ID>:<REGION>:<DB_INSTANCE_NAME> --port 5433
 
 ```
 
-**2. Execute Initialization Scripts:**
+**3. Execute Initialization Scripts:**
 In a **separate terminal window**, force the `DATABASE_URL` to route through the local tunnel:
 
 ```bash
@@ -229,6 +285,13 @@ uv run python scripts/load_catalogs.py
 
 ```
 
+**4. Close the Vault (Revoke Public IP):**
+Once the scripts complete successfully, immediately restore the maximum security posture:
+
+```bash
+gcloud sql instances patch <DB_INSTANCE_NAME> --no-assign-ip
+
+```
 ---
 
 ## 9. Monitoring and Maintenance

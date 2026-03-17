@@ -18,6 +18,7 @@ pytest.ini
 .coverage
 htmlcov/
 
+datalake/
 docs/
 site/
 mkdocs.yml

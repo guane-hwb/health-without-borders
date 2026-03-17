@@ -29,15 +29,15 @@ class GuardianInfo(BaseModel):
 class BackgroundHistory(BaseModel):
     chronicConditions: Optional[str] = Field(
         default=None, 
-        description="Enfermedades crónicas (ej. Asma, Diabetes)."
+        description="Chronic conditions (e.g. Asthma, Diabetes)."
     )
     personalHistory: Optional[str] = Field(
         default=None, 
-        description="Antecedentes personales patológicos, quirúrgicos o de nacimiento."
+        description="Personal medical, surgical, or birth history."
     )
     familyHistory: Optional[str] = Field(
         default=None, 
-        description="Antecedentes familiares de importancia."
+        description="Important family medical history."
     )
 
 class DiagnosisData(BaseModel):
@@ -71,7 +71,7 @@ class AllergyReactionEnum(str, Enum):
 
 class AllergyInfo(BaseModel):
     allergen: str
-    reaction: AllergyReactionEnum = Field(..., description="tipo de reacción alérgica")
+    reaction: AllergyReactionEnum = Field(..., description="Type of allergic reaction")
     notes: Optional[str] = None
 
 class ClinicalEvaluation(BaseModel):
@@ -82,13 +82,13 @@ class ClinicalEvaluation(BaseModel):
     treatmentPlanObservations: Optional[str] = Field(None, description="Plan de tratamiento y observaciones médicas.")
 
 class DiagnosisItem(BaseModel):
-    """Diagnóstico estructurado."""
+    """Structured diagnosis with ICD-10/11 coding."""
     icd10Code: str
     icd11Code: Optional[str] = None
     description: str
 
 class MedicalHistoryItem(BaseModel):
-    """Representa una única visita médica."""
+    """Represents a single medical visit."""
     type: str
     date: date
     location: str
@@ -105,11 +105,11 @@ class PatientFullRecord(BaseModel):
     patientInfo: PatientInfo
     guardianInfo: GuardianInfo
     
-    # Datos Clínicos Permanentes
+    # Permanent Clinical Data
     backgroundHistory: Optional[BackgroundHistory] = None
     allergies: List[AllergyInfo] = []
     
-    # Datos Episódicos
+    # Episodic Data
     medicalHistory: List[MedicalHistoryItem] = []
     vaccinationRecord: List[VaccinationRecordItem] = []
 
