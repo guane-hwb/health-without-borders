@@ -53,6 +53,12 @@ steps:
       - 'us-central1'
       - '--update-secrets'
       - 'DB_PASS=hwb-db-pass:latest,SECRET_KEY=hwb-secret-key:latest'
+      # 1. Montar la conexión de la nueva instancia SQL
+      - '--set-cloudsql-instances'
+      - 'migrants-unicef:us-central1:hwb-db-cluster'
+      # 2. Actualizar las variables de entorno para que config.py las lea
+      - '--update-env-vars'
+      - 'INSTANCE_CONNECTION_NAME=migrants-unicef:us-central1:hwb-db-cluster,DB_USER=postgres,DB_NAME=hwb_db'
 
 # Maximum build time (15 minutes)
 timeout: '900s'
