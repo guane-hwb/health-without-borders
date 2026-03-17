@@ -51,12 +51,20 @@ steps:
       - 'us-central1-docker.pkg.dev/$PROJECT_ID/hwb-repo/hwb-backend:$COMMIT_SHA'
       - '--region'
       - 'us-central1'
+      - '--allow-unauthenticated'
       - '--update-secrets'
       - 'DB_PASS=hwb-db-pass:latest,SECRET_KEY=hwb-secret-key:latest'
       # 1. Montar la conexión de la nueva instancia SQL
       - '--set-cloudsql-instances'
       - 'migrants-unicef:us-central1:hwb-db-cluster'
-      # 2. Actualizar las variables de entorno para que config.py las lea
+      # 2. Conectar Cloud Run a la red privada (VPC) para alcanzar la IP privada
+      - '--network'
+      - 'default'
+      - '--subnet'
+      - 'default'
+      - '--vpc-egress'
+      - 'private-ranges-only'
+      # 3. Actualizar las variables de entorno para que config.py las lea
       - '--update-env-vars'
       - 'INSTANCE_CONNECTION_NAME=migrants-unicef:us-central1:hwb-db-cluster,DB_USER=postgres,DB_NAME=hwb_db'
 
