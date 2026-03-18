@@ -20,8 +20,7 @@ def health_check():
     """
     Simple health check to verify the service is running.
     """
-    return {"status": "ok", "environment": "production" if not settings.DEBUG else "development"}
-
+    return {"status": "ok"}
 
 if __name__ == "__main__":
     import uvicorn

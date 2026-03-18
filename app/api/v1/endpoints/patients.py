@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+def _mask_identifier(value: Optional[str]) -> str:
+    if not value:
+        return "unknown"
+    if len(value) <= 6:
+        return "***"
+    return f"{value[:3]}***{value[-3:]}"
+
 @router.get("/scan/{device_uid}", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
 def get_patient_by_device_uid_scan(
     device_uid: str, 
@@ -46,13 +53,22 @@ def get_patient_by_device_uid_scan(
             detail="Access Denied: Only medical staff can view patient records."
         )
     
-    logger.info(f"User {current_user.email} (Org: {current_user.organization_id}) scanning Device: {device_uid}")
+    logger.info(
+        "Patient scan request actor_id=%s org_id=%s device_ref=%s",
+        current_user.id,
+        current_user.organization_id,
+        _mask_identifier(device_uid),
+    )
     
     # Delegate database lookup to the service layer
     patient_db = get_patient_by_device_uid(db, device_uid, current_user.organization_id)
     
     if not patient_db:
-        logger.warning(f"Device UID {device_uid} not found for Org {current_user.organization_id}.")
+        logger.warning(
+            "Patient scan not found org_id=%s device_ref=%s",
+            current_user.organization_id,
+            _mask_identifier(device_uid),
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Patient not found. This tag is not registered in your organization."
@@ -75,7 +91,12 @@ def get_patient_by_device_uid_scan(
         stored_guardian_uid = patient_db.full_record_json.get("guardianInfo", {}).get("device_uid")
         
         if guardian_device_uid != stored_guardian_uid:
-            logger.warning(f"Failed guardian authentication for patient {patient_db.id}")
+            logger.warning(
+                "Guardian validation failed actor_id=%s org_id=%s patient_ref=%s",
+                current_user.id,
+                current_user.organization_id,
+                _mask_identifier(patient_db.id),
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Guardian tag mismatch. Access denied."
@@ -103,7 +124,12 @@ def sync_patient(
         PatientSyncResponse: Standardized JSON response with synchronization status.
     """
     if current_user.role not in ["doctor", "nurse"]:
-        logger.warning(f"Unauthorized write attempt on patient data by {current_user.email} (Role: {current_user.role})")
+        logger.warning(
+            "Unauthorized patient sync actor_id=%s role=%s org_id=%s",
+            current_user.id,
+            current_user.role,
+            current_user.organization_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access Denied: Only doctors and nurses can create or update patient records."
@@ -127,7 +153,13 @@ def sync_patient(
                 visit.diagnosis = ai_diagnoses
 
         # 1. Save DB
-        logger.info(f"Doctor {current_user.email} is syncing patient {patient_data.patientId}")
+        logger.info(
+            "Patient sync started actor_id=%s role=%s org_id=%s patient_ref=%s",
+            current_user.id,
+            current_user.role,
+            current_user.organization_id,
+            _mask_identifier(patient_data.patientId),
+        )
         saved_patient = create_or_update_patient(db, patient_data, current_user.organization_id, current_user.role)
         
         # 2. HL7 Conversion
@@ -140,9 +172,13 @@ def sync_patient(
         gcp_status = gcp_response.get("status", "unknown")
         
         if gcp_status != "success":
-            logger.warning(f"GCP Upload issue for ID {saved_patient.id}. Status: {gcp_status}")
+            logger.warning(
+                "Patient sync GCP warning patient_ref=%s status=%s",
+                _mask_identifier(str(saved_patient.id)),
+                gcp_status,
+            )
         else:
-            logger.info(f"GCP Upload success for ID {saved_patient.id}")
+            logger.info("Patient sync GCP success patient_ref=%s", _mask_identifier(str(saved_patient.id)))
 
         return PatientSyncResponse(
             status="success",
@@ -151,8 +187,12 @@ def sync_patient(
             message="Patient synced and processed successfully"
         )
 
-    except Exception as e:
-        logger.error(f"Critical error syncing patient {patient_data.patientId}: {str(e)}", exc_info=True)
+    except Exception:
+        logger.exception(
+            "Critical error during patient sync actor_id=%s org_id=%s",
+            current_user.id,
+            current_user.organization_id,
+        )
         
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
@@ -179,7 +219,12 @@ def search_patients(
             detail="Access Denied: Only medical staff can view patient records."
         )
     
-    logger.info(f"User {current_user.email} searching. Params -> First: {first_name}, Last: {last_name}, DOB: {birth_date}, Guardian: {guardian_name}")
+    logger.info(
+        "Patient search request actor_id=%s role=%s org_id=%s",
+        current_user.id,
+        current_user.role,
+        current_user.organization_id,
+    )
     
     results = search_patients_advanced(
         db=db, 
