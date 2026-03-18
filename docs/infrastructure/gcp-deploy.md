@@ -269,6 +269,107 @@ If using the default Compute service account, ensure IAM is explicitly scoped an
 
 ---
 
+## 7.1. GitHub Actions Deployment with Workload Identity Federation (Recommended)
+
+For secure CI/CD from GitHub without sharing JSON keys, use Workload Identity Federation (WIF).
+
+### Why this is recommended
+
+- No long-lived private key in GitHub Secrets.
+- Short-lived credentials issued at workflow runtime.
+- Fine-grained trust (repository/branch scoped).
+
+### 1. Create a dedicated deployer service account
+
+```bash
+gcloud iam service-accounts create hwb-github-deployer \
+  --display-name="HWB GitHub Deployer"
+```
+
+### 2. Grant least-privilege roles to deployer service account
+
+```bash
+export DEPLOYER_SA="hwb-github-deployer@<GCP_PROJECT_ID>.iam.gserviceaccount.com"
+export RUNTIME_SA="<PROJECT_NUMBER>-compute@developer.gserviceaccount.com"
+
+gcloud projects add-iam-policy-binding <GCP_PROJECT_ID> \
+  --member="serviceAccount:${DEPLOYER_SA}" \
+  --role="roles/run.admin"
+
+gcloud projects add-iam-policy-binding <GCP_PROJECT_ID> \
+  --member="serviceAccount:${DEPLOYER_SA}" \
+  --role="roles/artifactregistry.writer"
+
+gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" \
+  --member="serviceAccount:${DEPLOYER_SA}" \
+  --role="roles/iam.serviceAccountUser"
+```
+
+### 3. Create WIF pool and OIDC provider for GitHub
+
+```bash
+gcloud iam workload-identity-pools create github-pool \
+  --project="<GCP_PROJECT_ID>" \
+  --location="global" \
+  --display-name="GitHub Actions Pool"
+
+gcloud iam workload-identity-pools providers create-oidc github-provider \
+  --project="<GCP_PROJECT_ID>" \
+  --location="global" \
+  --workload-identity-pool="github-pool" \
+  --display-name="GitHub OIDC Provider" \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref"
+```
+
+### 4. Allow this repository to impersonate deployer service account
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding "${DEPLOYER_SA}" \
+  --project="<GCP_PROJECT_ID>" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/github-pool/attribute.repository/guanes/health-without-borders"
+```
+
+### 5. Configure GitHub repository variables
+
+Set these repository variables in GitHub (`Settings > Secrets and variables > Actions > Variables`):
+
+- `GCP_PROJECT_ID`
+- `GCP_REGION`
+- `ARTIFACT_REPO`
+- `CLOUD_RUN_SERVICE`
+- `CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT`
+- `INSTANCE_CONNECTION_NAME`
+- `DB_USER`
+- `DB_NAME`
+- `GCP_DATASET_ID`
+- `GCP_HL7_STORE_ID`
+- `HL7_SENDING_APP`
+- `HL7_SENDING_FACILITY`
+- `HL7_RECEIVING_APP`
+- `HL7_RECEIVING_FACILITY`
+- `HL7_PROCESSING_ID`
+- `HL7_VERSION_ID`
+- `ACCESS_TOKEN_EXPIRE_MINUTES`
+- `BACKEND_CORS_ORIGINS`
+- `RATE_LIMIT_LOGIN`
+- `RATE_LIMIT_PATIENT_SEARCH`
+
+Set these WIF variables:
+
+- `GCP_DEPLOYER_SERVICE_ACCOUNT` (for example `hwb-github-deployer@<GCP_PROJECT_ID>.iam.gserviceaccount.com`)
+- `GCP_WORKLOAD_IDENTITY_PROVIDER` (full provider path):
+  `projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/github-pool/providers/github-provider`
+
+The workflow file is:
+
+- `.github/workflows/deploy-cloud-run.yml`
+
+This deployment path never requires uploading a service account JSON key.
+
+---
+
 ## 8. Data Initialization (Schema & Seeding)
 
 Because our database lacks a public IP for security reasons, initializing the database from a local laptop requires a temporary security bypass. We will temporarily assign a public IP, run our scripts securely through the encrypted Auth Proxy, and then lock the instance down again.

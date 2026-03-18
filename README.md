@@ -161,6 +161,7 @@ Detailed project documentation is organized in the `docs/` folder and published 
   * [**QA Plan**](docs/development/qa-plan.md): Quality assurance and testing procedures.
 * **Infrastructure & Security:**
   * [**GCP Deployment Guide**](docs/infrastructure/gcp-deploy.md): Step-by-step instructions for deploying to Google Cloud Run.
+  * Includes Workload Identity Federation setup for GitHub Actions (no static JSON keys).
   * [**Database Architecture**](docs/infrastructure/database.md): Data modeling, JSONB usage, and table dictionary.
   * [**Security Protocols**](SECURITY.md): JWT configuration, RBAC, and data encryption standards.
 * **Interoperability:**
