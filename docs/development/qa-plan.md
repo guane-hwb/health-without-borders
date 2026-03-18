@@ -142,3 +142,28 @@ Before pushing your branch, you must ensure:
 * **Merge to Develop:** Once approved and all checks pass, the maintainer will squash and merge the PR into `develop`. This action automatically triggers the continuous deployment pipeline to our staging environment on Google Cloud Run.
 * **Production Releases:** Periodically, the `develop` branch will be merged into the `main` branch to create stable production releases.
 
+---
+
+## 5. Remediation Program Execution Model
+
+The active remediation effort (security, quality, functional consistency, and ISO 27001 technical evidence) is executed with strict traceability:
+
+- Working branch: `feature/quality-compliance-test`
+- Target branch: `develop`
+- Delivery rule: **one phase equals one commit**
+- Review rule: **one PR per phase**
+
+Reference document:
+
+- [docs/development/remediation-program.md](docs/development/remediation-program.md)
+
+### Required evidence per phase
+
+Every phase must include:
+
+1. Clear risk statement and scope.
+2. Technical change summary.
+3. Validation evidence (tests/checks run).
+4. Rollback instructions.
+5. Explicit impact statement for deployment.
+
