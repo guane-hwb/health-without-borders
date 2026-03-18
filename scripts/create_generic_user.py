@@ -19,6 +19,11 @@ def create_superadmin():
     email = settings.FIRST_SUPERUSER_EMAIL
     password = settings.FIRST_SUPERUSER_PASSWORD
     org_name = settings.ROOT_ORGANIZATION_NAME 
+
+    if not email or not password:
+        raise RuntimeError(
+            "FIRST_SUPERUSER_EMAIL and FIRST_SUPERUSER_PASSWORD must be explicitly configured."
+        )
     
     try:
         # Check if the root organization exists, if not create it
