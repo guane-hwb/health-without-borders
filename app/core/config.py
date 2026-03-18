@@ -60,4 +60,4 @@ class Settings(BaseSettings):
         case_sensitive=True
     )
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]

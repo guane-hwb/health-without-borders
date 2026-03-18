@@ -10,4 +10,4 @@ def get_all_diagnoses(db: Session):
 
 def get_all_vaccines(db: Session):
     """Retrieves all available vaccines from the catalog."""
-    return db.query(VaccineCVX).filter(VaccineCVX.is_active == True).all()
+    return db.query(VaccineCVX).filter(VaccineCVX.is_active).all()

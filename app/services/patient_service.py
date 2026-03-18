@@ -2,7 +2,6 @@ import logging
 from datetime import date
 from typing import Optional, List
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from app.db.models import Patient
 from app.schemas.patient import PatientFullRecord
 from fastapi import HTTPException, status

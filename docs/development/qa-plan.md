@@ -127,8 +127,9 @@ Create a new branch from `main` using the following prefixes:
 
 Before pushing your branch, you must ensure:
 
-1. All local tests pass (`uv run pytest`).
-2. Code follows PEP-8 styling.
+1. Lint checks pass (`uv run ruff check`).
+2. Scoped type checks pass (`uv run mypy app/core/rate_limit.py app/core/logging.py --ignore-missing-imports`).
+3. All local tests pass with coverage (`uv run pytest --cov=app tests/`).
 
 ### Step 3: Opening the Pull Request
 
