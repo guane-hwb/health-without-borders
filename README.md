@@ -148,7 +148,7 @@ Detailed project documentation is organized in the `docs/` folder:
 * **Infrastructure & Security:**
   * [**GCP Deployment Guide**](docs/infrastructure/gcp-deploy.md): Step-by-step instructions for deploying to Google Cloud Run.
   * [**Database Architecture**](docs/infrastructure/database.md): Data modeling, JSONB usage, and table dictionary.
-  * [**Security Protocols**](docs/infrastructure/security.md): JWT configuration, RBAC, and data encryption standards.
+  * [**Security Protocols**](SECURITY.md): JWT configuration, RBAC, and data encryption standards.
 * **Interoperability:**
   * [**Cloud Healthcare API**](docs/infrastructure/healthcare-api.md): GCP HL7v2 Store and Pub/Sub configuration.
 * **AI & Natural Language Processing:**

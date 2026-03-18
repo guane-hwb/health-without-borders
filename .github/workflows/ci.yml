@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+  push:
+    branches:
+      - develop
+
+jobs:
+  lint-and-test:
+    name: Lint & Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      # ------------------------------------------------------------
+      # 1. Checkout
+      # ------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------
+      # 2. Set up uv + Python
+      # ------------------------------------------------------------
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # ------------------------------------------------------------
+      # 3. Install dependencies (including dev group)
+      # ------------------------------------------------------------
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      # ------------------------------------------------------------
+      # 4. Lint with ruff
+      # ------------------------------------------------------------
+      - name: Lint with ruff
+        run: uv run ruff check app/ tests/
+
+      # ------------------------------------------------------------
+      # 5. Run tests with coverage
+      # ------------------------------------------------------------
+      - name: Run tests
+        env:
+          SECRET_KEY: "dummy_secret_for_ci_only"
+          DATABASE_URL: "sqlite:///./test.db"
+          HL7_SENDING_APP: "HWB_BACKEND"
+          HL7_SENDING_FACILITY: "HWB_FIELD_CLINIC"
+          HL7_RECEIVING_APP: "GCP_HEALTHCARE"
+          HL7_RECEIVING_FACILITY: "GCP_DATALAKE"
+          HL7_PROCESSING_ID: "D"
+          HL7_VERSION_ID: "2.5.1"
+        run: uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=75
+
+      # ------------------------------------------------------------
+      # 6. Upload coverage report as artifact (visible in the PR)
+      # ------------------------------------------------------------
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 7

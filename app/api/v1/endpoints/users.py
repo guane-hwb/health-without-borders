@@ -93,6 +93,8 @@ def get_users_by_organization(
 
     Security & Multi-Tenancy Rules:
     - Only 'org_admin' can view user lists from their own organization.
+    - 'superadmin' can view all users across all organizations.
+    - Regular 'doctor' and 'nurse' roles are NOT allowed to access this endpoint.
     """
     # 1. Authorization
     if current_user.role not in ["superadmin", "org_admin"]:
@@ -102,6 +104,11 @@ def get_users_by_organization(
         )
 
     # 2. Strict Multi-Tenant Query
-    users = db.query(User).filter(User.organization_id == current_user.organization_id).all()
+    if current_user.role == "superadmin":
+        users = db.query(User).all()
+    else:
+        users = db.query(User).filter(
+            User.organization_id == current_user.organization_id
+        ).all()
     
     return users

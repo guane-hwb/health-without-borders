@@ -49,8 +49,8 @@ nav:
   - Development:
     - Setup Guide: development/setup.md
     - QA & PR Workflow: development/qa-plan.md
-  - Infrastructure:
+  - Infrastructure and Security:
     - Database Schema: infrastructure/database.md
-    - Security Protocols: infrastructure/security.md
     - GCP Deployment: infrastructure/gcp-deploy.md
     - Healthcare API: infrastructure/healthcare-api.md
+    - Security Protocols: SECURITY.md
