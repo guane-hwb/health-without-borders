@@ -3,6 +3,12 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.api.deps import get_current_user
 
+class MockUser:
+    email = "doctor_test@hwb.org"
+    id = "test-user-id"
+    role = "doctor"
+    organization_id = "org-123"
+
 # Mock Payload simulating a request from the Mobile App (Frontend)
 MOCK_PATIENT_PAYLOAD = {
   "patientId": "TEST-UNIT-001",
@@ -26,7 +32,8 @@ MOCK_PATIENT_PAYLOAD = {
   "guardianInfo": {
     "name": "Mom Test",
     "relationship": "Mother",
-    "phone": "123456789"
+    "phone": "123456789",
+    "device_uid": "GUARDIAN-UID-001"
   },
   "allergies": [
       {
@@ -43,12 +50,6 @@ def test_sync_patient_success(client: TestClient):
     """
     Integration Test: Sync Patient Data (Success Scenario)
     """
-    class MockUser:
-        email = "doctor_prueba@hwb.org"
-        id = 1
-        role = "doctor" # Added role to prevent 403 Forbidden
-        organization_id = "org-123"
-        
     app.dependency_overrides[get_current_user] = lambda: MockUser()
 
     # --- MOCKING ---
@@ -80,11 +81,6 @@ def test_sync_patient_success(client: TestClient):
 def test_get_patient_by_device_success(client: TestClient):
     """Test that scanning a registered device UID returns the correct patient record."""
     
-    class MockUser:
-        email = "doctor_prueba@hwb.org"
-        id = 1
-        role = "doctor"
-        organization_id = "org-123"
     app.dependency_overrides[get_current_user] = lambda: MockUser()
 
     with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp:
@@ -92,24 +88,22 @@ def test_get_patient_by_device_success(client: TestClient):
         client.post("/api/v1/patients/sync", json=MOCK_PATIENT_PAYLOAD)
 
     device_uid = MOCK_PATIENT_PAYLOAD["device_uid"]
-    
-    # We must append the guardian_device_uid since the mock patient is a minor (born in 2020)
-    response = client.get(f"/api/v1/patients/scan/{device_uid}?guardian_device_uid=NONE")
+    guardian_device_uid = MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]
+    response = client.get(
+        f"/api/v1/patients/scan/{device_uid}",
+        params={"guardian_device_uid": guardian_device_uid}
+    )
 
     app.dependency_overrides.pop(get_current_user, None)
     
-    # In this mock we expect 403 because we didn't add a guardian device uid in the payload.
-    # To properly test success we'd need a guardian tag matched. But this validates the 2FA!
-    assert response.status_code in [200, 403] 
+    assert response.status_code == 200
+    data = response.json()
+    assert data["patientId"] == MOCK_PATIENT_PAYLOAD["patientId"]
+    assert data["patientInfo"]["firstName"] == "User"
 
 def test_get_patient_by_device_not_found(client: TestClient):
     """Test that scanning an unregistered device UID returns 404 Not Found."""
     
-    class MockUser:
-        email = "doctor_prueba@hwb.org"
-        id = 1
-        role = "doctor"
-        organization_id = "org-123"
     app.dependency_overrides[get_current_user] = lambda: MockUser()
 
     response = client.get("/api/v1/patients/scan/ID-FALSO-999")
@@ -123,11 +117,6 @@ def test_get_patient_by_device_not_found(client: TestClient):
 def test_search_patients_success(client: TestClient):
     """Test that advanced search returns results if mandatory data matches."""
     
-    class MockUser:
-        email = "doctor_prueba@hwb.org"
-        id = 1
-        role = "doctor"
-        organization_id = "org-123"
     app.dependency_overrides[get_current_user] = lambda: MockUser()
 
     with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp:
@@ -146,17 +135,12 @@ def test_search_patients_success(client: TestClient):
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
-    assert len(data) >= 1
+    assert len(data) == 1
     assert data[0]["patientId"] == MOCK_PATIENT_PAYLOAD["patientId"]
 
 def test_search_patients_missing_mandatory_params(client: TestClient):
     """Test that if a mandatory parameter is missing (e.g., birth date), FastAPI blocks the request (422)."""
     
-    class MockUser:
-        email = "doctor_prueba@hwb.org"
-        id = 1
-        role = "doctor"
-        organization_id = "org-123"
     app.dependency_overrides[get_current_user] = lambda: MockUser()
 
     params = {
