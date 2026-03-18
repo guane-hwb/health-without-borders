@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200 # 30 days
     
     DEBUG: bool = False
+    BACKEND_CORS_ORIGINS: str = ""
+    RATE_LIMIT_LOGIN: str = "10/minute"
+    RATE_LIMIT_PATIENT_SEARCH: str = "30/minute"
 
     model_config = SettingsConfigDict(
         env_file=".env",

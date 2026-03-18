@@ -1,6 +1,6 @@
 from datetime import timedelta
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -9,13 +9,16 @@ from app.core import security
 from app.db.models import User
 from app.schemas.token import Token
 from app.core.config import settings
+from app.core.rate_limit import limiter
 
 router = APIRouter()
 
 DUMMY_PASSWORD_HASH = "$2b$12$C6UzMDM.H6dfI/f/IKcEeOq6Yh6M7f5qX6Ch12yvDqOiiMHDL/95."
 
 @router.post("/login/access-token", response_model=Token)
+@limiter.limit(settings.RATE_LIMIT_LOGIN)
 def login_access_token(
+    request: Request,
     db: Session = Depends(get_db), 
     form_data: OAuth2PasswordRequestForm = Depends()
 ) -> Any:

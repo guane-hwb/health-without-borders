@@ -1,7 +1,7 @@
 import logging
 from typing import List, Optional
 from datetime import date
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.db.models import User
@@ -17,6 +17,8 @@ from app.services.patient_service import (
 )
 from app.services.hl7_service import convert_to_hl7
 from app.services.gcp_service import send_to_google_healthcare
+from app.core.config import settings
+from app.core.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +202,9 @@ def sync_patient(
         )
 
 @router.get("/search", response_model=List[PatientFullRecord], status_code=status.HTTP_200_OK)
+@limiter.limit(settings.RATE_LIMIT_PATIENT_SEARCH)
 def search_patients(
+    request: Request,
     first_name: str = Query(..., min_length=2, description="Patient's first name"),
     last_name: str = Query(..., min_length=2, description="Patient's last name"),
     birth_date: date = Query(..., description="Patient's date of birth (YYYY-MM-DD)"),
