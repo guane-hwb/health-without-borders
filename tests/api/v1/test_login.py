@@ -199,14 +199,15 @@ class TestJWTProtection:
 
     def test_tampered_token_returns_401(self, client: TestClient, db_session):
         """
-        A JWT whose signature has been tampered with must be rejected.
-        We flip one character in the signature portion (last segment).
+        A JWT whose signature has been replaced with a fake one must be rejected.
+        We keep the original header and payload but swap the signature entirely,
+        simulating an attacker who forged a token without knowing the SECRET_KEY.
         """
         token = self._get_token(client, db_session)
-        header, payload, signature = token.rsplit(".", 2)
-        # Flip the last character of the signature
-        bad_char = "A" if signature[-1] != "A" else "B"
-        tampered_token = f"{header}.{payload}.{signature[:-1]}{bad_char}"
+        header, payload, _ = token.rsplit(".", 2)
+        # Replace signature with a completely different base64url string
+        fake_signature = "aW52YWxpZHNpZ25hdHVyZWZvcnRlc3Rpbmcx"
+        tampered_token = f"{header}.{payload}.{fake_signature}"
 
         response = client.get(
             "/api/v1/users/",
