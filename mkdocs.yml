@@ -53,4 +53,4 @@ nav:
     - Database Schema: infrastructure/database.md
     - GCP Deployment: infrastructure/gcp-deploy.md
     - Healthcare API: infrastructure/healthcare-api.md
-    - Security Protocols: SECURITY.md
+    - Security Protocols: infrastructure/security.md
