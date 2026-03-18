@@ -44,15 +44,6 @@ class DiagnosisData(BaseModel):
     icd10Code: str
     description: str
 
-
-class MedicalHistoryItem(BaseModel):
-    type: str
-    date: date
-    location: str
-    physician: str
-    diagnosis: DiagnosisData
-    observations: Optional[str] = None
-
 class VaccinationRecordItem(BaseModel):
     date: date
     vaccineName: str

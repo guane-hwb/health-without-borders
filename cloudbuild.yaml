@@ -18,7 +18,7 @@ steps:
         export HL7_RECEIVING_FACILITY="GCP_DATALAKE"
         export HL7_PROCESSING_ID="D"
         export HL7_VERSION_ID="2.5.1"
-        uv run pytest
+        uv run pytest --cov=app --cov-report=term-missing
 
   # ======================================================
   # STEP 2: BUILD THE DOCKER IMAGE
