@@ -1,10 +1,11 @@
 # Health Without Borders - Backend
 
 ![Python Version](https://img.shields.io/badge/python-3.11-blue.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.109.0-009688.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.128.0-009688.svg)
 ![Docker](https://img.shields.io/badge/Docker-Available-2496ED.svg)
 ![GCP](https://img.shields.io/badge/Google_Cloud-Run-4285F4.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
+![CI](https://github.com/guanes/health-without-borders/actions/workflows/ci.yml/badge.svg)
 
 **Interoperable Medical Records Platform for Migrant Children and Adolescents.**
 
@@ -37,6 +38,11 @@ This repository contains the source code for the **Backend**, a RESTful API deve
 
 ```
 health-without-borders/
+├── .github/                          # GitHub configuration
+│   ├── workflows/
+│   │   ├── ci.yml                    # CI pipeline (lint + tests on every PR)
+│   │   └── docs.yml                  # Auto-deploy MkDocs to GitHub Pages
+│   └── PULL_REQUEST_TEMPLATE.md      # PR checklist template
 ├── app/                              # Main application package
 │   ├── __init__.py
 │   ├── main.py                       # FastAPI application entry point
@@ -57,7 +63,7 @@ health-without-borders/
 │   │   ├── __init__.py
 │   │   ├── config.py                 # Environment variables & settings
 │   │   ├── logging.py                # Structured logging
-│   │   └── security.py               # JWT, password hashing, RBAC
+│   │   └── security.py              # JWT, password hashing, RBAC
 │   ├── db/                           # Database layer
 │   │   ├── __init__.py
 │   │   ├── base.py                   # SQLAlchemy declarative base
@@ -84,15 +90,18 @@ health-without-borders/
 │   └── data/                         # Static data files
 │       └── cie10.json                # ICD-10 catalog data
 ├── docs/                             # Project documentation
+│   ├── index.md                      # Main documentation index
 │   ├── architecture/
+│   │   ├── ai-integration.md         # AI/LLM integration documentation
+│   │   ├── hl7-mapping.md            # HL7 message mapping specifications
 │   │   └── hl7v2-strategy.md         # Architectural Decision Record (ADR)
 │   ├── development/
+│   │   ├── qa-plan.md                # Quality assurance and testing plan
 │   │   └── setup.md                  # Local development setup guide
 │   └── infrastructure/
 │       ├── database.md               # Database schema & modeling
 │       ├── gcp-deploy.md             # Google Cloud Run deployment
-│       ├── healthcare-api.md         # GCP Cloud Healthcare API config
-│       └── security.md               # Security protocols & encryption
+│       └── healthcare-api.md         # GCP Cloud Healthcare API config
 ├── scripts/                          # Utility scripts
 │   ├── __init__.py
 │   ├── create_tables.py              # Initialize database schema
@@ -102,20 +111,29 @@ health-without-borders/
 │   ├── conftest.py                   # Pytest fixtures & configuration
 │   └── api/
 │       └── v1/
-│           └── test_patients.py      # Patient endpoint tests
-├── .venv/                            # Python virtual environment
-├── cloud-sql-proxy                   # Cloud SQL Proxy binary
+│           ├── test_login.py         # Authentication & JWT tests
+│           ├── test_organizations.py # Organization endpoint tests
+│           ├── test_patients.py      # Patient endpoint tests
+│           └── test_users.py         # User management tests
+├── .env.example                      # Environment variables template
+├── .gitignore                        # Git ignore rules
+├── cloudbuild.yaml                   # Google Cloud Build CI/CD pipeline
 ├── Dockerfile                        # Container image definition
-├── gcp_key.json                      # GCP service account credentials
+├── LICENSE                           # MIT License
+├── mkdocs.yml                        # MkDocs documentation configuration
+├── PROJECT_CHARTER.md                # Project vision, mission and governance
 ├── pyproject.toml                    # Project metadata & dependencies
 ├── pytest.ini                        # Pytest configuration
-└── README.md                         # This file
+├── README.md                         # This file
+├── SECURITY.md                       # Security protocols & encryption
+└── uv.lock                           # Locked dependency versions
 ```
 
 ### Directory Purpose Summary
 
 | Directory | Purpose |
 |-----------|---------|
+| `.github/` | CI workflows and PR templates |
 | `app/` | Main application code with API, business logic, and database models |
 | `app/api/` | FastAPI routers and endpoint definitions |
 | `app/core/` | Configuration, security, logging utilities |
@@ -131,45 +149,53 @@ health-without-borders/
 
 ## 📚 Documentation
 
-Detailed project documentation is organized in the `docs/` folder:
+Detailed project documentation is organized in the `docs/` folder and published at **[guanes.github.io/health-without-borders](https://guanes.github.io/health-without-borders/)**:
 
+* [**Documentation Index**](docs/index.md): Main documentation overview and navigation.
+* **Architecture:**
+  * [**AI Integration Guide**](docs/architecture/ai-integration.md): LLM integration and AI-powered medical assistance.
+  * [**HL7 Mapping Specifications**](docs/architecture/hl7-mapping.md): HL7 message mapping and interoperability standards.
+  * [**HL7v2 Strategy (ADR)**](docs/architecture/hl7v2-strategy.md): Architectural Decision Record comparing GCP, Mirth Connect, and In-House solutions.
 * **Development:**
-  * [**Local Setup Guide**](development/setup.md): Instructions for configuring Docker and running the API locally.
+  * [**Local Setup Guide**](docs/development/setup.md): Instructions for configuring Docker and running the API locally.
+  * [**QA Plan**](docs/development/qa-plan.md): Quality assurance and testing procedures.
 * **Infrastructure & Security:**
-  * [**GCP Deployment Guide**](infrastructure/gcp-deploy.md): Step-by-step instructions for deploying to Google Cloud Run.
-  * [**Database Architecture**](infrastructure/database.md): Data modeling, JSONB usage, and table dictionary.
-  * [**Security Protocols**](infrastructure/security.md): JWT configuration, RBAC, and data encryption standards.
+  * [**GCP Deployment Guide**](docs/infrastructure/gcp-deploy.md): Step-by-step instructions for deploying to Google Cloud Run.
+  * [**Database Architecture**](docs/infrastructure/database.md): Data modeling, JSONB usage, and table dictionary.
+  * [**Security Protocols**](SECURITY.md): JWT configuration, RBAC, and data encryption standards.
 * **Interoperability:**
-  * [**Cloud Healthcare API**](infrastructure/healthcare-api.md): GCP HL7v2 Store and Pub/Sub configuration.
-  * [**HL7v2 Strategy (ADR)**](architecture/hl7v2-strategy.md): Architectural Decision Record comparing GCP, Mirth Connect, and In-House solutions.
+  * [**Cloud Healthcare API**](docs/infrastructure/healthcare-api.md): GCP HL7v2 Store and Pub/Sub configuration.
 * **AI & Natural Language Processing:**
-  * [**Clinical NLP Integration (ADR)**](architecture/ai-integration.md): Architectural decision and Prompt Engineering strategy for automated ICD-10/11 coding using Google Vertex AI.
+  * [**Clinical NLP Integration (ADR)**](docs/architecture/ai-integration.md): Architectural decision and Prompt Engineering strategy for automated ICD-10/11 coding using Google Vertex AI.
 
 ---
 
 ## ⚡ Quick Start (Local Development)
 
-Please refer to the comprehensive [**Local Setup Guide**](development/setup.md) for detailed instructions on spinning up the local Docker database and seeding the clinical catalogs.
+Please refer to the comprehensive [**Local Setup Guide**](docs/development/setup.md) for detailed instructions on spinning up the local Docker database and seeding the clinical catalogs.
 
 **Basic commands summary:**
 ```bash
 # 1. Clone repository
-git clone [https://github.com/guanes/health-without-borders.git](https://github.com/guanes/health-without-borders.git)
+git clone https://github.com/guanes/health-without-borders.git
 cd health-without-borders
 
-# 2. Install dependencies
+# 2. Copy environment variables template
+cp .env.example .env
+# Edit .env with your local values
+
+# 3. Install dependencies
 uv sync
 
-# 3. Start local database
+# 4. Start local database
 docker run --name hwb-db-local -e POSTGRES_PASSWORD=password -e POSTGRES_DB=hwb_local -p 5432:5432 -d postgres:15
 
-# 4. Initialize schema and catalogs
+# 5. Initialize schema and catalogs
 uv run python scripts/create_tables.py
 uv run python scripts/load_catalogs.py
 
-# 5. Run the server
+# 6. Run the server
 uv run uvicorn app.main:app --reload
-
 ```
 
 The service will be available at: http://localhost:8000/docs
@@ -181,9 +207,10 @@ The service will be available at: http://localhost:8000/docs
 To run the automated test suite before opening a Pull Request:
 
 ```bash
-uv run pytest
-
+uv run pytest --cov=app --cov-report=term-missing
 ```
+
+The project maintains **≥ 75% code coverage**. Coverage is enforced automatically on every PR via the CI pipeline.
 
 ---
 
@@ -191,20 +218,20 @@ uv run pytest
 
 We welcome contributions from the community! This project follows strict development standards to ensure reliability in humanitarian contexts. Before submitting a Pull Request, please ensure you:
 
-1. Follow the PEP-8 style guide.
+1. Follow the PEP-8 style guide (`uv run ruff check`).
 2. Do not commit credentials or secrets to the repository.
 3. Document any new endpoint in Swagger.
 4. Target your Pull Requests to the `develop` branch, not `main`.
 
-For full details on how to get involved, please read our official [CONTRIBUTING.md](https://github.com/guanes/health-without-borders/blob/main/CONTRIBUTING.md) and review our strict [QA & Pull Request Workflow](development/qa-plan.md).
+For full details on how to get involved, please read our official [CONTRIBUTING.md](CONTRIBUTING.md) and review our strict [QA & Pull Request Workflow](docs/development/qa-plan.md).
 
-Please note that this project is released with a [Contributor Code of Conduct](https://github.com/guanes/health-without-borders/blob/main/CODE_OF_CONDUCT.md). By participating in this project you agree to abide by its terms.
+Please note that this project is released with a [Contributor Code of Conduct](CODE_OF_CONDUCT.md). By participating in this project you agree to abide by its terms.
 
 ---
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](https://github.com/guanes/health-without-borders/blob/main/LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
