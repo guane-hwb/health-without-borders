@@ -1,0 +1,54 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: hwb_local
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: .
+    ports:
+      - "8000:8080"
+    environment:
+      DATABASE_URL: postgresql://postgres:password@db:5432/hwb_local
+      SECRET_KEY: local_dev_secret_key_do_not_use_in_production
+      FIRST_SUPERUSER_EMAIL: admin@hwb.org
+      FIRST_SUPERUSER_PASSWORD: Admin123!
+      DEBUG: "true"
+      BACKEND_CORS_ORIGINS: ""
+      ACCESS_TOKEN_EXPIRE_MINUTES: "43200"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  init:
+    build: .
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        python scripts/create_tables.py &&
+        python scripts/create_generic_user.py &&
+        python scripts/load_catalogs.py &&
+        echo "Database initialized successfully"
+    environment:
+      DATABASE_URL: postgresql://postgres:password@db:5432/hwb_local
+      SECRET_KEY: local_dev_secret_key_do_not_use_in_production
+      FIRST_SUPERUSER_EMAIL: admin@hwb.org
+      FIRST_SUPERUSER_PASSWORD: Admin123!
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles:
+      - init
+
+volumes:
+  pgdata:
