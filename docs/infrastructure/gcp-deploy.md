@@ -236,20 +236,36 @@ gcloud run deploy <CLOUD_RUN_SERVICE> \
 
 ## 7. CI/CD Automation (Cloud Build) 🚀
 
-Once the bootstrap deployment is successful, subsequent deployments should be fully automated via GitHub and Cloud Build.
+For this project, Cloud Build is the primary CI/CD gate. This avoids dependency on GitHub-hosted runner billing and keeps validation/deploy inside GCP.
 
-1. Go to the **Cloud Build** console in GCP.
-2. Connect your GitHub repository in the **Repositories** tab.
-3. Create a new **Trigger**:
-* **Event:** Push to a branch (e.g., `^main$` or `^develop$`).
-* **Source:** Select your connected repository.
-* **Configuration:** Cloud Build configuration file (yaml or json).
-* **Location:** `/cloudbuild.yaml`.
-* **Service Account:** Ensure you select the Compute Engine default service account (`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`).
+### Trigger A: Pull Request quality gates
 
+Create a trigger for pull requests targeting `develop`:
 
-4. Ensure the `cloudbuild.yaml` file is present in the root of your repository.
-5. Any subsequent `git push` will trigger automated tests, build the image, and deploy safely to Cloud Run inheriting the secrets configuration.
+- **Event:** Pull request
+- **Base branch:** `^develop$`
+- **Configuration file:** `/cloudbuild.pr.yaml`
+- **Behavior:** Run lint, scoped type-check, and tests with coverage. No deploy step.
+
+### Trigger B: Deploy from `develop`
+
+Create a trigger for merges/pushes to `develop`:
+
+- **Event:** Push to branch
+- **Branch regex:** `^develop$`
+- **Configuration file:** `/cloudbuild.yaml`
+- **Behavior:** Run tests, build image, push image, deploy to Cloud Run.
+
+### Service account for triggers
+
+Use a dedicated least-privilege service account where possible. At minimum it needs permissions for:
+
+- Cloud Run deploy
+- Artifact Registry push
+- Secret Manager access (for deploy-time secret bindings)
+- Cloud Build execution
+
+If using the default Compute service account, ensure IAM is explicitly scoped and reviewed periodically.
 
 ---
 
