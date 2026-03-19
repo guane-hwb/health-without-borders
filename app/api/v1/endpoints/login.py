@@ -12,6 +12,8 @@ from app.core.config import settings
 
 router = APIRouter()
 
+DUMMY_PASSWORD_HASH = "$2b$12$C6UzMDM.H6dfI/f/IKcEeOq6Yh6M7f5qX6Ch12yvDqOiiMHDL/95."
+
 @router.post("/login/access-token", response_model=Token)
 def login_access_token(
     db: Session = Depends(get_db), 
@@ -25,15 +27,17 @@ def login_access_token(
     """
     # 1. Authenticate User
     user = db.query(User).filter(User.email == form_data.username).first()
-    
-    if not user or not security.verify_password(form_data.password, user.hashed_password):
+    hashed_password = user.hashed_password if user else DUMMY_PASSWORD_HASH
+    password_is_valid = security.verify_password(form_data.password, hashed_password)
+
+    if not user or not password_is_valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
         )
         
     if not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
 
     # 2. Create JWT Token
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)

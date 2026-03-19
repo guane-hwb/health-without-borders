@@ -10,8 +10,8 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
 
     # --- INITIAL SUPERUSER ---
-    FIRST_SUPERUSER_EMAIL: str = "admin@default.org"
-    FIRST_SUPERUSER_PASSWORD: str = "changeme"
+    FIRST_SUPERUSER_EMAIL: Optional[str] = None
+    FIRST_SUPERUSER_PASSWORD: Optional[str] = None
     ROOT_ORGANIZATION_NAME: str = "Guane"
     
     # --- DATABASE CONFIGURATION ---
