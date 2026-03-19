@@ -40,10 +40,6 @@ class BackgroundHistory(BaseModel):
         description="Important family medical history."
     )
 
-class DiagnosisData(BaseModel):
-    icd10Code: str
-    description: str
-
 class VaccinationRecordItem(BaseModel):
     date: date
     vaccineName: str

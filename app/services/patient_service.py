@@ -24,7 +24,7 @@ def search_patients_advanced(
     org_id: str,
     first_name: str, 
     last_name: str, 
-    birth_date: str, 
+    birth_date: date, 
     guardian_name: Optional[str] = None, 
     limit: int = 10
 ) -> List[Patient]:

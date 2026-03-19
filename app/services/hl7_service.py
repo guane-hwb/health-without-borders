@@ -71,19 +71,41 @@ def convert_to_hl7(patient: PatientFullRecord) -> str:
             pv1.pv1_44 = visit.date.strftime("%Y%m%d")
         segments.append(pv1)
 
-        # Iterate over diagnoses for this visit
-        for j, diag in enumerate(visit.diagnosis, start=1):
+        # Diagnósticos (uno o más por visita)
+        for diagnosis_idx, diagnosis in enumerate(visit.diagnosis, start=1):
             dg1 = Segment("DG1", version=settings.HL7_VERSION_ID)
-            dg1.dg1_1 = str(j)
+            dg1.dg1_1 = f"{i}.{diagnosis_idx}"
             dg1.dg1_2 = "I"  # ICD (CIE)
-            dg1.dg1_3.dg1_3_1 = diag.icd10Code
-            dg1.dg1_3.dg1_3_2 = diag.description
+            dg1.dg1_3.dg1_3_1 = diagnosis.icd10Code
+            dg1.dg1_3.dg1_3_2 = diagnosis.description
             dg1.dg1_3.dg1_3_3 = "I10" # ICD-10
-            dg1.dg1_4 = diag.description
+            dg1.dg1_4 = diagnosis.description
             dg1.dg1_6 = "F"  # Final
             segments.append(dg1)
 
-    # Vitals (Global OBX)
+        # Notas clínicas estructuradas (clinicalEvaluation)
+        clinical_notes = [
+            ("HPI", "History of present illness", visit.clinicalEvaluation.historyOfCurrentIllness),
+            ("PEX", "General physical examination", visit.clinicalEvaluation.generalPhysicalExamination),
+            ("SYS", "Systems examination", visit.clinicalEvaluation.systemsExamination),
+            ("TPL", "Treatment plan observations", visit.clinicalEvaluation.treatmentPlanObservations),
+        ]
+        obx_idx = 1
+        for code, label, text in clinical_notes:
+            if not text:
+                continue
+            obx = Segment("OBX", version=settings.HL7_VERSION_ID)
+            obx.obx_1 = f"{i}.{obx_idx}"
+            obx.obx_2 = "TX"  # Text data
+            obx.obx_3.obx_3_1 = code
+            obx.obx_3.obx_3_2 = label
+            obx.obx_3.obx_3_3 = "L"   # Local coding system
+            obx.obx_5 = text
+            obx.obx_11 = "F"
+            segments.append(obx)
+            obx_idx += 1
+
+    # --- 5. Vitals (Global OBX) ---
     if patient.patientInfo.weight:
         obx_w = Segment("OBX", version=settings.HL7_VERSION_ID)
         obx_w.obx_1 = "W1"
