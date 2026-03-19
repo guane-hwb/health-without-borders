@@ -167,6 +167,8 @@ Detailed project documentation is organized in the `docs/` folder and published 
   * [**Cloud Healthcare API**](docs/infrastructure/healthcare-api.md): GCP HL7v2 Store and Pub/Sub configuration.
 * **AI & Natural Language Processing:**
   * [**Clinical NLP Integration (ADR)**](docs/architecture/ai-integration.md): Architectural decision and Prompt Engineering strategy for automated ICD-10/11 coding using Google Vertex AI.
+* **Program Governance:**
+  * [**Remediation Program**](docs/development/remediation-program.md): Phased execution model for security, quality, compliance, and Cloud Run hardening.
 
 ---
 
