@@ -156,7 +156,7 @@ The active remediation effort (security, quality, functional consistency, and IS
 
 Reference document:
 
-- [docs/development/remediation-program.md](docs/development/remediation-program.md)
+- [remediation-program.md](remediation-program.md)
 
 ### Required evidence per phase
 
@@ -167,4 +167,3 @@ Every phase must include:
 3. Validation evidence (tests/checks run).
 4. Rollback instructions.
 5. Explicit impact statement for deployment.
-
