@@ -1,6 +1,7 @@
 steps:
   # ======================================================
   # STEP 1: RUN TESTS
+  # STEP 1: QUALITY GATES (LINT + TYPECHECK + TESTS)
   # ======================================================
   - name: 'python:3.11-slim'
     entrypoint: 'bash'
@@ -8,7 +9,7 @@ steps:
       - '-c'
       - |
         pip install uv
-        uv sync
+        uv sync --all-groups
         export SECRET_KEY="dummy_secret_for_testing_only"
         export DB_PASS="dummy_pass"
         export DATABASE_URL="sqlite:///./test.db"
@@ -18,7 +19,9 @@ steps:
         export HL7_RECEIVING_FACILITY="GCP_DATALAKE"
         export HL7_PROCESSING_ID="D"
         export HL7_VERSION_ID="2.5.1"
-        uv run pytest --cov=app --cov-report=term-missing
+        uv run ruff check
+        uv run mypy app/core/rate_limit.py app/core/logging.py --ignore-missing-imports
+        uv run pytest --cov=app tests/
 
   # ======================================================
   # STEP 2: BUILD THE DOCKER IMAGE

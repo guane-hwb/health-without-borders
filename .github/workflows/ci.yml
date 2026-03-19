@@ -47,9 +47,13 @@ jobs:
       # ------------------------------------------------------------
       # 5. Run tests with coverage
       # ------------------------------------------------------------
+      - name: Type check
+        run: uv run mypy app/core/rate_limit.py app/core/logging.py --ignore-missing-imports
+
       - name: Run tests
         env:
           SECRET_KEY: "dummy_secret_for_ci_only"
+          DB_PASS: "dummy_pass"
           DATABASE_URL: "sqlite:///./test.db"
           HL7_SENDING_APP: "HWB_BACKEND"
           HL7_SENDING_FACILITY: "HWB_FIELD_CLINIC"
