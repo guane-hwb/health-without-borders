@@ -15,12 +15,8 @@ RESPONSE_SCHEMA = {
             "description": {
                 "type": "STRING", 
                 "description": "Official medical description of the diagnosis translated into Spanish."
-            },
-            "is_ai_generated": {
-                "type": "BOOLEAN", 
-                "description": "Must always be true."
             }
         },
-        "required": ["icd10Code", "description", "is_ai_generated"]
+        "required": ["icd10Code", "description"]
     }
 }

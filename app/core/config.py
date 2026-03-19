@@ -1,4 +1,3 @@
-import os
 from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,8 +10,8 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
 
     # --- INITIAL SUPERUSER ---
-    FIRST_SUPERUSER_EMAIL: str = "admin@default.org"
-    FIRST_SUPERUSER_PASSWORD: str = "changeme"
+    FIRST_SUPERUSER_EMAIL: Optional[str] = None
+    FIRST_SUPERUSER_PASSWORD: Optional[str] = None
     ROOT_ORGANIZATION_NAME: str = "Guane"
     
     # --- DATABASE CONFIGURATION ---
@@ -47,9 +46,12 @@ class Settings(BaseSettings):
     # --- SECURITY ---
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440 # 24 hours
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200 # 30 days
     
     DEBUG: bool = False
+    BACKEND_CORS_ORIGINS: str = ""
+    RATE_LIMIT_LOGIN: str = "10/minute"
+    RATE_LIMIT_PATIENT_SEARCH: str = "30/minute"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -58,4 +60,4 @@ class Settings(BaseSettings):
         case_sensitive=True
     )
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]

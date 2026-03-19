@@ -1,4 +1,3 @@
-from typing import Generator, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
@@ -46,6 +45,6 @@ def get_current_user(
         raise credentials_exception
     
     if not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
-        
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
+
     return user

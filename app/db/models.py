@@ -1,12 +1,9 @@
 import uuid
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Date, Text, JSON, Float, ForeignKey
+from sqlalchemy import Column, String, Boolean, DateTime, Date, Text, JSON, ForeignKey
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 
-# =====================================================================
-# 1. ORGANIZATIONS (TENANTS)
-# =====================================================================
 class Organization(Base):
     """
     Represents a specific clinical entity (e.g., an NGO or Clinic).
@@ -22,9 +19,6 @@ class Organization(Base):
     users = relationship("User", back_populates="organization")
     patients = relationship("Patient", back_populates="organization")
 
-# =====================================================================
-# 2. USERS
-# =====================================================================
 class User(Base):
     """
     System users (Admins, Doctors, Nurses). 
@@ -48,9 +42,6 @@ class User(Base):
     # Relationships
     organization = relationship("Organization", back_populates="users")
 
-# =====================================================================
-# 3. PATIENTS
-# =====================================================================
 class Patient(Base):
     """
     Main Patient Entity.
@@ -88,9 +79,6 @@ class Patient(Base):
     def __repr__(self):
         return f"<Patient(id={self.id}, org={self.organization_id})>"
 
-# =====================================================================
-# 4. CATALOGS (ICD-10 & CVX)
-# =====================================================================
 class DiagnosisCIE10(Base):
     __tablename__ = "catalog_cie10"
 

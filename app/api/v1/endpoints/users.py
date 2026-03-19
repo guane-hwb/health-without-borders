@@ -53,7 +53,7 @@ def create_user(
 
     ## 4. Enforce Multi-Tenancy based on Role
     if current_user.role == "superadmin":
-        # El SuperAdmin debe especificar a qué ONG enviará este nuevo usuario
+        # SuperAdmin can create users for any organization, but must specify the target organization
         if not user_in.organization_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -61,7 +61,7 @@ def create_user(
             )
         target_org_id = user_in.organization_id
     else:
-        # Si es un org_admin, ignoramos lo que envíe e inyectamos su propia organización
+        # This ensures that org_admins can only create users within their own organization, regardless of the input.
         target_org_id = current_user.organization_id
 
     # 5. Create the DB User object
@@ -93,6 +93,8 @@ def get_users_by_organization(
 
     Security & Multi-Tenancy Rules:
     - Only 'org_admin' can view user lists from their own organization.
+    - 'superadmin' can view all users across all organizations.
+    - Regular 'doctor' and 'nurse' roles are NOT allowed to access this endpoint.
     """
     # 1. Authorization
     if current_user.role not in ["superadmin", "org_admin"]:
@@ -102,6 +104,11 @@ def get_users_by_organization(
         )
 
     # 2. Strict Multi-Tenant Query
-    users = db.query(User).filter(User.organization_id == current_user.organization_id).all()
+    if current_user.role == "superadmin":
+        users = db.query(User).all()
+    else:
+        users = db.query(User).filter(
+            User.organization_id == current_user.organization_id
+        ).all()
     
     return users

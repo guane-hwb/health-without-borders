@@ -83,6 +83,16 @@ The infrastructure is designed to minimize the attack surface by leveraging stat
 
 ---
 
+## 6. ISO 27001 Traceability
+
+Technical control traceability for ISO/IEC 27001 is documented in:
+
+- `docs/infrastructure/iso27001-technical-mapping.md`
+
+This mapping links code/config evidence to Annex A themes and highlights residual non-code gaps that require governance and operational controls.
+
+---
+
 ```mermaid
 flowchart TD
     %% --- Definición de Estilos para Modo Oscuro de GitHub ---

@@ -3,7 +3,7 @@ on:
   push:
     branches:
       - main
-      - develop  # Si prefieres que la doc se actualice desde develop, déjalo. Si no, bórralo.
+      - develop
 
 permissions:
   contents: write

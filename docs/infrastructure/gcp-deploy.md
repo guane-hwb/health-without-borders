@@ -68,26 +68,74 @@ gcloud services enable \
 
 ## 3. Database Provisioning (Cloud SQL)
 
-Cloud Run requires an external persistence layer for relational data.
+Cloud Run requires an external persistence layer for relational data. Since we enforce a strict "No Public IP" policy, we must first establish a VPC Peering connection between our network and Google's internal services.
 
-**1. Create the Cloud SQL Instance (Server):**
+**1. Establish VPC Peering (Run Once per Project):**
+
+```bash
+# Reserve private IP range for Google Services
+gcloud compute addresses create google-managed-services-default \
+    --global \
+    --purpose=VPC_PEERING \
+    --prefix-length=16 \
+    --description="peering range for Google" \
+    --network=default
+
+# Connect the peering
+gcloud services vpc-peerings connect \
+    --service=servicenetworking.googleapis.com \
+    --ranges=google-managed-services-default \
+    --network=default \
+    --project=<GCP_PROJECT_ID>
+
+```
+
+**2. Create the Cloud SQL Instance (Server):**
+
+Choose the appropriate command based on your target environment.
+
+*Option A: Development / Sandbox (Cost-Optimized)*
 
 ```bash
 gcloud sql instances create <DB_INSTANCE_NAME> \
     --database-version=POSTGRES_15 \
-    --cpu=1 --memory=4GB \
+    --tier=db-f1-micro \
     --region=<REGION> \
+    --storage-size=10GB \
+    --storage-type=SSD \
+    --no-storage-auto-increase \
+    --network=default \
+    --no-assign-ip \
     --root-password="<DB_PASSWORD>"
 
 ```
 
-**2. Create the Logical Database:**
+*Option B: Production (High Availability & Performance)*
+
+```bash
+gcloud sql instances create <DB_INSTANCE_NAME> \
+    --database-version=POSTGRES_15 \
+    --tier=db-custom-2-8192 \
+    --region=<REGION> \
+    --availability-type=REGIONAL \
+    --storage-size=100GB \
+    --storage-type=SSD \
+    --storage-auto-increase \
+    --enable-point-in-time-recovery \
+    --network=default \
+    --no-assign-ip \
+    --root-password="<DB_PASSWORD>"
+
+```
+
+*(Note: Production uses a dedicated 2-core 8GB RAM machine, is replicated across two zones for High Availability, and enables Point-in-Time recovery).*
+
+**3. Create the Logical Database:**
 
 ```bash
 gcloud sql databases create <DB_NAME> --instance=<DB_INSTANCE_NAME>
 
 ```
-
 ---
 
 ## 4. Security & Secret Manager Setup 🔒
@@ -188,36 +236,161 @@ gcloud run deploy <CLOUD_RUN_SERVICE> \
 
 ## 7. CI/CD Automation (Cloud Build) 🚀
 
-Once the bootstrap deployment is successful, subsequent deployments should be fully automated via GitHub and Cloud Build.
+For this project, Cloud Build is the primary CI/CD gate. This avoids dependency on GitHub-hosted runner billing and keeps validation/deploy inside GCP.
 
-1. Go to the **Cloud Build** console in GCP.
-2. Connect your GitHub repository in the **Repositories** tab.
-3. Create a new **Trigger**:
-* **Event:** Push to a branch (e.g., `^main$` or `^develop$`).
-* **Source:** Select your connected repository.
-* **Configuration:** Cloud Build configuration file (yaml or json).
-* **Location:** `/cloudbuild.yaml`.
-* **Service Account:** Ensure you select the Compute Engine default service account (`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`).
+### Trigger A: Pull Request quality gates
 
+Create a trigger for pull requests targeting `develop`:
 
-4. Ensure the `cloudbuild.yaml` file is present in the root of your repository.
-5. Any subsequent `git push` will trigger automated tests, build the image, and deploy safely to Cloud Run inheriting the secrets configuration.
+- **Event:** Pull request
+- **Base branch:** `^develop$`
+- **Configuration file:** `/cloudbuild.pr.yaml`
+- **Behavior:** Run lint, scoped type-check, and tests with coverage. No deploy step.
+
+### Trigger B: Deploy from `develop`
+
+Create a trigger for merges/pushes to `develop`:
+
+- **Event:** Push to branch
+- **Branch regex:** `^develop$`
+- **Configuration file:** `/cloudbuild.yaml`
+- **Behavior:** Run tests, build image, push image, deploy to Cloud Run.
+
+### Service account for triggers
+
+Use a dedicated least-privilege service account where possible. At minimum it needs permissions for:
+
+- Cloud Run deploy
+- Artifact Registry push
+- Secret Manager access (for deploy-time secret bindings)
+- Cloud Build execution
+
+If using the default Compute service account, ensure IAM is explicitly scoped and reviewed periodically.
+
+---
+
+## 7.1. GitHub Actions Deployment with Workload Identity Federation (Recommended)
+
+For secure CI/CD from GitHub without sharing JSON keys, use Workload Identity Federation (WIF).
+
+### Why this is recommended
+
+- No long-lived private key in GitHub Secrets.
+- Short-lived credentials issued at workflow runtime.
+- Fine-grained trust (repository/branch scoped).
+
+### 1. Create a dedicated deployer service account
+
+```bash
+gcloud iam service-accounts create hwb-github-deployer \
+  --display-name="HWB GitHub Deployer"
+```
+
+### 2. Grant least-privilege roles to deployer service account
+
+```bash
+export DEPLOYER_SA="hwb-github-deployer@<GCP_PROJECT_ID>.iam.gserviceaccount.com"
+export RUNTIME_SA="<PROJECT_NUMBER>-compute@developer.gserviceaccount.com"
+
+gcloud projects add-iam-policy-binding <GCP_PROJECT_ID> \
+  --member="serviceAccount:${DEPLOYER_SA}" \
+  --role="roles/run.admin"
+
+gcloud projects add-iam-policy-binding <GCP_PROJECT_ID> \
+  --member="serviceAccount:${DEPLOYER_SA}" \
+  --role="roles/artifactregistry.writer"
+
+gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" \
+  --member="serviceAccount:${DEPLOYER_SA}" \
+  --role="roles/iam.serviceAccountUser"
+```
+
+### 3. Create WIF pool and OIDC provider for GitHub
+
+```bash
+gcloud iam workload-identity-pools create github-pool \
+  --project="<GCP_PROJECT_ID>" \
+  --location="global" \
+  --display-name="GitHub Actions Pool"
+
+gcloud iam workload-identity-pools providers create-oidc github-provider \
+  --project="<GCP_PROJECT_ID>" \
+  --location="global" \
+  --workload-identity-pool="github-pool" \
+  --display-name="GitHub OIDC Provider" \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref"
+```
+
+### 4. Allow this repository to impersonate deployer service account
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding "${DEPLOYER_SA}" \
+  --project="<GCP_PROJECT_ID>" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/github-pool/attribute.repository/guanes/health-without-borders"
+```
+
+### 5. Configure GitHub repository variables
+
+Set these repository variables in GitHub (`Settings > Secrets and variables > Actions > Variables`):
+
+- `GCP_PROJECT_ID`
+- `GCP_REGION`
+- `ARTIFACT_REPO`
+- `CLOUD_RUN_SERVICE`
+- `CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT`
+- `INSTANCE_CONNECTION_NAME`
+- `DB_USER`
+- `DB_NAME`
+- `GCP_DATASET_ID`
+- `GCP_HL7_STORE_ID`
+- `HL7_SENDING_APP`
+- `HL7_SENDING_FACILITY`
+- `HL7_RECEIVING_APP`
+- `HL7_RECEIVING_FACILITY`
+- `HL7_PROCESSING_ID`
+- `HL7_VERSION_ID`
+- `ACCESS_TOKEN_EXPIRE_MINUTES`
+- `BACKEND_CORS_ORIGINS`
+- `RATE_LIMIT_LOGIN`
+- `RATE_LIMIT_PATIENT_SEARCH`
+
+Set these WIF variables:
+
+- `GCP_DEPLOYER_SERVICE_ACCOUNT` (for example `hwb-github-deployer@<GCP_PROJECT_ID>.iam.gserviceaccount.com`)
+- `GCP_WORKLOAD_IDENTITY_PROVIDER` (full provider path):
+  `projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/github-pool/providers/github-provider`
+
+The workflow file is:
+
+- `.github/workflows/deploy-cloud-run.yml`
+
+This deployment path never requires uploading a service account JSON key.
 
 ---
 
 ## 8. Data Initialization (Schema & Seeding)
 
-Because Cloud Run is stateless, database migrations and initial catalog seeding must be executed via a secure tunnel from your local machine to the production database.
+Because our database lacks a public IP for security reasons, initializing the database from a local laptop requires a temporary security bypass. We will temporarily assign a public IP, run our scripts securely through the encrypted Auth Proxy, and then lock the instance down again.
 
-**1. Start the Cloud SQL Auth Proxy:**
-In a new terminal window, open the secure tunnel:
+**1. Temporarily Open the Vault (Assign Public IP):**
+```bash
+gcloud sql instances patch <DB_INSTANCE_NAME> --assign-ip
+
+```
+
+*(Wait 1-2 minutes for the instance to update).*
+
+**2. Start the Cloud SQL Auth Proxy:**
+In a new terminal window, open the secure encrypted tunnel:
 
 ```bash
 ./cloud-sql-proxy <GCP_PROJECT_ID>:<REGION>:<DB_INSTANCE_NAME> --port 5433
 
 ```
 
-**2. Execute Initialization Scripts:**
+**3. Execute Initialization Scripts:**
 In a **separate terminal window**, force the `DATABASE_URL` to route through the local tunnel:
 
 ```bash
@@ -229,6 +402,13 @@ uv run python scripts/load_catalogs.py
 
 ```
 
+**4. Close the Vault (Revoke Public IP):**
+Once the scripts complete successfully, immediately restore the maximum security posture:
+
+```bash
+gcloud sql instances patch <DB_INSTANCE_NAME> --no-assign-ip
+
+```
 ---
 
 ## 9. Monitoring and Maintenance

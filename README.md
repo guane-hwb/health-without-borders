@@ -1,10 +1,11 @@
 # Health Without Borders - Backend
 
 ![Python Version](https://img.shields.io/badge/python-3.11-blue.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.109.0-009688.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.128.0-009688.svg)
 ![Docker](https://img.shields.io/badge/Docker-Available-2496ED.svg)
 ![GCP](https://img.shields.io/badge/Google_Cloud-Run-4285F4.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
+![CI](https://github.com/guanes/health-without-borders/actions/workflows/ci.yml/badge.svg)
 
 **Interoperable Medical Records Platform for Migrant Children and Adolescents.**
 
@@ -37,174 +38,119 @@ This repository contains the source code for the **Backend**, a RESTful API deve
 
 ```
 health-without-borders/
+├── .github/                          # GitHub configuration
+│   ├── workflows/
+│   │   ├── ci.yml                    # CI pipeline (lint + tests on every PR)
+│   │   ├── docs.yml                  # Auto-deploy MkDocs to GitHub Pages
+│   │   └── deploy-cloud-run.yml      # Deploy to Cloud Run via WIF
+│   └── PULL_REQUEST_TEMPLATE.md      # PR checklist template
 ├── app/                              # Main application package
-│   ├── __init__.py
 │   ├── main.py                       # FastAPI application entry point
 │   ├── api/                          # API versioning and routing
-│   │   ├── __init__.py
 │   │   ├── deps.py                   # Shared dependencies (DB session, auth)
-│   │   └── v1/                       # API v1 endpoints
-│   │       ├── __init__.py
-│   │       ├── api.py                # Route aggregation
-│   │       └── endpoints/            # Endpoint modules
-│   │           ├── __init__.py
-│   │           ├── catalogs.py       # ICD-10, CVX catalog endpoints
-│   │           ├── login.py          # Authentication & JWT
-│   │           ├── organizations.py  # Organization management endpoints
-│   │           ├── patients.py       # Patient CRUD & medical records
-│   │           └── users.py          # User management endpoints
+│   │   └── v1/endpoints/             # Endpoint modules
+│   │       ├── catalogs.py           # ICD-10, CVX catalog endpoints
+│   │       ├── login.py              # Authentication & JWT
+│   │       ├── organizations.py      # Organization management endpoints
+│   │       ├── patients.py           # Patient CRUD & medical records
+│   │       └── users.py              # User management endpoints
 │   ├── core/                         # Core configuration & utilities
-│   │   ├── __init__.py
 │   │   ├── config.py                 # Environment variables & settings
 │   │   ├── logging.py                # Structured logging
+│   │   ├── rate_limit.py             # Rate limiting (slowapi)
 │   │   └── security.py               # JWT, password hashing, RBAC
 │   ├── db/                           # Database layer
-│   │   ├── __init__.py
-│   │   ├── base.py                   # SQLAlchemy declarative base
 │   │   ├── models.py                 # ORM models (Users, Patients, Records)
 │   │   └── session.py                # Database session management
 │   ├── schemas/                      # Pydantic models (request/response)
-│   │   ├── __init__.py
-│   │   ├── catalog.py                # Catalog schemas
-│   │   ├── organization.py           # Organization schemas
-│   │   ├── patient.py                # Patient schemas
-│   │   ├── token.py                  # JWT token schemas
-│   │   └── user.py                   # User schemas
-│   ├── services/                     # Business logic layer
-│   │   ├── __init__.py
-│   │   ├── llm/                      # LLM integration services
-│   │   │   ├── __init__.py
-│   │   │   ├── prompts.py            # LLM prompt templates
-│   │   │   ├── schemas.py            # LLM request/response schemas
-│   │   │   └── service.py            # LLM service implementation
-│   │   ├── catalog_service.py        # Catalog operations
-│   │   ├── gcp_service.py            # GCP Cloud Healthcare API integration
-│   │   ├── hl7_service.py            # HL7v2 parsing & generation
-│   │   └── patient_service.py        # Patient business logic
-│   └── data/                         # Static data files
-│       └── cie10.json                # ICD-10 catalog data
-├── docs/                             # Project documentation
-│   ├── architecture/
-│   │   └── hl7v2-strategy.md         # Architectural Decision Record (ADR)
-│   ├── development/
-│   │   └── setup.md                  # Local development setup guide
-│   └── infrastructure/
-│       ├── database.md               # Database schema & modeling
-│       ├── gcp-deploy.md             # Google Cloud Run deployment
-│       ├── healthcare-api.md         # GCP Cloud Healthcare API config
-│       └── security.md               # Security protocols & encryption
-├── scripts/                          # Utility scripts
-│   ├── __init__.py
-│   ├── create_tables.py              # Initialize database schema
-│   ├── create_generic_user.py        # Create default user for testing
-│   └── load_catalogs.py              # Populate clinical catalogs (ICD-10, CVX)
-├── tests/                            # Automated test suite
-│   ├── conftest.py                   # Pytest fixtures & configuration
-│   └── api/
-│       └── v1/
-│           └── test_patients.py      # Patient endpoint tests
-├── .venv/                            # Python virtual environment
-├── cloud-sql-proxy                   # Cloud SQL Proxy binary
+│   └── services/                     # Business logic layer
+│       ├── llm/                      # LLM integration (Gemini)
+│       ├── gcp_service.py            # GCP Cloud Healthcare API integration
+│       ├── hl7_service.py            # HL7v2 parsing & generation
+│       └── patient_service.py        # Patient business logic
+├── docs/                             # MkDocs documentation source
+├── scripts/                          # DB initialization and data loading
+├── tests/                            # Automated test suite (pytest)
+│   └── api/v1/
+│       ├── test_login.py             # Authentication & JWT tests
+│       ├── test_organizations.py
+│       ├── test_patients.py
+│       └── test_users.py
+├── .env.example                      # Environment variables template
+├── cloudbuild.yaml                   # Google Cloud Build CI/CD pipeline
 ├── Dockerfile                        # Container image definition
-├── gcp_key.json                      # GCP service account credentials
+├── LICENSE                           # MIT License
+├── mkdocs.yml                        # MkDocs documentation configuration
+├── PROJECT_CHARTER.md                # Project vision, mission and governance
 ├── pyproject.toml                    # Project metadata & dependencies
-├── pytest.ini                        # Pytest configuration
+├── SECURITY.md                       # Security protocols & encryption
 └── README.md                         # This file
 ```
-
-### Directory Purpose Summary
-
-| Directory | Purpose |
-|-----------|---------|
-| `app/` | Main application code with API, business logic, and database models |
-| `app/api/` | FastAPI routers and endpoint definitions |
-| `app/core/` | Configuration, security, logging utilities |
-| `app/db/` | SQLAlchemy ORM models and database session management |
-| `app/schemas/` | Pydantic models for request/response validation |
-| `app/services/` | Business logic and external integrations (GCP, HL7, LLM) |
-| `app/services/llm/` | LLM integration for AI-powered medical assistance |
-| `docs/` | Architecture, deployment, and development guides |
-| `scripts/` | Database initialization and data loading utilities |
-| `tests/` | Automated test cases using pytest |
 
 ---
 
 ## 📚 Documentation
 
-Detailed project documentation is organized in the `docs/` folder:
+Full technical documentation is published at **[guanes.github.io/health-without-borders](https://guanes.github.io/health-without-borders/)**.
 
-* **Development:**
-  * [**Local Setup Guide**](docs/development/setup.md): Instructions for configuring Docker and running the API locally.
-* **Infrastructure & Security:**
-  * [**GCP Deployment Guide**](docs/infrastructure/gcp-deploy.md): Step-by-step instructions for deploying to Google Cloud Run.
-  * [**Database Architecture**](docs/infrastructure/database.md): Data modeling, JSONB usage, and table dictionary.
-  * [**Security Protocols**](docs/infrastructure/security.md): JWT configuration, RBAC, and data encryption standards.
-* **Interoperability:**
-  * [**Cloud Healthcare API**](docs/infrastructure/healthcare-api.md): GCP HL7v2 Store and Pub/Sub configuration.
-  * [**HL7v2 Strategy (ADR)**](docs/architecture/hl7v2-strategy.md): Architectural Decision Record comparing GCP, Mirth Connect, and In-House solutions.
-* **AI & Natural Language Processing:**
-  * [**Clinical NLP Integration (ADR)**](docs/architecture/ai-integration.md): Architectural decision and Prompt Engineering strategy for automated ICD-10/11 coding using Google Vertex AI.
+Key sections:
+* [Architecture & HL7v2 Strategy](https://guanes.github.io/health-without-borders/architecture/hl7v2-strategy/)
+* [Local Setup Guide](https://guanes.github.io/health-without-borders/development/setup/)
+* [Security Protocols](https://guanes.github.io/health-without-borders/infrastructure/security/)
+* [GCP Deployment](https://guanes.github.io/health-without-borders/infrastructure/gcp-deploy/)
 
 ---
 
 ## ⚡ Quick Start (Local Development)
 
-Please refer to the comprehensive [**Local Setup Guide**](docs/development/setup.md) for detailed instructions on spinning up the local Docker database and seeding the clinical catalogs.
-
-**Basic commands summary:**
 ```bash
 # 1. Clone repository
-git clone [https://github.com/guanes/health-without-borders.git](https://github.com/guanes/health-without-borders.git)
+git clone https://github.com/guanes/health-without-borders.git
 cd health-without-borders
 
-# 2. Install dependencies
+# 2. Copy environment variables template
+cp .env.example .env
+# Edit .env with your local values
+
+# 3. Install dependencies
 uv sync
 
-# 3. Start local database
+# 4. Start local database
 docker run --name hwb-db-local -e POSTGRES_PASSWORD=password -e POSTGRES_DB=hwb_local -p 5432:5432 -d postgres:15
 
-# 4. Initialize schema and catalogs
+# 5. Initialize schema and catalogs
 uv run python scripts/create_tables.py
 uv run python scripts/load_catalogs.py
 
-# 5. Run the server
+# 6. Run the server
 uv run uvicorn app.main:app --reload
-
 ```
 
-The service will be available at: http://localhost:8000/docs
+The interactive API will be available at: **http://localhost:8000/docs**
 
 ---
 
 ## 🧪 Testing
 
-To run the automated test suite before opening a Pull Request:
-
 ```bash
-uv run pytest
-
+uv run pytest --cov=app --cov-report=term-missing
 ```
+
+The project maintains **≥ 75% code coverage**. Coverage is enforced automatically on every PR via the CI pipeline.
 
 ---
 
 ## 🤝 Contributing
 
-We welcome contributions from the community! This project follows strict development standards to ensure reliability in humanitarian contexts. Before submitting a Pull Request, please ensure you:
+We welcome contributions from the community! Before submitting a Pull Request, please read [CONTRIBUTING.md](CONTRIBUTING.md) and review the [QA & PR Workflow](docs/development/qa-plan.md).
 
-1. Follow the PEP-8 style guide.
-2. Do not commit credentials or secrets to the repository.
-3. Document any new endpoint in Swagger.
-4. Target your Pull Requests to the `develop` branch, not `main`.
-
-For full details on how to get involved, please read our official [CONTRIBUTING.md](CONTRIBUTING.md) and review our strict [QA & Pull Request Workflow](docs/development/qa-plan.md).
-
-Please note that this project is released with a [Contributor Code of Conduct](CODE_OF_CONDUCT.md). By participating in this project you agree to abide by its terms.
+This project is released with a [Contributor Code of Conduct](CODE_OF_CONDUCT.md). By participating you agree to abide by its terms.
 
 ---
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
 
 ---
 

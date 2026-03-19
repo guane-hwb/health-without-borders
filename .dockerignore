@@ -1,9 +1,15 @@
+# Git & GitHub
 .git
 .gitignore
+.github/
+
+# Virtual Environments
 .venv/
 venv/
 env/
 
+# Python Cache & Build
+datalake/
 __pycache__/
 *.pyc
 *.pyo
@@ -23,12 +29,13 @@ wheels/
 .installed.cfg
 *.egg
 
+# Secrets & Local Config
 .env
 gcp_key.json
 *.pem
-
 cloud-sql-proxy
 
+# Testing
 .pytest_cache/
 tests/
 pytest.ini
@@ -36,8 +43,15 @@ coverage.xml
 htmlcov/
 .coverage
 
+# Documentation & Open Source Files
 docs/
+site/
+mkdocs.yml
 README.md
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+PROJECT_CHARTER.md
 
+# OS specific
 .DS_Store
 Thumbs.db

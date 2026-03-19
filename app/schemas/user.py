@@ -4,7 +4,6 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 class UserBase(BaseModel):
     email: EmailStr
     full_name: str = Field(..., min_length=3, description="Full name of the user")
-    # Limitamos los roles que el frontend puede enviar por defecto
     role: str = Field(default="doctor", description="Role of the user: 'doctor' or 'nurse'")
     is_active: Optional[bool] = True
 

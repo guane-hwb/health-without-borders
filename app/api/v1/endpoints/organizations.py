@@ -28,7 +28,7 @@ def create_organization(
             detail="Only global SuperAdmins can create new organizations."
         )
 
-    # Validar que el nombre no exista ya
+    # Validate that the organization name is unique across the entire database
     existing_org = db.query(Organization).filter(Organization.name == org_in.name).first()
     if existing_org:
         raise HTTPException(
@@ -36,7 +36,7 @@ def create_organization(
             detail=f"The organization '{org_in.name}' already exists."
         )
 
-    # Crear la organización
+    # Create the new organization
     new_org = Organization(
         name=org_in.name,
         is_active=org_in.is_active
