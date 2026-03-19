@@ -163,7 +163,8 @@ Detailed project documentation is organized in the `docs/` folder and published 
   * [**GCP Deployment Guide**](docs/infrastructure/gcp-deploy.md): Step-by-step instructions for deploying to Google Cloud Run.
   * Includes Workload Identity Federation setup for GitHub Actions (no static JSON keys).
   * [**Database Architecture**](docs/infrastructure/database.md): Data modeling, JSONB usage, and table dictionary.
-  * [**Security Protocols**](SECURITY.md): JWT configuration, RBAC, and data encryption standards.
+  * [**Security Protocols**](docs/infrastructure/security.md): JWT configuration, RBAC, and data encryption standards.
+  * [**ISO 27001 Technical Mapping**](docs/infrastructure/iso27001-technical-mapping.md): Control-to-evidence matrix and residual gaps.
 * **Interoperability:**
   * [**Cloud Healthcare API**](docs/infrastructure/healthcare-api.md): GCP HL7v2 Store and Pub/Sub configuration.
 * **AI & Natural Language Processing:**
