@@ -1,5 +1,6 @@
 import uuid
-from sqlalchemy import Column, String, Boolean, DateTime, Date, Text, JSON, ForeignKey
+import enum  # stdlib
+from sqlalchemy import Column, String, Boolean, DateTime, Date, Text, JSON, ForeignKey, Enum as SAEnum
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.db.base import Base
@@ -19,6 +20,11 @@ class Organization(Base):
     users = relationship("User", back_populates="organization")
     patients = relationship("Patient", back_populates="organization")
 
+class UserRole(str, enum.Enum):
+    superadmin = "superadmin"
+    org_admin  = "org_admin"
+    doctor     = "doctor"
+    nurse      = "nurse"
 class User(Base):
     """
     System users (Admins, Doctors, Nurses). 
@@ -36,7 +42,7 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     
     # Allowed roles: "superadmin", "org_admin", "doctor", "nurse"
-    role = Column(String, default="doctor")
+    role = Column(SAEnum(UserRole), nullable=False, default=UserRole.doctor)
     is_active = Column(Boolean, default=True)
 
     # Relationships

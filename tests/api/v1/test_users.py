@@ -4,13 +4,14 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.api.deps import get_current_user
 from app.db.session import get_db
+from app.db.models import UserRole
 
 def test_create_user_org_admin_success(client: TestClient):
     """Test that an org_admin can create a doctor in their own organization."""
     
     class MockOrgAdmin:
         email = "admin@clinic.org"
-        role = "org_admin"
+        role = UserRole.org_admin
         organization_id = "org-123"
         
     app.dependency_overrides[get_current_user] = lambda: MockOrgAdmin()
@@ -44,7 +45,7 @@ def test_create_user_org_admin_forbidden_role(client: TestClient):
     
     class MockOrgAdmin:
         email = "admin@clinic.org"
-        role = "org_admin"
+        role = UserRole.org_admin
         organization_id = "org-123"
         
     app.dependency_overrides[get_current_user] = lambda: MockOrgAdmin()
@@ -68,7 +69,7 @@ def test_create_user_doctor_forbidden(client: TestClient):
     
     class MockDoctor:
         email = "doctor@clinic.org"
-        role = "doctor"
+        role = UserRole.doctor
         organization_id = "org-123"
         
     app.dependency_overrides[get_current_user] = lambda: MockDoctor()

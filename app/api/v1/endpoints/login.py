@@ -23,10 +23,20 @@ def login_access_token(
     form_data: OAuth2PasswordRequestForm = Depends()
 ) -> Any:
     """
-    OAuth2 compatible token login, get an access token for future requests.
-    
-    Args:
-        form_data: Standard OAuth2 form containing 'username' (email) and 'password'.
+    OAuth2 compatible token login. Returns a signed JWT for use in all protected endpoints.
+
+    Send credentials as form data (not JSON):
+    - **username**: The user's registered email address.
+    - **password**: The user's current password.
+
+    **Responses:**
+    - `200`: Login successful. Returns `access_token` and `token_type: bearer`.
+    - `400`: Account exists but is deactivated.
+    - `401`: Invalid email or password.
+    - `422`: Missing required form fields.
+
+    **Usage:** Copy the `access_token` value and click the 'Authorize' button at the top
+    of this page to authenticate all subsequent requests.
     """
     # 1. Authenticate User
     user = db.query(User).filter(User.email == form_data.username).first()

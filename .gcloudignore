@@ -28,3 +28,5 @@ CODE_OF_CONDUCT.md
 PROJECT_CHARTER.md
 
 .DS_Store
+
+cloud-sql-proxy

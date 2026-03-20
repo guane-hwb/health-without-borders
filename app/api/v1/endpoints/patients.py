@@ -4,7 +4,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.db.models import User
+from app.db.models import User, UserRole
 from app.api.deps import get_current_user
 
 from app.db.session import get_db
@@ -39,17 +39,28 @@ def get_patient_by_device_uid_scan(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get patient details by scanning a hardware identifier (NFC, Barcode, etc.).
-    Includes 2FA Hardware check for minors using the guardian's NFC tag.
-    
-    Used in the 'Scan Device' view of the mobile app.
-    If the device UID is registered, returns the full medical record.
-    If not, returns 404 Not Found.
+    Retrieve a patient's full medical record by scanning their NFC tag or barcode.
 
-    Security: Only 'org_admin', 'doctor' and 'nurse' can view clinical records.
+    **Guardian 2FA for minors:**
+    If the patient is under 18 years old, the `guardian_device_uid` query parameter
+    becomes mandatory. The scanned guardian tag must match the one registered in the
+    patient's record. Access is denied if they do not match.
+
+    **Parameters:**
+    - `device_uid` (path): The hardware identifier scanned from the patient's bracelet.
+    - `guardian_device_uid` (query, conditional): Required only if patient is a minor.
+
+    **Allowed roles:** `doctor`, `nurse`.
+
+    **Responses:**
+    - `200`: Full patient record returned.
+    - `403`: Caller is not `doctor` or `nurse`.
+    - `403`: Patient is a minor and `guardian_device_uid` was not provided.
+    - `403`: Patient is a minor and guardian tag does not match.
+    - `404`: No patient registered with that device UID in this organization.
     """
 
-    if current_user.role not in ["doctor", "nurse", "org_admin"]:
+    if current_user.role not in {UserRole.doctor, UserRole.nurse, UserRole.org_admin}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access Denied: Only medical staff can view patient records."
@@ -114,18 +125,26 @@ def sync_patient(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Synchronize patient data from mobile app.
-    
-    Process Flow:
-    1. Persist data in PostgreSQL.
-    2. Convert to HL7v2 standard format.
-    3. Push to Google Cloud Healthcare API.
-    
-    Security: Only users with the 'doctor' role can write/update medical records.
-    Returns:
-        PatientSyncResponse: Standardized JSON response with synchronization status.
+    Synchronize a patient record from the mobile app to the cloud.
+
+    **Process flow:**
+    1. If any visit in `medicalHistory` is missing a diagnosis, the clinical evaluation
+    text is automatically analyzed by a medical LLM (Gemini) to suggest one.
+    2. The record is persisted or updated in PostgreSQL.
+    3. The record is converted to HL7v2 format.
+    4. The HL7v2 message is transmitted to the Google Cloud Healthcare API.
+
+    **Nurse restriction:** A `nurse` may call this endpoint to append vaccination records,
+    but cannot add new entries to `medicalHistory`. Attempts to do so will return `403`.
+
+    **Allowed roles:** `doctor`, `nurse`.
+
+    **Responses:**
+    - `201`: Sync successful. Returns internal ID and GCP transmission status.
+    - `403`: Caller is not `doctor` or `nurse`.
+    - `500`: Internal error during processing (DB, HL7 conversion, or GCP transmission).
     """
-    if current_user.role not in ["doctor", "nurse"]:
+    if current_user.role not in {UserRole.doctor, UserRole.nurse}:
         logger.warning(
             "Unauthorized patient sync actor_id=%s role=%s org_id=%s",
             current_user.id,
@@ -213,11 +232,27 @@ def search_patients(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Strict search for patients.
-    First name, last name, and date of birth are MANDATORY
-    Security: Only 'org_admin', 'doctor' and 'nurse' can view clinical records.
+    Search for patients by demographic data within the caller's organization.
+
+    All three parameters are mandatory to prevent overly broad queries on sensitive data.
+    Results are strictly scoped to the caller's organization.
+
+    **Required parameters:**
+    - `first_name` (min 2 chars)
+    - `last_name` (min 2 chars)
+    - `birth_date` (format: YYYY-MM-DD)
+
+    **Optional parameters:**
+    - `guardian_name` (min 3 chars): Narrows results when multiple patients share the same name and DOB.
+
+    **Allowed roles:** `doctor`, `nurse`.
+
+    **Responses:**
+    - `200`: List of matching patient records (empty list if no matches).
+    - `403`: Caller is not `doctor` or `nurse`.
+    - `422`: One or more mandatory parameters are missing or malformed.
     """
-    if current_user.role not in ["doctor", "nurse", "org_admin"]:
+    if current_user.role not in {UserRole.doctor, UserRole.nurse, UserRole.org_admin}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access Denied: Only medical staff can view patient records."
