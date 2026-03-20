@@ -81,18 +81,6 @@ The infrastructure is designed to minimize the attack surface by leveraging stat
 4. **Transit 2 (Backend to Database):** Cloud Run saves the data to PostgreSQL via internal **Unix Sockets**.
 5. **Transit 3 (Backend to Interoperability):** The Backend converts the JSON to HL7v2 and pushes it to the Cloud Healthcare API via **GCP IAM Service Accounts**.
 
----
-
-## 6. ISO 27001 Traceability
-
-Technical control traceability for ISO/IEC 27001 is documented in:
-
-- `docs/infrastructure/iso27001-technical-mapping.md`
-
-This mapping links code/config evidence to Annex A themes and highlights residual non-code gaps that require governance and operational controls.
-
----
-
 ```mermaid
 flowchart TD
     %% --- Definición de Estilos para Modo Oscuro de GitHub ---
@@ -124,3 +112,15 @@ flowchart TD
     API -- "3. Read/Write Data<br/>[Credentials, PII, PHI]<br/>🔒 Unix Sockets (Internal)" --> DB
     API -- "4. Push Medical Record<br/>[HL7v2 Format]<br/>🔒 HTTPS (GCP IAM)" --> HL7Store
 ```
+
+---
+
+## 6. ISO 27001 Traceability
+
+Technical control traceability for ISO/IEC 27001 is documented in:
+
+- `docs/infrastructure/iso27001-technical-mapping.md`
+
+This mapping links code/config evidence to Annex A themes and highlights residual non-code gaps that require governance and operational controls.
+
+---

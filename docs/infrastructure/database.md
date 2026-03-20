@@ -87,3 +87,39 @@ Rows in critical tables (Users, Organizations) are never physically deleted (`DE
 ### 3.4. Indexing Strategy
 * **Search Optimization:** B-Tree indexes are applied to `last_name` and `first_name` to support lightning-fast offline/online search functionality from mobile tablets.
 * **Data Integrity:** Unique constraints are strictly enforced on `users.email`, `patients.id`, and `patients.device_uid` to prevent duplicate records during network syncing anomalies.
+
+---
+
+## 4. Role-Based Access Control (RBAC) Matrix
+
+Access to every API endpoint is governed by the user's assigned role. The matrix below documents the complete permission boundaries enforced at the application layer.
+
+### 4.1. Organizations
+
+| Endpoint | `superadmin` | `org_admin` | `doctor` | `nurse` |
+|---|---|---|---|---|
+| `POST /organizations` | ✅ | ❌ | ❌ | ❌ |
+| `GET /organizations` | ✅ All orgs | ✅ Own org only | ❌ | ❌ |
+
+### 4.2. Users
+
+| Endpoint | `superadmin` | `org_admin` | `doctor` | `nurse` |
+|---|---|---|---|---|
+| `POST /users` | ✅ Any org | ✅ Own org only (`doctor`/`nurse` only) | ❌ | ❌ |
+| `GET /users` | ✅ All users | ✅ Own org only | ❌ | ❌ |
+
+### 4.3. Patients
+
+| Endpoint | `superadmin` | `org_admin` | `doctor` | `nurse` |
+|---|---|---|---|---|
+| `GET /patients/scan/{device_uid}` | ❌ | ❌ | ✅ Own org only | ✅ Own org only |
+| `POST /patients/sync` | ❌ | ❌ | ✅ Full record | ✅ Vaccines only¹ |
+| `GET /patients/search` | ❌ | ❌ | ✅ Own org only | ✅ Own org only |
+
+> ¹ A `nurse` can call `POST /patients/sync` but the service layer blocks any attempt to add or modify `medicalHistory`. Only vaccine records can be appended.
+
+### 4.4. Design Rationale
+
+- **`superadmin` has zero clinical access.** It is a platform administrator role. It cannot read, create, or modify any patient record. This limits blast radius in case of credential compromise.
+- **`org_admin` manages staff, not patients.** It can provision and list users within its organization but has no access to clinical data.
+- **Multi-tenancy is enforced at the query level**, not just the role check. Even if a role is permitted, every database query is automatically scoped to `current_user.organization_id`, making cross-tenant access structurally impossible.

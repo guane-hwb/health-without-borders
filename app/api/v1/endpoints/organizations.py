@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.db.models import Organization, User
+from app.db.models import Organization, User, UserRole
 from app.schemas.organization import OrganizationCreate, OrganizationResponse
 from app.api.deps import get_current_user
 
@@ -18,10 +18,18 @@ def create_organization(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Create a new Organization (Tenant).
-    STRICT SECURITY: Only SuperAdmins can execute this action.
+    Create a new Organization (tenant) in the system.
+
+    An Organization is the root isolation boundary. All users and patients belong
+    to exactly one organization, ensuring complete data separation between tenants.
+
+    - **Allowed roles:** `superadmin` only.
+    - **Responses:**
+    - `201`: Organization created successfully.
+    - `400`: An organization with that name already exists.
+    - `403`: Caller is not a `superadmin`.
     """
-    if current_user.role != "superadmin":
+    if current_user.role != UserRole.superadmin:
         logger.warning(f"Unauthorized organization creation attempt by {current_user.email}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -55,15 +63,21 @@ def list_organizations(
     current_user: User = Depends(get_current_user)
 ):
     """
-    List organizations.
-    - superadmin: Sees all organizations in the database.
-    - org_admin: Sees ONLY their own organization.
-    - doctor/nurse: Access Denied.
+    List organizations visible to the current user.
+
+    Visibility is strictly scoped by role:
+    - `superadmin`: Returns all organizations in the system.
+    - `org_admin`: Returns only their own organization.
+    - `doctor` / `nurse`: Access denied.
+
+    - **Responses:**
+    - `200`: List of organizations (may contain 1 or many depending on role).
+    - `403`: Caller is a `doctor` or `nurse`.
     """
-    if current_user.role == "superadmin":
+    if current_user.role == UserRole.superadmin:
         return db.query(Organization).all()
     
-    elif current_user.role == "org_admin":
+    elif current_user.role == UserRole.org_admin:
         return db.query(Organization).filter(Organization.id == current_user.organization_id).all()
     
     else:

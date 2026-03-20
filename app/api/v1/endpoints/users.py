@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.db.models import User
+from app.db.models import User, UserRole
 from app.schemas.user import UserCreate, UserResponse
 from app.api.deps import get_current_user
 from app.core.security import get_password_hash
@@ -19,17 +19,26 @@ def create_user(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Create new user in the system.
-    
-    Security & Multi-Tenancy Rules:
-    - Only 'superadmin' or 'org_admin' can create users.
-    - 'org_admin' can only create users within their OWN organization.
-    - 'org_admin' can only create 'doctor' or 'nurse' roles.
+    Create a new user in the system.
+
+    **Role restrictions:**
+    - `superadmin`: Can create users of any role in any organization.
+    Must provide `organization_id` in the request body.
+    - `org_admin`: Can only create `doctor` or `nurse` accounts.
+    The new user is automatically assigned to the caller's organization,
+    regardless of any `organization_id` provided in the body.
+
+    **Responses:**
+    - `201`: User created successfully.
+    - `400`: A user with that email already exists.
+    - `400`: `superadmin` did not provide `organization_id`.
+    - `403`: Caller is a `doctor` or `nurse`.
+    - `403`: `org_admin` attempted to create an `org_admin` or `superadmin`.
     """
     logger.info(f"User {current_user.email} (Role: {current_user.role}) is attempting to create a new user.")
 
     # 1. Authorization Check (Only Admins allowed)
-    if current_user.role not in ["superadmin", "org_admin"]:
+    if current_user.role not in {UserRole.superadmin, UserRole.org_admin}:
         logger.warning(f"Unauthorized creation attempt by {current_user.email}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -37,7 +46,7 @@ def create_user(
         )
 
     # 2. Role Restriction for Org Admins
-    if current_user.role == "org_admin" and user_in.role not in ["doctor", "nurse"]:
+    if current_user.role == UserRole.org_admin and user_in.role not in [UserRole.doctor, UserRole.nurse]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Organization Admins can only create 'doctor' or 'nurse' accounts."
@@ -52,7 +61,7 @@ def create_user(
         )
 
     ## 4. Enforce Multi-Tenancy based on Role
-    if current_user.role == "superadmin":
+    if current_user.role == UserRole.superadmin:
         # SuperAdmin can create users for any organization, but must specify the target organization
         if not user_in.organization_id:
             raise HTTPException(
@@ -88,23 +97,25 @@ def get_users_by_organization(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get all users belonging to the current user's organization.
-    Useful for the Admin Dashboard to list their medical staff.
+    List all users belonging to the caller's organization.
 
-    Security & Multi-Tenancy Rules:
-    - Only 'org_admin' can view user lists from their own organization.
-    - 'superadmin' can view all users across all organizations.
-    - Regular 'doctor' and 'nurse' roles are NOT allowed to access this endpoint.
+    - `superadmin`: Returns all users across all organizations.
+    - `org_admin`: Returns only users within their own organization.
+    - `doctor` / `nurse`: Access denied.
+
+    **Responses:**
+    - `200`: List of users.
+    - `403`: Caller is a `doctor` or `nurse`.
     """
     # 1. Authorization
-    if current_user.role not in ["superadmin", "org_admin"]:
+    if current_user.role not in {UserRole.superadmin, UserRole.org_admin}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough privileges to view user lists."
         )
 
     # 2. Strict Multi-Tenant Query
-    if current_user.role == "superadmin":
+    if current_user.role == UserRole.superadmin:
         users = db.query(User).all()
     else:
         users = db.query(User).filter(

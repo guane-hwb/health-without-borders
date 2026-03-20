@@ -13,7 +13,7 @@ Covers:
 from fastapi.testclient import TestClient
 
 from app.core.security import get_password_hash
-from app.db.models import Organization, User
+from app.db.models import Organization, User, UserRole
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ def _create_user(db, org_id: str, email: str, password: str, is_active: bool = T
         full_name="Doctor Login Test",
         email=email,
         hashed_password=get_password_hash(password),
-        role="doctor",
+        role=UserRole.doctor,
         is_active=is_active,
     )
     db.add(user)
@@ -139,7 +139,7 @@ class TestJWTProtection:
     These tests validate that the JWT middleware works correctly end-to-end.
     """
 
-    def _get_token(self, client: TestClient, db_session, role: str = "org_admin") -> str:
+    def _get_token(self, client: TestClient, db_session, role: UserRole = UserRole.org_admin) -> str:
         """Helper: create a user, log in, and return the raw access token string."""
         org = _create_org(db_session)
         user = User(

@@ -2,11 +2,12 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from app.main import app
 from app.api.deps import get_current_user
+from app.db.models import UserRole
 
 class MockUser:
     email = "doctor_test@hwb.org"
     id = "test-user-id"
-    role = "doctor"
+    role = UserRole.doctor
     organization_id = "org-123"
 
 # Mock Payload simulating a request from the Mobile App (Frontend)
