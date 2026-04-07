@@ -50,16 +50,19 @@ MOCK_PATIENT_PAYLOAD = {
 def test_sync_patient_success(client: TestClient):
     """
     Integration Test: Sync Patient Data (Success Scenario)
+    Verifies that the API accepts the mobile payload and successfully triggers
+    the internal FHIR RDA conversion and GCP Healthcare transmission.
     """
     app.dependency_overrides[get_current_user] = lambda: MockUser()
 
     # --- MOCKING ---
+    # We mock the GCP service to prevent actual network calls to the FHIR Store during testing
     with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp:
         
         # Configure the mock to return a success dictionary
         mock_gcp.return_value = {
             "status": "success", 
-            "google_response": {"messageId": "mock-gcp-id"}
+            "google_response": {"messageId": "mock-gcp-fhir-id"}
         }
 
         # --- ACTION ---
