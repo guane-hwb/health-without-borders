@@ -1,4 +1,3 @@
-import base64
 import logging
 import requests
 import google.auth
@@ -7,56 +6,45 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-def send_to_google_healthcare(hl7_content: str):
+def send_to_google_healthcare(fhir_bundle: dict):
     """
-    Sends an HL7v2 message string to Google Cloud Healthcare API.
+    Sends a FHIR Bundle (JSON) to Google Cloud Healthcare API.
     Supports both Local (JSON file) and Cloud Run (Metadata Server) authentication.
     """
   
-    if not settings.GCP_PROJECT_ID or not settings.GCP_HL7_STORE_ID:
+    if not settings.GCP_PROJECT_ID or not settings.GCP_FHIR_STORE_ID:
         logger.warning("Missing GCP Project Configuration. Skipping cloud upload.")
         return {"status": "skipped", "reason": "No GCP configuration"}
 
-    logger.info(f"Sending HL7 to GCP Store: {settings.GCP_HL7_STORE_ID}...")
+    logger.info(f"Sending FHIR RDA to GCP Store: {settings.GCP_FHIR_STORE_ID}...")
 
     try:
         # HYBRID AUTHENTICATION
-        # google.auth.default() automatically searches in this order:
-        # A. GOOGLE_APPLICATION_CREDENTIALS environment variable (local)
-        # B. Cloud Run Metadata Server (Cloud - Automatic)
         scopes = ['https://www.googleapis.com/auth/cloud-platform']
         creds, project = google.auth.default(scopes=scopes)
-
-        # Force token refresh (necessary for Authorization header)
         creds.refresh(Request())
 
-        # BUILD URL
         location = settings.GCP_LOCATION or "us-central1"
         
+        # Build FHIR Store URL for executing a Bundle transaction
         base_url = (
             f"https://healthcare.googleapis.com/v1/projects/{settings.GCP_PROJECT_ID}/"
             f"locations/{location}/datasets/{settings.GCP_DATASET_ID}/"
-            f"hl7V2Stores/{settings.GCP_HL7_STORE_ID}/messages"
+            f"fhirStores/{settings.GCP_FHIR_STORE_ID}/fhir/Bundle"
         )
-        
-        # PREPARAR PAYLOAD
-        # API requires the HL7 message to be Base64 encoded
-        b64_message = base64.b64encode(hl7_content.encode('utf-8')).decode('utf-8')
-        payload = {"message": {"data": b64_message}}
         
         headers = {
             "Authorization": f"Bearer {creds.token}",
-            "Content-Type": "application/json; charset=utf-8"
+            "Content-Type": "application/fhir+json; charset=utf-8"
         }
 
-        ingest_url = f"{base_url}:ingest"
+        logger.debug(f"Posting FHIR Bundle to: {base_url}")
         
-        logger.debug(f"Posting to: {ingest_url}")
-        
-        response = requests.post(ingest_url, headers=headers, json=payload)
+        # In FHIR, to process a Bundle, you post it directly to the root of the FHIR store
+        response = requests.post(base_url, headers=headers, json=fhir_bundle)
         response.raise_for_status()
 
-        logger.info("Successfully ingested message to Google Cloud.")
+        logger.info("Successfully ingested FHIR RDA message to Google Cloud.")
         return {
             "status": "success", 
             "google_response": response.json()

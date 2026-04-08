@@ -15,7 +15,7 @@ from app.services.patient_service import (
     get_patient_by_device_uid, 
     search_patients_advanced
 )
-from app.services.hl7_service import convert_to_hl7
+from app.services.fhir_service import convert_to_fhir_rda
 from app.services.gcp_service import send_to_google_healthcare
 from app.core.config import settings
 from app.core.rate_limit import limiter
@@ -183,12 +183,12 @@ def sync_patient(
         )
         saved_patient = create_or_update_patient(db, patient_data, current_user.organization_id, current_user.role)
         
-        # 2. HL7 Conversion
-        hl7_message = convert_to_hl7(patient_data)
-        logger.debug(f"Generated HL7 message. Size: {len(hl7_message)} bytes")
+        # 2. FHIR RDA Conversion
+        fhir_bundle = convert_to_fhir_rda(patient_data)
+        logger.debug("Generated FHIR RDA Bundle")
 
         # 3. Send to GCP
-        gcp_response = send_to_google_healthcare(hl7_message)
+        gcp_response = send_to_google_healthcare(fhir_bundle)
         
         gcp_status = gcp_response.get("status", "unknown")
         
