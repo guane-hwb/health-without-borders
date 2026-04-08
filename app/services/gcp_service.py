@@ -30,7 +30,7 @@ def send_to_google_healthcare(fhir_bundle: dict):
         base_url = (
             f"https://healthcare.googleapis.com/v1/projects/{settings.GCP_PROJECT_ID}/"
             f"locations/{location}/datasets/{settings.GCP_DATASET_ID}/"
-            f"fhirStores/{settings.GCP_FHIR_STORE_ID}/fhir"
+            f"fhirStores/{settings.GCP_FHIR_STORE_ID}/fhir/Bundle"
         )
         
         headers = {
