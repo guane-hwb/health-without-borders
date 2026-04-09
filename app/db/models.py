@@ -51,8 +51,12 @@ class User(Base):
 class Patient(Base):
     """
     Main Patient Entity.
-    Stores relational data for quick lookups and raw JSON for history.
+    Stores relational columns for quick lookups and raw JSON for full clinical history.
     Implements Multi-Tenancy via organization_id.
+    
+    Relational columns mirror the most-queried RDA elements so the database 
+    can filter without scanning JSON. The full_record_json column remains the 
+    authoritative source for the complete patient payload.
     """
     __tablename__ = "patients"
 
@@ -64,26 +68,41 @@ class Patient(Base):
     
     # 2. THE HARDWARE ID (NFC Bracelet / Barcode)
     device_uid = Column(String, unique=True, index=True, nullable=False) 
+
+    # --- RDA Identification (Res. 866/2021 Elems. 2.1, 2.2) ---
+    document_type = Column(String(5), index=True, nullable=True,
+                           comment="Tipo de documento — CC, CE, PA, RC, TI, PT, etc.")
+    document_number = Column(String, index=True, nullable=True,
+                             comment="Número de documento de identidad del paciente")
     
-    # Demographics
+    # --- Demographics ---
     first_name = Column(String, index=True)
-    last_name = Column(String, index=True)
+    last_name = Column(String, index=True, comment="Primer apellido (Elem. 3.1)")
+    second_last_name = Column(String, nullable=True, comment="Segundo apellido (Elem. 3.2)")
     birth_date = Column(Date)
+    biological_sex = Column(String(2), nullable=True, comment="Sexo biológico M/F/I (Elem. 5)")
     blood_type = Column(String(5))
+
+    # --- Nationality (Elems. 1.1, 1.2) — critical for migrant population ---
+    nationality_code = Column(String(3), index=True, nullable=True,
+                              comment="Código ISO 3166-1 del país de nacionalidad")
+
+    # --- Guardian ---
     guardian_name = Column(String)
     guardian_phone = Column(String)
     
-    # Raw Full JSON Storage (Medical history / FHIR / HL7 payload)
+    # --- Raw Full JSON Storage (authoritative clinical payload) ---
     full_record_json = Column(JSON) 
     
     # Audit Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
     organization = relationship("Organization", back_populates="patients")
 
     def __repr__(self):
-        return f"<Patient(id={self.id}, org={self.organization_id})>"
+        return f"<Patient(id={self.id}, doc={self.document_type}-{self.document_number}, org={self.organization_id})>"
 
 class DiagnosisCIE10(Base):
     __tablename__ = "catalog_cie10"

@@ -1,7 +1,8 @@
 import logging
 from datetime import date
-from typing import Optional, List
+from typing import Optional
 from sqlalchemy.orm import Session
+from sqlalchemy import and_, func
 from app.db.models import Patient
 from app.schemas.patient import PatientFullRecord
 from fastapi import HTTPException, status
@@ -9,69 +10,98 @@ from fastapi import HTTPException, status
 # Setup Logger
 logger = logging.getLogger(__name__)
 
+
 def get_patient_by_device_uid(db: Session, device_uid: str, org_id: str) -> Optional[Patient]:
     """
     Fetches a patient using a hardware tag, STRICTLY scoped to the user's organization.
     """
     return db.query(Patient).filter(
         Patient.device_uid == device_uid,
-        Patient.organization_id == org_id 
+        Patient.organization_id == org_id
     ).first()
 
-def search_patients_advanced(
-    db: Session, 
+
+def find_patient_strict(
+    db: Session,
     org_id: str,
-    first_name: str, 
-    last_name: str, 
-    birth_date: date, 
-    guardian_name: Optional[str] = None, 
-    limit: int = 10
-) -> List[Patient]:
+    document_number: str,
+    birth_date: date,
+    first_name: str,
+    last_name: str,
+    guardian_name: Optional[str] = None,
+) -> Optional[Patient]:
     """
-    Dynamic search for patients, strictly scoped to the user's organization.
+    Strict patient lookup — returns exactly one patient or None.
+
+    All four mandatory parameters must match for a result to be returned.
+    This prevents accidental exposure of patient data and complies with 
+    Ley 1581 de 2012 (Habeas Data) and Resolución 1888/2025 privacy requirements.
+
+    Matching rules:
+      - document_number: exact match (case-insensitive)
+      - birth_date:      exact match
+      - first_name:      exact match (case-insensitive, trimmed)
+      - last_name:       exact match against first OR second last name (case-insensitive)
+      - guardian_name:    if provided, must match (case-insensitive, partial)
+
+    Returns None if zero or more than one patient matches (ambiguous = denied).
     """
     query = db.query(Patient).filter(
         Patient.organization_id == org_id,
-        Patient.first_name.ilike(f"%{first_name}%"),
-        Patient.last_name.ilike(f"%{last_name}%"),
-        Patient.birth_date == birth_date
+        func.lower(Patient.document_number) == document_number.strip().lower(),
+        Patient.birth_date == birth_date,
+        func.lower(Patient.first_name) == first_name.strip().lower(),
     )
-        
+
+    # Last name must match either first or second last name
+    last_name_lower = last_name.strip().lower()
+    query = query.filter(
+        (func.lower(Patient.last_name) == last_name_lower)
+        | (func.lower(Patient.second_last_name) == last_name_lower)
+    )
+
+    # Guardian verification — if provided, it must match
     if guardian_name:
         query = query.filter(
-            Patient.guardian_name.ilike(f"%{guardian_name}%")
+            func.lower(Patient.guardian_name).contains(guardian_name.strip().lower())
         )
-    
-    return query.limit(limit).all()
 
-def create_or_update_patient(db: Session, patient_in: PatientFullRecord, org_id: str, current_role: str) -> Patient:
+    results = query.limit(2).all()
+
+    if len(results) == 1:
+        return results[0]
+
+    if len(results) > 1:
+        logger.warning(
+            "Ambiguous patient lookup org_id=%s doc=%s — %d matches, access denied",
+            org_id,
+            document_number[:3] + "***",
+            len(results),
+        )
+
+    return None
+
+
+def create_or_update_patient(
+    db: Session, patient_in: PatientFullRecord, org_id: str, current_role: str
+) -> Patient:
     """
     Persists patient data into the local PostgreSQL database.
-    
+
     Strategy:
     - Check if patient exists by ID.
-    - If exists -> Update fields AND check if Device UID changed (Tag/Bracelet replacement).
-    - If new -> Create record with provided Device UID.
-    
-    Args:
-        db (Session): Database session.
-        patient_in (PatientFullRecord): Pydantic model with patient data.
-        org_id (str): Organization ID for multi-tenancy.
-        current_role (str): Role of the user performing the operation (for access control).
-        
-    Returns:
-        Patient: The SQLAlchemy model instance (saved).
+    - If exists -> Update allowed fields, protect immutable fields.
+    - If new -> Create record with all RDA-required columns.
     """
-    
+
     # 1. Check for existence by ID AND Organization (Multi-Tenant Security)
-    # This prevents a doctor from NGO 'A' accidentally modifying a patient from NGO 'B'
     existing_patient = db.query(Patient).filter(
         Patient.id == patient_in.patientId,
         Patient.organization_id == org_id
     ).first()
-    
+
     # Serialize the full JSON once to ensure consistency
-    new_record_dump = patient_in.model_dump(mode='json')
+    new_record_dump = patient_in.model_dump(mode="json")
 
     if existing_patient:
         logger.info(f"Updating existing patient: {existing_patient.id}")
@@ -81,56 +111,82 @@ def create_or_update_patient(db: Session, patient_in: PatientFullRecord, org_id:
         if current_role == "nurse":
             old_history_len = len(old_record_dump.get("medicalHistory", []))
             new_history_len = len(new_record_dump.get("medicalHistory", []))
-            
+
             if new_history_len > old_history_len:
-                logger.warning(f"Nurse tried to add medical history to patient {existing_patient.id}")
+                logger.warning(
+                    f"Nurse tried to add medical history to patient {existing_patient.id}"
+                )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access Denied: Nurses can only add vaccines, not medical history."
+                    detail="Access Denied: Nurses can only add vaccines, not medical history.",
                 )
 
-        # RULE 2: PROTECT IMMUTABLE FIELDS (Name, DOB, etc)
-        # For security, we overwrite the new JSON data with 
-        # the original old data to ensure they are not changed.
-        new_record_dump["patientInfo"]["firstName"] = old_record_dump["patientInfo"]["firstName"]
-        new_record_dump["patientInfo"]["lastName"] = old_record_dump["patientInfo"]["lastName"]
+        # RULE 2: PROTECT IMMUTABLE FIELDS (Name, DOB, document, sex)
+        new_record_dump["patientInfo"]["firstName"] = old_record_dump["patientInfo"][
+            "firstName"
+        ]
+        new_record_dump["patientInfo"]["firstLastName"] = old_record_dump["patientInfo"][
+            "firstLastName"
+        ]
+        new_record_dump["patientInfo"]["secondLastName"] = old_record_dump[
+            "patientInfo"
+        ].get("secondLastName")
+        new_record_dump["patientInfo"]["secondName"] = old_record_dump[
+            "patientInfo"
+        ].get("secondName")
         new_record_dump["patientInfo"]["dob"] = old_record_dump["patientInfo"]["dob"]
-        new_record_dump["patientInfo"]["gender"] = old_record_dump["patientInfo"]["gender"]
-        new_record_dump["patientInfo"]["bloodType"] = old_record_dump["patientInfo"]["bloodType"]
+        new_record_dump["patientInfo"]["biologicalSex"] = old_record_dump["patientInfo"][
+            "biologicalSex"
+        ]
+        new_record_dump["patientInfo"]["bloodType"] = old_record_dump["patientInfo"].get(
+            "bloodType"
+        )
+        new_record_dump["patientInfo"]["identification"] = old_record_dump["patientInfo"][
+            "identification"
+        ]
 
-        # RULE 3: UPDATE ONLY ALLOWED FIELDS
+        # RULE 3: UPDATE ONLY ALLOWED FIELDS (guardian, address, vaccines)
         existing_patient.guardian_name = patient_in.guardianInfo.name
         existing_patient.guardian_phone = patient_in.guardianInfo.phone
-        
-        # Save the JSON (which now has the new vaccines, new guardian and address,
-        # but keeps the original name and date of birth intact).
+
+        # Save the JSON (new vaccines/guardian/address, but original immutable fields)
         existing_patient.full_record_json = new_record_dump
-        
+
         # BRACELET REPLACEMENT (Update device_uid)
         if patient_in.device_uid and patient_in.device_uid != existing_patient.device_uid:
             logger.info(f"Device Tag updated for patient {existing_patient.id}")
             existing_patient.device_uid = patient_in.device_uid
-        
+
         db.commit()
         db.refresh(existing_patient)
         return existing_patient
 
     else:
         logger.info(f"Creating new patient record: {patient_in.patientId}")
-        
+        pi = patient_in.patientInfo
+
         db_patient = Patient(
             id=patient_in.patientId,
             organization_id=org_id,
-            device_uid=patient_in.device_uid, 
-            first_name=patient_in.patientInfo.firstName,
-            last_name=patient_in.patientInfo.lastName,
-            birth_date=patient_in.patientInfo.dob,
-            blood_type=patient_in.patientInfo.bloodType,
+            device_uid=patient_in.device_uid,
+            # RDA identification columns
+            document_type=pi.identification.documentType.value,
+            document_number=pi.identification.documentNumber,
+            # Demographics
+            first_name=pi.firstName,
+            last_name=pi.firstLastName,
+            second_last_name=pi.secondLastName,
+            birth_date=pi.dob,
+            biological_sex=pi.biologicalSex.value,
+            blood_type=pi.bloodType,
+            nationality_code=pi.nationalityCode,
+            # Guardian
             guardian_name=patient_in.guardianInfo.name,
             guardian_phone=patient_in.guardianInfo.phone,
-            full_record_json=new_record_dump
+            # Full JSON
+            full_record_json=new_record_dump,
         )
-        
+
         db.add(db_patient)
         db.commit()
         db.refresh(db_patient)
