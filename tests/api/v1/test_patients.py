@@ -218,7 +218,7 @@ def test_sync_nurse_cannot_add_medical_history(client: TestClient):
 
 
 def test_sync_stores_rda_columns_in_db(client: TestClient, db_session):
-    """New RDA columns are persisted correctly in the database."""
+    """New RDA columns and sync tracking columns are persisted correctly."""
     from app.db.models import Patient
 
     _sync_patient(client)
@@ -233,6 +233,104 @@ def test_sync_stores_rda_columns_in_db(client: TestClient, db_session):
     assert patient.last_name == "Rodríguez"
     assert patient.second_last_name == "Pérez"
     assert patient.first_name == "Santiago"
+    # Sync tracking: no visits, but RDA-Paciente was sent
+    assert patient.synced_visit_count == 0
+    assert patient.rda_paciente_sent is True
+
+
+def test_sync_delta_only_sends_new_bundles(client: TestClient, db_session):
+    """
+    Second sync with 1 new visit should only generate 2 bundles
+    (1 RDA-Paciente + 1 RDA-Consulta for the new visit), not re-send old visits.
+    """
+    from app.db.models import Patient
+
+    # First sync: patient with 1 visit → expect 2 bundles
+    _override_doctor()
+    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
+        first_call_count = mock_gcp.call_count
+
+    # Verify DB tracking after first sync
+    patient = db_session.query(Patient).filter(Patient.id == "TEST-UNIT-002").first()
+    assert patient.synced_visit_count == 1
+    assert patient.rda_paciente_sent is True
+
+    # Second sync: same patient, now with 2 visits (1 old + 1 new)
+    payload_two_visits = {
+        **MOCK_PATIENT_WITH_VISIT,
+        "medicalHistory": MOCK_PATIENT_WITH_VISIT["medicalHistory"] + [
+            {
+                "type": "Consultation",
+                "startDateTime": "2026-04-10T09:00:00",
+                "careModality": "01",
+                "serviceGroup": "01",
+                "careEnvironment": "05",
+                "clinicalEvaluation": {
+                    "historyOfCurrentIllness": "Control post-infección respiratoria.",
+                },
+                "diagnosis": [{"icd10Code": "Z09", "description": "Examen de seguimiento"}],
+                "diagnosisType": "02",
+            }
+        ],
+    }
+    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp2:
+        mock_gcp2.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload_two_visits)
+        second_call_count = mock_gcp2.call_count
+
+    _clear_overrides()
+
+    assert response.status_code == 201
+    assert first_call_count == 2   # RDA-Paciente + 1 RDA-Consulta
+    assert second_call_count == 2  # RDA-Paciente (refreshed) + 1 NEW RDA-Consulta only
+
+    # Verify DB tracking updated
+    db_session.refresh(patient)
+    assert patient.synced_visit_count == 2
+
+
+def test_sync_no_new_visits_skips_consulta_bundles(client: TestClient):
+    """Re-syncing with same data only sends RDA-Paciente, no duplicate consultas."""
+    _override_doctor()
+
+    # First sync with 1 visit
+    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
+
+    # Second sync with SAME data (no new visits)
+    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp2:
+        mock_gcp2.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
+        resync_call_count = mock_gcp2.call_count
+
+    _clear_overrides()
+
+    assert response.status_code == 201
+    # No new visits → RDA-Paciente still sent (refreshed), but no RDA-Consulta
+    assert resync_call_count == 1
+
+
+def test_sync_gcp_failure_does_not_update_tracking(client: TestClient, db_session):
+    """If GCP fails, sync tracking should NOT be updated so bundles retry next time."""
+    from app.db.models import Patient
+
+    _override_doctor()
+    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp:
+        mock_gcp.return_value = {"status": "error", "error": "GCP is down"}
+        response = client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
+
+    _clear_overrides()
+
+    assert response.status_code == 201
+    assert response.json()["gcp_status"] == "error"
+
+    # Tracking should NOT have been updated
+    patient = db_session.query(Patient).filter(Patient.id == "TEST-UNIT-002").first()
+    assert patient.synced_visit_count == 0
+    assert patient.rda_paciente_sent is False
 
 
 # ============================================================================

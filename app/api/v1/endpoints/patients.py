@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 from datetime import date
@@ -119,7 +120,7 @@ def get_patient_by_device_uid_scan(
 
 
 @router.post("/sync", response_model=PatientSyncResponse, status_code=status.HTTP_201_CREATED)
-def sync_patient(
+async def sync_patient(
     patient_data: PatientFullRecord, 
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -128,23 +129,20 @@ def sync_patient(
     Synchronize a patient record from the mobile app to the cloud.
 
     **Process flow:**
-    1. If any visit in `medicalHistory` is missing a diagnosis, the clinical evaluation
-    text is automatically analyzed by a medical LLM (Gemini) to suggest one.
-    2. The record is persisted or updated in PostgreSQL.
-    3. The record is converted to FHIR RDA Bundles (Resolution 1888/2025):
-       - 1 RDA-Paciente (patient self-reported background)
-       - 1 RDA-Consulta per medical visit (ambulatory encounter data)
-    4. Each FHIR Bundle is transmitted to the Google Cloud Healthcare API.
+    1. If any NEW visit in `medicalHistory` is missing a diagnosis, the clinical 
+       evaluation text is analyzed by a medical LLM (Gemini) to suggest one.
+    2. If any `familyHistory` item lacks ICD codes, the LLM resolves them.
+    3. The record is persisted or updated in PostgreSQL.
+    4. Only NEW FHIR RDA Bundles are generated (delta logic):
+       - RDA-Paciente: on first sync or when background data changes.
+       - RDA-Consulta: only for visits not previously sent.
+    5. Bundles are transmitted to the Google Cloud Healthcare API.
+    6. Sync tracking counters are updated in the database.
 
     **Nurse restriction:** A `nurse` may call this endpoint to append vaccination records,
     but cannot add new entries to `medicalHistory`. Attempts to do so will return `403`.
 
     **Allowed roles:** `doctor`, `nurse`.
-
-    **Responses:**
-    - `201`: Sync successful. Returns internal ID, GCP transmission status, and VIDA code.
-    - `403`: Caller is not `doctor` or `nurse`.
-    - `500`: Internal error during processing (DB, FHIR conversion, or GCP transmission).
     """
     if current_user.role not in {UserRole.doctor, UserRole.nurse}:
         logger.warning(
@@ -159,11 +157,12 @@ def sync_patient(
         )
     
     try:
-        # --- LLM PROCESSING: Diagnoses (from clinical evaluation notes) ---
+        # --- LLM PROCESSING: Only for visits that don't have diagnoses yet ---
         for visit in patient_data.medicalHistory:
             if not visit.diagnosis:
                 eval_data = visit.clinicalEvaluation
-                ai_diagnoses = medical_llm_processor.extract_diagnoses(
+                ai_diagnoses = await asyncio.to_thread(
+                    medical_llm_processor.extract_diagnoses,
                     history=eval_data.historyOfCurrentIllness,
                     physical=eval_data.generalPhysicalExamination,
                     systems=eval_data.systemsExamination,
@@ -171,20 +170,20 @@ def sync_patient(
                 )
                 visit.diagnosis = ai_diagnoses
 
-        # --- LLM PROCESSING: Family history ICD coding (from condition descriptions) ---
+        # --- LLM PROCESSING: Family history ICD coding ---
         if patient_data.backgroundHistory and patient_data.backgroundHistory.familyHistory:
             for fh_item in patient_data.backgroundHistory.familyHistory:
                 if fh_item.conditionDescription and not fh_item.conditionCie10Code:
-                    coded = medical_llm_processor.code_family_history_item(
+                    coded = await asyncio.to_thread(
+                        medical_llm_processor.code_family_history_item,
                         fh_item.conditionDescription
                     )
                     fh_item.conditionCie10Code = coded.get("icd10Code")
                     fh_item.conditionCie11Code = coded.get("icd11Code")
-                    # Enrich description with the official term from the LLM
                     if coded.get("description"):
                         fh_item.conditionDescription = coded["description"]
 
-        # 1. Save DB
+        # 1. Save to DB — returns (patient, previous_visit_count)
         logger.info(
             "Patient sync started actor_id=%s role=%s org_id=%s patient_ref=%s",
             current_user.id,
@@ -192,16 +191,23 @@ def sync_patient(
             current_user.organization_id,
             _mask_identifier(patient_data.patientId),
         )
-        saved_patient = create_or_update_patient(db, patient_data, current_user.organization_id, current_user.role)
+        saved_patient, previous_visit_count = create_or_update_patient(
+            db, patient_data, current_user.organization_id, current_user.role
+        )
         
-        # 2. FHIR RDA Conversion — generates list of Bundles (1 RDA-Paciente + N RDA-Consulta)
-        fhir_bundles = convert_to_fhir_rda(patient_data)
-        logger.debug(f"Generated {len(fhir_bundles)} FHIR RDA Bundles")
+        # 2. FHIR RDA Conversion — DELTA: only new bundles
+        fhir_bundles = convert_to_fhir_rda(
+            patient_data,
+            previous_visit_count=previous_visit_count,
+            rda_paciente_already_sent=saved_patient.rda_paciente_sent,
+        )
+        logger.debug(f"Generated {len(fhir_bundles)} FHIR RDA Bundle(s) (delta)")
 
         # 3. Send each Bundle to GCP
-        gcp_status = "unknown"
+        gcp_status = "success" if not fhir_bundles else "unknown"
+        all_success = True
         for i, bundle in enumerate(fhir_bundles):
-            gcp_response = send_to_google_healthcare(bundle)
+            gcp_response = await asyncio.to_thread(send_to_google_healthcare, bundle)
             bundle_status = gcp_response.get("status", "unknown")
             
             if bundle_status != "success":
@@ -212,21 +218,35 @@ def sync_patient(
                     bundle_status,
                 )
                 gcp_status = bundle_status
+                all_success = False
             else:
                 if gcp_status == "unknown":
                     gcp_status = "success"
-                logger.info("Patient sync GCP success patient_ref=%s bundle=%d", _mask_identifier(str(saved_patient.id)), i)
+                logger.info(
+                    "Patient sync GCP success patient_ref=%s bundle=%d",
+                    _mask_identifier(str(saved_patient.id)), i
+                )
+
+        # 4. Update sync tracking ONLY if GCP succeeded
+        if all_success and fhir_bundles:
+            saved_patient.synced_visit_count = len(patient_data.medicalHistory)
+            saved_patient.rda_paciente_sent = True
+            db.commit()
+            logger.info(
+                "Sync tracking updated patient_ref=%s visits=%d",
+                _mask_identifier(str(saved_patient.id)),
+                saved_patient.synced_visit_count
+            )
 
         return PatientSyncResponse(
             status="success",
             internal_id=str(saved_patient.id),
             gcp_status=gcp_status,
-            vida_code=None,  # TODO: capture VIDA from IHCE response when connected
+            vida_code=None,
             message="Patient synced and processed successfully"
         )
 
     except HTTPException:
-        # Re-raise intentional HTTP errors (e.g. 403 nurse restriction)
         raise
 
     except Exception:

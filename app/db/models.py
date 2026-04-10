@@ -1,6 +1,6 @@
 import uuid
 import enum  # stdlib
-from sqlalchemy import Column, String, Boolean, DateTime, Date, Text, JSON, ForeignKey, Enum as SAEnum
+from sqlalchemy import Column, String, Boolean, DateTime, Date, Text, JSON, Integer, ForeignKey, Enum as SAEnum
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.db.base import Base
@@ -93,6 +93,16 @@ class Patient(Base):
     
     # --- Raw Full JSON Storage (authoritative clinical payload) ---
     full_record_json = Column(JSON) 
+    
+    # --- FHIR Sync Tracking ---
+    synced_visit_count = Column(
+        Integer, default=0, nullable=False, server_default="0",
+        comment="Number of medicalHistory visits already sent to FHIR Store"
+    )
+    rda_paciente_sent = Column(
+        Boolean, default=False, nullable=False, server_default="false",
+        comment="Whether the RDA-Paciente bundle has been sent at least once"
+    )
     
     # Audit Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -84,14 +84,14 @@ def find_patient_strict(
 
 def create_or_update_patient(
     db: Session, patient_in: PatientFullRecord, org_id: str, current_role: str
-) -> Patient:
+) -> tuple["Patient", int]:
     """
     Persists patient data into the local PostgreSQL database.
-
-    Strategy:
-    - Check if patient exists by ID.
-    - If exists -> Update allowed fields, protect immutable fields.
-    - If new -> Create record with all RDA-required columns.
+    
+    Returns:
+        Tuple of (Patient instance, previous_visit_count).
+        previous_visit_count is used by the caller to determine which 
+        medicalHistory entries are new and need FHIR bundles generated.
     """
 
     # 1. Check for existence by ID AND Organization (Multi-Tenant Security)
@@ -106,6 +106,7 @@ def create_or_update_patient(
     if existing_patient:
         logger.info(f"Updating existing patient: {existing_patient.id}")
         old_record_dump = existing_patient.full_record_json
+        previous_visit_count = existing_patient.synced_visit_count
 
         # RULE 1: NURSES CANNOT ADD MEDICAL HISTORY
         if current_role == "nurse":
@@ -122,28 +123,14 @@ def create_or_update_patient(
                 )
 
         # RULE 2: PROTECT IMMUTABLE FIELDS (Name, DOB, document, sex)
-        new_record_dump["patientInfo"]["firstName"] = old_record_dump["patientInfo"][
-            "firstName"
-        ]
-        new_record_dump["patientInfo"]["firstLastName"] = old_record_dump["patientInfo"][
-            "firstLastName"
-        ]
-        new_record_dump["patientInfo"]["secondLastName"] = old_record_dump[
-            "patientInfo"
-        ].get("secondLastName")
-        new_record_dump["patientInfo"]["secondName"] = old_record_dump[
-            "patientInfo"
-        ].get("secondName")
+        new_record_dump["patientInfo"]["firstName"] = old_record_dump["patientInfo"]["firstName"]
+        new_record_dump["patientInfo"]["firstLastName"] = old_record_dump["patientInfo"]["firstLastName"]
+        new_record_dump["patientInfo"]["secondLastName"] = old_record_dump["patientInfo"].get("secondLastName")
+        new_record_dump["patientInfo"]["secondName"] = old_record_dump["patientInfo"].get("secondName")
         new_record_dump["patientInfo"]["dob"] = old_record_dump["patientInfo"]["dob"]
-        new_record_dump["patientInfo"]["biologicalSex"] = old_record_dump["patientInfo"][
-            "biologicalSex"
-        ]
-        new_record_dump["patientInfo"]["bloodType"] = old_record_dump["patientInfo"].get(
-            "bloodType"
-        )
-        new_record_dump["patientInfo"]["identification"] = old_record_dump["patientInfo"][
-            "identification"
-        ]
+        new_record_dump["patientInfo"]["biologicalSex"] = old_record_dump["patientInfo"]["biologicalSex"]
+        new_record_dump["patientInfo"]["bloodType"] = old_record_dump["patientInfo"].get("bloodType")
+        new_record_dump["patientInfo"]["identification"] = old_record_dump["patientInfo"]["identification"]
 
         # RULE 3: UPDATE ONLY ALLOWED FIELDS (guardian, address, vaccines)
         existing_patient.guardian_name = patient_in.guardianInfo.name
@@ -159,7 +146,7 @@ def create_or_update_patient(
 
         db.commit()
         db.refresh(existing_patient)
-        return existing_patient
+        return existing_patient, previous_visit_count
 
     else:
         logger.info(f"Creating new patient record: {patient_in.patientId}")
@@ -169,10 +156,8 @@ def create_or_update_patient(
             id=patient_in.patientId,
             organization_id=org_id,
             device_uid=patient_in.device_uid,
-            # RDA identification columns
             document_type=pi.identification.documentType.value,
             document_number=pi.identification.documentNumber,
-            # Demographics
             first_name=pi.firstName,
             last_name=pi.firstLastName,
             second_last_name=pi.secondLastName,
@@ -180,14 +165,14 @@ def create_or_update_patient(
             biological_sex=pi.biologicalSex.value,
             blood_type=pi.bloodType,
             nationality_code=pi.nationalityCode,
-            # Guardian
             guardian_name=patient_in.guardianInfo.name,
             guardian_phone=patient_in.guardianInfo.phone,
-            # Full JSON
             full_record_json=new_record_dump,
+            synced_visit_count=0,
+            rda_paciente_sent=False,
         )
 
         db.add(db_patient)
         db.commit()
         db.refresh(db_patient)
-        return db_patient
+        return db_patient, 0

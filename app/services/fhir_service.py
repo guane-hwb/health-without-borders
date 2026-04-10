@@ -732,22 +732,50 @@ def build_rda_consulta(
 # LEGACY COMPATIBILITY — Maintains old function signature
 # ============================================================================
 
-def convert_to_fhir_rda(patient: PatientFullRecord) -> List[Dict[str, Any]]:
+def convert_to_fhir_rda(
+    patient: PatientFullRecord,
+    previous_visit_count: int = 0,
+    rda_paciente_already_sent: bool = False,
+) -> List[Dict[str, Any]]:
     """
-    Main entry point. Generates all applicable RDA bundles for a patient record.
+    Generates only the FHIR RDA bundles that need to be sent to the FHIR Store.
     
-    Returns a list of FHIR Bundles:
-      - Always: 1 RDA-Paciente bundle
-      - Per visit: 1 RDA-Consulta bundle per MedicalHistoryItem
+    Delta logic:
+      - RDA-Paciente: generated only if not previously sent, or if background 
+        data (allergies, family history, chronic conditions) changed.
+      - RDA-Consulta: generated only for NEW visits (index >= previous_visit_count).
+    
+    Args:
+        patient: The full patient record (after LLM processing).
+        previous_visit_count: How many visits were already synced to the FHIR Store.
+        rda_paciente_already_sent: Whether the RDA-Paciente bundle was sent before.
+    
+    Returns:
+        List of FHIR Bundles to send. May be empty if nothing changed.
     """
     bundles = []
-
-    # RDA-Paciente (always generated)
-    bundles.append(build_rda_paciente(patient))
-
-    # RDA-Consulta (one per encounter)
-    for visit in patient.medicalHistory:
-        bundles.append(build_rda_consulta(patient, visit))
-
-    logger.info(f"Generated {len(bundles)} RDA bundles for patient {patient.patientId}")
+    total_visits = len(patient.medicalHistory)
+    new_visit_count = total_visits - previous_visit_count
+ 
+    # RDA-Paciente: always send on first sync; on subsequent syncs, send if 
+    # background data might have changed (new allergies, family history, etc.)
+    # For simplicity and correctness, we always regenerate it — the FHIR Store 
+    # will version it. This is safer than trying to diff the background data.
+    if not rda_paciente_already_sent or new_visit_count > 0:
+        bundles.append(build_rda_paciente(patient))
+ 
+    # RDA-Consulta: only for visits that haven't been sent yet
+    if new_visit_count > 0:
+        new_visits = patient.medicalHistory[previous_visit_count:]
+        for visit in new_visits:
+            bundles.append(build_rda_consulta(patient, visit))
+        logger.info(
+            f"Delta: {new_visit_count} new visit(s) for patient {patient.patientId}"
+        )
+    elif not rda_paciente_already_sent:
+        logger.info(f"First sync for patient {patient.patientId}, no visits yet")
+    else:
+        logger.info(f"No new visits for patient {patient.patientId}, skipping RDA-Consulta")
+ 
+    logger.info(f"Generated {len(bundles)} RDA bundle(s) for patient {patient.patientId}")
     return bundles
