@@ -124,6 +124,55 @@ def _diag_type_display(dt: DiagnosisType) -> str:
     }.get(dt.value, "Impresión diagnóstica")
 
 
+def _build_section(title: str, code_system: str, code_code: str, code_display: str,
+                   refs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Build a FHIR Composition section that satisfies the FHIRPath constraint:
+    'text.exists() or entry.exists() or section.exists()'
+    
+    When refs is non-empty: includes 'entry' with the references.
+    When refs is empty: includes 'emptyReason' and a 'text' element (no 'entry' key at all).
+    """
+    section: Dict[str, Any] = {
+        "title": title,
+        "code": {"coding": [{"system": code_system, "code": code_code, "display": code_display}]},
+    }
+    if refs:
+        section["entry"] = refs
+    else:
+        section["emptyReason"] = {
+            "coding": [{"system": "http://terminology.hl7.org/CodeSystem/list-empty-reason",
+                        "code": "nilknown"}]
+        }
+        section["text"] = {
+            "status": "empty",
+            "div": '<div xmlns="http://www.w3.org/1999/xhtml">No hay información disponible.</div>'
+        }
+    return section
+
+
+def _build_bundle_shell(bundle_id: str, profile: str, timestamp: str,
+                        composition_entry: Dict, resource_entries: List[Dict]) -> Dict[str, Any]:
+    """
+    Build a FHIR Bundle of type 'document' with the required 'identifier' field.
+    
+    FHIR R4 FHIRPath constraint for document bundles:
+    'type = "document" implies (identifier.system.exists() and identifier.value.exists())'
+    """
+    return {
+        "resourceType": "Bundle",
+        "id": bundle_id,
+        "identifier": {
+            "system": f"{FHIR_RDA_BASE}/bundle-identifier",
+            "value": bundle_id
+        },
+        "meta": {"profile": [profile]},
+        "type": "document",
+        "timestamp": timestamp,
+        "entry": [composition_entry] + resource_entries
+    }
+
+
 # ============================================================================
 # RESOURCE BUILDERS
 # ============================================================================
@@ -337,8 +386,8 @@ def _build_encounter_ambulatory(
     return enc
 
 
-def _build_condition(diag, patient_ref: str, encounter_ref: str) -> Dict[str, Any]:
-    """Build Condition (diagnosis) resource."""
+def _build_condition(diag, patient_ref: str, encounter_ref: str, diagnosis_type: "DiagnosisType") -> Dict[str, Any]:
+    """Build Condition (diagnosis) resource. diagnosis_type comes from the encounter level."""
     coding = [{"system": SYSTEM_CIE10, "code": diag.icd10Code, "display": diag.description}]
     if diag.icd11Code:
         coding.append({"system": SYSTEM_CIE11, "code": diag.icd11Code})
@@ -354,8 +403,8 @@ def _build_condition(diag, patient_ref: str, encounter_ref: str) -> Dict[str, An
             "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionDiagnosisType",
             "valueCoding": {
                 "system": SYSTEM_SISPRO_DIAG_TYPE,
-                "code": diag.diagnosisType.value,
-                "display": _diag_type_display(diag.diagnosisType)
+                "code": diagnosis_type.value,
+                "display": _diag_type_display(diagnosis_type)
             }
         }]
     }
@@ -445,13 +494,11 @@ def build_rda_paciente(patient: PatientFullRecord) -> Dict[str, Any]:
         })
         allergy_refs.append({"reference": allergy_url})
 
-    sections.append({
-        "title": "Alergias e intolerancias declaradas por el paciente",
-        "code": {"coding": [{"system": SYSTEM_LOINC, "code": "48765-2", "display": "Allergies and adverse reactions"}]},
-        "entry": allergy_refs if allergy_refs else [],
-        **({"emptyReason": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/list-empty-reason",
-                                         "code": "nilknown"}]}} if not allergy_refs else {})
-    })
+    sections.append(_build_section(
+        "Alergias e intolerancias declaradas por el paciente",
+        SYSTEM_LOINC, "48765-2", "Allergies and adverse reactions",
+        allergy_refs
+    ))
 
     # Section: Family history (patient-declared)
     family_refs = []
@@ -464,13 +511,11 @@ def build_rda_paciente(patient: PatientFullRecord) -> Dict[str, Any]:
             })
             family_refs.append({"reference": fh_url})
 
-    sections.append({
-        "title": "Antecedentes familiares declarados por el paciente",
-        "code": {"coding": [{"system": SYSTEM_LOINC, "code": "10157-6", "display": "Family history"}]},
-        "entry": family_refs if family_refs else [],
-        **({"emptyReason": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/list-empty-reason",
-                                         "code": "nilknown"}]}} if not family_refs else {})
-    })
+    sections.append(_build_section(
+        "Antecedentes familiares declarados por el paciente",
+        SYSTEM_LOINC, "10157-6", "Family history",
+        family_refs
+    ))
 
     # Section: Chronic conditions / pathological background (patient-declared)
     condition_refs = []
@@ -488,13 +533,11 @@ def build_rda_paciente(patient: PatientFullRecord) -> Dict[str, Any]:
         })
         condition_refs.append({"reference": cond_url})
 
-    sections.append({
-        "title": "Condiciones de salud declaradas por el paciente",
-        "code": {"coding": [{"system": SYSTEM_LOINC, "code": "11450-4", "display": "Problem list"}]},
-        "entry": condition_refs if condition_refs else [],
-        **({"emptyReason": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/list-empty-reason",
-                                         "code": "nilknown"}]}} if not condition_refs else {})
-    })
+    sections.append(_build_section(
+        "Condiciones de salud declaradas por el paciente",
+        SYSTEM_LOINC, "11450-4", "Problem list",
+        condition_refs
+    ))
 
     # 3. Composition (root of the document)
     composition_url = _uuid()
@@ -520,14 +563,13 @@ def build_rda_paciente(patient: PatientFullRecord) -> Dict[str, Any]:
     }
 
     # Build final Bundle — Composition MUST be the first entry
-    bundle: Dict[str, Any] = {
-        "resourceType": "Bundle",
-        "id": str(uuid.uuid4()),
-        "meta": {"profile": [PROFILE_BUNDLE_PATIENT]},
-        "type": "document",
-        "timestamp": now,
-        "entry": [composition] + entries
-    }
+    bundle = _build_bundle_shell(
+        bundle_id=str(uuid.uuid4()),
+        profile=PROFILE_BUNDLE_PATIENT,
+        timestamp=now,
+        composition_entry=composition,
+        resource_entries=entries
+    )
 
     logger.debug(f"RDA-Paciente bundle built with {len(bundle['entry'])} entries")
     return bundle
@@ -600,13 +642,11 @@ def build_rda_consulta(
         entries.append({"fullUrl": a_url, "resource": allergy_resource})
         allergy_refs.append({"reference": a_url})
 
-    sections.append({
-        "title": "Alergias e intolerancias identificadas durante la atención",
-        "code": {"coding": [{"system": SYSTEM_LOINC, "code": "48765-2", "display": "Allergies and adverse reactions"}]},
-        "entry": allergy_refs if allergy_refs else [],
-        **({"emptyReason": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/list-empty-reason",
-                                         "code": "nilknown"}]}} if not allergy_refs else {})
-    })
+    sections.append(_build_section(
+        "Alergias e intolerancias identificadas durante la atención",
+        SYSTEM_LOINC, "48765-2", "Allergies and adverse reactions",
+        allergy_refs
+    ))
 
     # Section: Diagnoses
     diag_refs = []
@@ -614,17 +654,15 @@ def build_rda_consulta(
         d_url = _uuid()
         entries.append({
             "fullUrl": d_url,
-            "resource": _build_condition(diag, patient_url, encounter_url)
+            "resource": _build_condition(diag, patient_url, encounter_url, visit.diagnosisType)
         })
         diag_refs.append({"reference": d_url})
 
-    sections.append({
-        "title": "Diagnósticos de problemas de salud",
-        "code": {"coding": [{"system": SYSTEM_LOINC, "code": "11450-4", "display": "Problem list"}]},
-        "entry": diag_refs if diag_refs else [],
-        **({"emptyReason": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/list-empty-reason",
-                                         "code": "nilknown"}]}} if not diag_refs else {})
-    })
+    sections.append(_build_section(
+        "Diagnósticos de problemas de salud",
+        SYSTEM_LOINC, "11450-4", "Problem list",
+        diag_refs
+    ))
 
     # Section: Risk factors
     if visit.riskFactors:
@@ -678,14 +716,13 @@ def build_rda_consulta(
     }
 
     # Build final Bundle
-    bundle: Dict[str, Any] = {
-        "resourceType": "Bundle",
-        "id": str(uuid.uuid4()),
-        "meta": {"profile": [PROFILE_BUNDLE_AMB]},
-        "type": "document",
-        "timestamp": now,
-        "entry": [composition] + entries
-    }
+    bundle = _build_bundle_shell(
+        bundle_id=str(uuid.uuid4()),
+        profile=PROFILE_BUNDLE_AMB,
+        timestamp=now,
+        composition_entry=composition,
+        resource_entries=entries
+    )
 
     logger.debug(f"RDA-Consulta bundle built with {len(bundle['entry'])} entries")
     return bundle

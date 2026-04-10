@@ -223,10 +223,15 @@ class GuardianInfo(BaseModel):
 # ============================================================================
 
 class FamilyHistoryItem(BaseModel):
-    """Antecedente familiar estructurado — Res. 866/2021 Elems. 47.3, 47.4."""
-    conditionCie10Code: str = Field(..., description="Código CIE-10 de la condición familiar (Elem. 47.3)")
-    conditionCie11Code: Optional[str] = Field(None, description="Código CIE-11 (opcional)")
-    conditionDescription: Optional[str] = Field(None, description="Descripción de la condición")
+    """
+    Antecedente familiar estructurado — Res. 866/2021 Elems. 47.3, 47.4.
+    
+    Frontend sends: conditionDescription (required) + relationship (required).
+    Backend LLM resolves: conditionCie10Code + conditionCie11Code.
+    """
+    conditionCie10Code: Optional[str] = Field(None, description="Código CIE-10 — resuelto por LLM (Elem. 47.3)")
+    conditionCie11Code: Optional[str] = Field(None, description="Código CIE-11 — resuelto por LLM (opcional)")
+    conditionDescription: str = Field(..., description="Descripción de la condición (entrada del frontend)")
     relationship: FamilyRelationship = Field(..., description="Parentesco (Elem. 47.4)")
 
 
@@ -289,14 +294,15 @@ class ClinicalEvaluation(BaseModel):
 
 
 class DiagnosisItem(BaseModel):
-    """Diagnóstico estructurado con codificación CIE-10/11 — Res. 866/2021 Elems. 37.1-37.3."""
+    """
+    Diagnóstico estructurado con codificación CIE-10/11 — Res. 866/2021 Elems. 37.1, 37.2.
+    
+    Todos los campos son resueltos por el LLM a partir de la evaluación clínica.
+    El tipo de diagnóstico (Elem. 37.3) se define a nivel del encuentro en MedicalHistoryItem.
+    """
     icd10Code: str = Field(..., description="Código diagnóstico CIE-10 (Elem. 37.1)")
     icd11Code: Optional[str] = Field(None, description="Código diagnóstico CIE-11 (opcional)")
     description: str = Field(..., description="Nombre del diagnóstico (Elem. 37.2)")
-    diagnosisType: DiagnosisType = Field(
-        default=DiagnosisType.IMPRESION_DIAGNOSTICA,
-        description="Tipo de diagnóstico (Elem. 37.3)"
-    )
 
 
 class RiskFactor(BaseModel):
@@ -368,6 +374,11 @@ class MedicalHistoryItem(BaseModel):
     # Clinical content
     clinicalEvaluation: ClinicalEvaluation = Field(default_factory=ClinicalEvaluation)
     diagnosis: List[DiagnosisItem] = Field(default_factory=list)
+    diagnosisType: DiagnosisType = Field(
+        default=DiagnosisType.IMPRESION_DIAGNOSTICA,
+        description="Tipo de diagnóstico principal del encuentro (Elem. 37.3). "
+                    "El médico selecciona: 01=Impresión diagnóstica, 02=Confirmado nuevo, 03=Confirmado repetido."
+    )
 
     # Discharge (Elem. 41)
     dischargeDisposition: Optional[DischargeDisposition] = Field(None, description="Condición al egreso (Elem. 41)")

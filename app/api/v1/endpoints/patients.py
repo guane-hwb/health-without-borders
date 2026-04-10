@@ -159,21 +159,30 @@ def sync_patient(
         )
     
     try:
+        # --- LLM PROCESSING: Diagnoses (from clinical evaluation notes) ---
         for visit in patient_data.medicalHistory:
-            # If diagnosis is missing, use the LLM to extract it from the clinical evaluation text fields
             if not visit.diagnosis:
                 eval_data = visit.clinicalEvaluation
-                
-                # Requests the medical LLM to analyze the clinical evaluation and extract potential diagnoses
                 ai_diagnoses = medical_llm_processor.extract_diagnoses(
                     history=eval_data.historyOfCurrentIllness,
                     physical=eval_data.generalPhysicalExamination,
                     systems=eval_data.systemsExamination,
                     plan=eval_data.treatmentPlanObservations
                 )
-                
-                # Update the visit's diagnosis field with the LLM's output.
                 visit.diagnosis = ai_diagnoses
+
+        # --- LLM PROCESSING: Family history ICD coding (from condition descriptions) ---
+        if patient_data.backgroundHistory and patient_data.backgroundHistory.familyHistory:
+            for fh_item in patient_data.backgroundHistory.familyHistory:
+                if fh_item.conditionDescription and not fh_item.conditionCie10Code:
+                    coded = medical_llm_processor.code_family_history_item(
+                        fh_item.conditionDescription
+                    )
+                    fh_item.conditionCie10Code = coded.get("icd10Code")
+                    fh_item.conditionCie11Code = coded.get("icd11Code")
+                    # Enrich description with the official term from the LLM
+                    if coded.get("description"):
+                        fh_item.conditionDescription = coded["description"]
 
         # 1. Save DB
         logger.info(

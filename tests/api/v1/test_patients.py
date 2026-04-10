@@ -128,9 +128,9 @@ MOCK_PATIENT_WITH_VISIT = {
                 {
                     "icd10Code": "J06.9",
                     "description": "Infección aguda de las vías respiratorias superiores",
-                    "diagnosisType": "01",
                 }
             ],
+            "diagnosisType": "01",
             "riskFactors": [],
             "incapacity": None,
             "payer": None,
