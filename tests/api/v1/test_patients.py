@@ -286,13 +286,13 @@ def test_sync_delta_only_sends_new_bundles(client: TestClient, db_session):
     assert first_call_count == 2   # RDA-Paciente + 1 RDA-Consulta
     assert second_call_count == 2  # RDA-Paciente (refreshed) + 1 NEW RDA-Consulta only
 
-    # Verify DB tracking updated
-    db_session.refresh(patient)
+    # Verify DB tracking updated — re-query to get fresh data from DB
+    patient = db_session.query(Patient).filter(Patient.id == "TEST-UNIT-002").first()
     assert patient.synced_visit_count == 2
 
 
-def test_sync_no_new_visits_skips_consulta_bundles(client: TestClient):
-    """Re-syncing with same data only sends RDA-Paciente, no duplicate consultas."""
+def test_sync_no_new_visits_skips_all_bundles(client: TestClient):
+    """Re-syncing with same data generates zero bundles — nothing changed."""
     _override_doctor()
 
     # First sync with 1 visit
@@ -309,8 +309,8 @@ def test_sync_no_new_visits_skips_consulta_bundles(client: TestClient):
     _clear_overrides()
 
     assert response.status_code == 201
-    # No new visits → RDA-Paciente still sent (refreshed), but no RDA-Consulta
-    assert resync_call_count == 1
+    # No new visits + RDA-Paciente already sent → 0 bundles (nothing to do)
+    assert resync_call_count == 0
 
 
 def test_sync_gcp_failure_does_not_update_tracking(client: TestClient, db_session):
