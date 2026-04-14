@@ -1,5 +1,6 @@
+import asyncio
 import logging
-from typing import List, Optional
+from typing import Optional
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
@@ -13,7 +14,7 @@ from app.services.llm.service import medical_llm_processor
 from app.services.patient_service import (
     create_or_update_patient,
     get_patient_by_device_uid, 
-    search_patients_advanced
+    find_patient_strict
 )
 from app.services.fhir_service import convert_to_fhir_rda
 from app.services.gcp_service import send_to_google_healthcare
@@ -119,7 +120,7 @@ def get_patient_by_device_uid_scan(
 
 
 @router.post("/sync", response_model=PatientSyncResponse, status_code=status.HTTP_201_CREATED)
-def sync_patient(
+async def sync_patient(
     patient_data: PatientFullRecord, 
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -128,21 +129,20 @@ def sync_patient(
     Synchronize a patient record from the mobile app to the cloud.
 
     **Process flow:**
-    1. If any visit in `medicalHistory` is missing a diagnosis, the clinical evaluation
-    text is automatically analyzed by a medical LLM (Gemini) to suggest one.
-    2. The record is persisted or updated in PostgreSQL.
-    3. The record is converted to HL7v2 format.
-    4. The HL7v2 message is transmitted to the Google Cloud Healthcare API.
+    1. If any NEW visit in `medicalHistory` is missing a diagnosis, the clinical 
+       evaluation text is analyzed by a medical LLM (Gemini) to suggest one.
+    2. If any `familyHistory` item lacks ICD codes, the LLM resolves them.
+    3. The record is persisted or updated in PostgreSQL.
+    4. Only NEW FHIR RDA Bundles are generated (delta logic):
+       - RDA-Paciente: on first sync or when background data changes.
+       - RDA-Consulta: only for visits not previously sent.
+    5. Bundles are transmitted to the Google Cloud Healthcare API.
+    6. Sync tracking counters are updated in the database.
 
     **Nurse restriction:** A `nurse` may call this endpoint to append vaccination records,
     but cannot add new entries to `medicalHistory`. Attempts to do so will return `403`.
 
     **Allowed roles:** `doctor`, `nurse`.
-
-    **Responses:**
-    - `201`: Sync successful. Returns internal ID and GCP transmission status.
-    - `403`: Caller is not `doctor` or `nurse`.
-    - `500`: Internal error during processing (DB, HL7 conversion, or GCP transmission).
     """
     if current_user.role not in {UserRole.doctor, UserRole.nurse}:
         logger.warning(
@@ -157,23 +157,33 @@ def sync_patient(
         )
     
     try:
+        # --- LLM PROCESSING: Only for visits that don't have diagnoses yet ---
         for visit in patient_data.medicalHistory:
-            # If diagnosis is missing, use the LLM to extract it from the clinical evaluation text fields
             if not visit.diagnosis:
                 eval_data = visit.clinicalEvaluation
-                
-                # Requests the medical LLM to analyze the clinical evaluation and extract potential diagnoses
-                ai_diagnoses = medical_llm_processor.extract_diagnoses(
+                ai_diagnoses = await asyncio.to_thread(
+                    medical_llm_processor.extract_diagnoses,
                     history=eval_data.historyOfCurrentIllness,
                     physical=eval_data.generalPhysicalExamination,
                     systems=eval_data.systemsExamination,
                     plan=eval_data.treatmentPlanObservations
                 )
-                
-                # Update the visit's diagnosis field with the LLM's output.
                 visit.diagnosis = ai_diagnoses
 
-        # 1. Save DB
+        # --- LLM PROCESSING: Family history ICD coding ---
+        if patient_data.backgroundHistory and patient_data.backgroundHistory.familyHistory:
+            for fh_item in patient_data.backgroundHistory.familyHistory:
+                if fh_item.conditionDescription and not fh_item.conditionCie10Code:
+                    coded = await asyncio.to_thread(
+                        medical_llm_processor.code_family_history_item,
+                        fh_item.conditionDescription
+                    )
+                    fh_item.conditionCie10Code = coded.get("icd10Code")
+                    fh_item.conditionCie11Code = coded.get("icd11Code")
+                    if coded.get("description"):
+                        fh_item.conditionDescription = coded["description"]
+
+        # 1. Save to DB — returns (patient, previous_visit_count)
         logger.info(
             "Patient sync started actor_id=%s role=%s org_id=%s patient_ref=%s",
             current_user.id,
@@ -181,32 +191,63 @@ def sync_patient(
             current_user.organization_id,
             _mask_identifier(patient_data.patientId),
         )
-        saved_patient = create_or_update_patient(db, patient_data, current_user.organization_id, current_user.role)
+        saved_patient, previous_visit_count = create_or_update_patient(
+            db, patient_data, current_user.organization_id, current_user.role
+        )
         
-        # 2. FHIR RDA Conversion
-        fhir_bundle = convert_to_fhir_rda(patient_data)
-        logger.debug("Generated FHIR RDA Bundle")
+        # 2. FHIR RDA Conversion — DELTA: only new bundles
+        fhir_bundles = convert_to_fhir_rda(
+            patient_data,
+            previous_visit_count=previous_visit_count,
+            rda_paciente_already_sent=saved_patient.rda_paciente_sent,
+        )
+        logger.debug(f"Generated {len(fhir_bundles)} FHIR RDA Bundle(s) (delta)")
 
-        # 3. Send to GCP
-        gcp_response = send_to_google_healthcare(fhir_bundle)
-        
-        gcp_status = gcp_response.get("status", "unknown")
-        
-        if gcp_status != "success":
-            logger.warning(
-                "Patient sync GCP warning patient_ref=%s status=%s",
+        # 3. Send each Bundle to GCP
+        gcp_status = "success" if not fhir_bundles else "unknown"
+        all_success = True
+        for i, bundle in enumerate(fhir_bundles):
+            gcp_response = await asyncio.to_thread(send_to_google_healthcare, bundle)
+            bundle_status = gcp_response.get("status", "unknown")
+            
+            if bundle_status != "success":
+                logger.warning(
+                    "Patient sync GCP warning patient_ref=%s bundle=%d status=%s",
+                    _mask_identifier(str(saved_patient.id)),
+                    i,
+                    bundle_status,
+                )
+                gcp_status = bundle_status
+                all_success = False
+            else:
+                if gcp_status == "unknown":
+                    gcp_status = "success"
+                logger.info(
+                    "Patient sync GCP success patient_ref=%s bundle=%d",
+                    _mask_identifier(str(saved_patient.id)), i
+                )
+
+        # 4. Update sync tracking ONLY if GCP succeeded
+        if all_success and fhir_bundles:
+            saved_patient.synced_visit_count = len(patient_data.medicalHistory)
+            saved_patient.rda_paciente_sent = True
+            db.commit()
+            logger.info(
+                "Sync tracking updated patient_ref=%s visits=%d",
                 _mask_identifier(str(saved_patient.id)),
-                gcp_status,
+                saved_patient.synced_visit_count
             )
-        else:
-            logger.info("Patient sync GCP success patient_ref=%s", _mask_identifier(str(saved_patient.id)))
 
         return PatientSyncResponse(
             status="success",
             internal_id=str(saved_patient.id),
             gcp_status=gcp_status,
+            vida_code=None,
             message="Patient synced and processed successfully"
         )
+
+    except HTTPException:
+        raise
 
     except Exception:
         logger.exception(
@@ -220,62 +261,76 @@ def sync_patient(
             detail="Internal Server Error processing patient data."
         )
 
-@router.get("/search", response_model=List[PatientFullRecord], status_code=status.HTTP_200_OK)
+@router.get("/search", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
 @limiter.limit(settings.RATE_LIMIT_PATIENT_SEARCH)
-def search_patients(
+def search_patient(
     request: Request,
-    first_name: str = Query(..., min_length=2, description="Patient's first name"),
-    last_name: str = Query(..., min_length=2, description="Patient's last name"),
-    birth_date: date = Query(..., description="Patient's date of birth (YYYY-MM-DD)"),
-    guardian_name: Optional[str] = Query(None, min_length=3, description="Guardian's full or partial name"),
+    document_number: str = Query(..., min_length=3, description="Número de documento de identidad del paciente (Res. 866 Elem. 2.2)"),
+    birth_date: date = Query(..., description="Fecha de nacimiento del paciente (YYYY-MM-DD)"),
+    first_name: str = Query(..., min_length=2, description="Primer nombre del paciente"),
+    last_name: str = Query(..., min_length=2, description="Primer o segundo apellido del paciente"),
+    guardian_name: Optional[str] = Query(None, min_length=3, description="Nombre completo del acudiente (obligatorio si el paciente tiene guardián registrado)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Search for patients by demographic data within the caller's organization.
+    Strict patient lookup by identity — returns exactly one patient or 404.
 
-    All three parameters are mandatory to prevent overly broad queries on sensitive data.
-    Results are strictly scoped to the caller's organization.
+    This endpoint enforces strict matching to protect patient data privacy 
+    in compliance with Ley 1581 de 2012 (Habeas Data) and Ley 1751 de 2015.
+    It will **never** return a list of patients.
 
-    **Required parameters:**
-    - `first_name` (min 2 chars)
-    - `last_name` (min 2 chars)
-    - `birth_date` (format: YYYY-MM-DD)
+    **All four parameters are mandatory:**
+    - `document_number`: Exact match against the patient's identity document.
+    - `birth_date`: Exact match (YYYY-MM-DD).
+    - `first_name`: Exact match (case-insensitive).
+    - `last_name`: Exact match against first OR second last name (case-insensitive).
 
-    **Optional parameters:**
-    - `guardian_name` (min 3 chars): Narrows results when multiple patients share the same name and DOB.
+    **Conditional parameter:**
+    - `guardian_name`: If the patient has a registered guardian, providing this 
+      adds an extra layer of verification. Partial match is allowed.
 
-    **Allowed roles:** `doctor`, `nurse`.
+    **Security:**
+    - If the criteria match more than one patient (ambiguous), the endpoint 
+      returns 404 — it will not expose either record.
+    - Results are strictly scoped to the caller's organization (multi-tenant).
+
+    **Allowed roles:** `doctor`, `nurse`, `org_admin`.
 
     **Responses:**
-    - `200`: List of matching patient records (empty list if no matches).
-    - `403`: Caller is not `doctor` or `nurse`.
-    - `422`: One or more mandatory parameters are missing or malformed.
+    - `200`: Patient record found and returned.
+    - `403`: Caller is not authorized.
+    - `404`: No patient found matching the provided criteria.
+    - `422`: Missing or malformed mandatory parameters.
     """
     if current_user.role not in {UserRole.doctor, UserRole.nurse, UserRole.org_admin}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access Denied: Only medical staff can view patient records."
         )
-    
+
     logger.info(
-        "Patient search request actor_id=%s role=%s org_id=%s",
+        "Patient strict lookup actor_id=%s role=%s org_id=%s doc_ref=%s",
         current_user.id,
         current_user.role,
         current_user.organization_id,
+        _mask_identifier(document_number),
     )
-    
-    results = search_patients_advanced(
-        db=db, 
+
+    patient = find_patient_strict(
+        db=db,
         org_id=current_user.organization_id,
-        first_name=first_name, 
-        last_name=last_name, 
-        birth_date=birth_date, 
+        document_number=document_number,
+        birth_date=birth_date,
+        first_name=first_name,
+        last_name=last_name,
         guardian_name=guardian_name,
-        limit=10
     )
-    
-    if not results:
-        return []
-        
-    return [p.full_record_json for p in results]
+
+    if not patient:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No patient found matching the provided criteria."
+        )
+
+    return patient.full_record_json

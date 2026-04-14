@@ -35,19 +35,56 @@ You are an expert medical coder and clinical data auditor. Your task is to analy
 
     Notes: "Tos seca y fiebre. Infección respiratoria."
     Output: [{"icd10Code": "J06.9", "icd11Code": "CA0Z", "description": "Infección aguda de las vías respiratorias superiores, no especificada"}]
-
-    Notes: "Prurito intenso en pliegues. Brote agudo de dermatitis atópica."
-    Output: [{"icd10Code": "L20.9", "icd11Code": "EA80.Z", "description": "Dermatitis atópica, no especificada"}]
 """
 
+
+SYSTEM_INSTRUCTION_FAMILY_HISTORY = """
+## Role
+You are an expert medical coder. Your task is to map medical condition descriptions to WHO ICD-10 (Version: 2019) and ICD-11 Mortality and Morbidity Statistics (MMS) codes. These conditions are reported as **family medical history** by a patient, not as active diagnoses.
+
+---
+
+## Rules
+    1. **Use Specific Valid Codes**: Use the most specific valid terminal WHO ICD-10 code. DO NOT invent subcategories.
+    2. **ICD-11 Accuracy & No Guessing**: If you do not have 100 percent certainty of the exact WHO ICD-11 MMS code, return `null` for `icd11Code`.
+    3. **No Clinical Modifications**: Avoid US-specific ICD-10-CM codes. Stick to WHO 3 or 4 character codes.
+    4. **Single Code Per Condition**: Each input is a single condition description. Map it to exactly one ICD-10 code.
+    5. **Description in Spanish**: Return the official medical description in professional medical Spanish.
+    6. **Return Format**: Return ONLY the structured JSON object matching the exact schema.
+
+---
+
+## Examples
+
+    Input: "Diabetes"
+    Output: {"icd10Code": "E11", "icd11Code": "5A11", "description": "Diabetes mellitus tipo 2"}
+
+    Input: "Hipertensión"
+    Output: {"icd10Code": "I10", "icd11Code": "BA00.Z", "description": "Hipertensión esencial (primaria)"}
+
+    Input: "Cáncer de mama"
+    Output: {"icd10Code": "C50.9", "icd11Code": "2C6Z", "description": "Tumor maligno de la mama, no especificado"}
+
+    Input: "Glaucoma"
+    Output: {"icd10Code": "H40.9", "icd11Code": "9A61.Z", "description": "Glaucoma, no especificado"}
+"""
+
+
 def build_clinical_prompt(history: str, physical: str, systems: str, plan: str) -> str:
-    """Builds the prompt in English to match the system instruction context."""
-    
+    """Builds the prompt for extracting diagnoses from clinical evaluation notes."""
     return f"""Please extract the diagnoses from the following clinical evaluation:
-    
+
 [CLINICAL NOTES]
 History of Current Illness: {history or 'Not specified'}
 General Physical Examination: {physical or 'Not specified'}
 Systems Examination: {systems or 'Not specified'}
 Treatment Plan / Observations: {plan or 'Not specified'}
+"""
+
+
+def build_family_history_prompt(condition_description: str) -> str:
+    """Builds the prompt for coding a single family history condition."""
+    return f"""Map the following family medical history condition to ICD-10 and ICD-11 codes:
+
+Condition: {condition_description}
 """

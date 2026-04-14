@@ -1,148 +1,109 @@
-# Cloud Healthcare API & HL7v2 Configuration
+# FHIR Store Configuration — Google Cloud Healthcare API
 
-This document details the configuration of the **Google Cloud Healthcare API**, specifically the HL7v2 Store used to ingest, store, and manage clinical messages from external hospital systems (e.g., SIP/EHR) in the **Health Without Borders** project.
+This document details the configuration of the **Google Cloud Healthcare API FHIR Store** used to ingest and manage RDA bundles (Resolution 1888/2025) in the Health Without Borders project.
 
-## ⚙️ Environment Variables Reference
-
-Throughout this guide, replace the following placeholders `<...>` with your specific project details:
-
-* `<GCP_PROJECT_ID>`: Your Google Cloud Project ID.
-* `<REGION>`: The GCP region for your resources (e.g., `us-central1`).
-* `<DATASET_NAME>`: The name of your Healthcare Dataset (e.g., `hwb-dataset`).
-* `<HL7_STORE_NAME>`: The specific HL7v2 data store (e.g., `hwb-hl7-store`).
-* `<PUBSUB_TOPIC>`: The topic name for real-time notifications (e.g., `hl7-ingestion-topic`).
-* `<SERVICE_ACCOUNT_EMAIL>`: The identity running the backend service.
+> **Note:** The current implementation uses GCP as the FHIR Store backend. A future abstraction layer will allow deploying with alternative backends (Azure FHIR, AWS HealthLake, HAPI FHIR) for open-source flexibility.
 
 ---
 
 ## 1. Architecture Overview
 
+The interoperability layer uses a hierarchical structure in Google Cloud:
 
-
-The interoperability layer consists of a hierarchical structure hosted in Google Cloud, designed for compliance and event-driven processing:
-
-1.  **Dataset:** A top-level container for all healthcare data (FHIR, HL7v2, DICOM) located in a specific region to enforce data residency laws.
-2.  **HL7v2 Store:** A specific data store within the dataset designed to ingest, parse, and validate HL7v2 pipe-delimited messages.
-3.  **Pub/Sub (Optional but Recommended):** A messaging queue that triggers asynchronous backend workflows whenever a new medical record is ingested.
+1. **Dataset** (`hwb-dataset`): Top-level container in `us-central1` for data residency compliance.
+2. **FHIR Store** (`hwb-fhir-store`): R4-compliant store that receives document bundles via POST.
+3. **Authentication**: GCP Application Default Credentials with `roles/healthcare.fhirStoreEditor` scope.
 
 ---
 
 ## 2. Resource Provisioning
 
 ### 2.1. Enable the API
-The Cloud Healthcare API must be enabled in your GCP project.
 
 ```bash
 gcloud services enable healthcare.googleapis.com
-
 ```
 
 ### 2.2. Create the Dataset
 
-The dataset acts as the administrative boundary for compliance (HIPAA/GDPR) and data residency.
-
 ```bash
-gcloud healthcare datasets create <DATASET_NAME> \
-    --location=<REGION>
-
+gcloud healthcare datasets create hwb-dataset \
+    --location=us-central1
 ```
 
-### 2.3. Create the Pub/Sub Topic (Event-Driven Integration)
-
-To allow the backend to react to new messages instantly (without polling), create a notification topic.
+### 2.3. Create the FHIR Store
 
 ```bash
-gcloud pubsub topics create <PUBSUB_TOPIC>
-
-```
-
-### 2.4. Create the HL7v2 Store
-
-Configure the store to accept and parse messages, and link it to the Pub/Sub topic created above.
-
-* **Parser Version:** V3 (Recommended for strict validation and better compatibility).
-* **Reject Duplicates:** Disabled (allows updates/corrections to existing messages).
-
-```bash
-gcloud healthcare hl7v2-stores create <HL7_STORE_NAME> \
-    --dataset=<DATASET_NAME> \
-    --location=<REGION> \
-    --parser-version=V3 \
-    --pubsub-topic=projects/<GCP_PROJECT_ID>/topics/<PUBSUB_TOPIC>
-
+gcloud healthcare fhir-stores create hwb-fhir-store \
+    --dataset=hwb-dataset \
+    --location=us-central1 \
+    --version=R4 \
+    --enable-referential-integrity \
+    --enable-resource-versioning
 ```
 
 ---
 
-## 3. Access Control (IAM)
+## 3. Store Configuration
 
-To allow the Backend API (Cloud Run) or external ingestion scripts to write messages to the store, specific Identity and Access Management (IAM) roles are required.
+| Setting | Value | Rationale |
+|---|---|---|
+| FHIR version | R4 | Required by IHCE IG |
+| Referential integrity | Enabled | Bundles contain internal references that must resolve |
+| Resource versioning | Enabled | RDA-Paciente is re-sent on updates; versioning preserves history |
+| Strict search | Disabled | Lenient mode ignores unknown search parameters during development |
+| Complex reference analysis | Enabled | Extensions use references in complex data types |
+| Profile validation | Disabled | Enable after importing the RDA Implementation Guide profiles |
+| BigQuery streaming | Not configured | Can be enabled later for analytics dashboards |
+| Pub/Sub notifications | Not configured | Can be enabled for event-driven workflows |
 
-### 3.1. Required Roles
+---
 
-The identity running the ingestion process must have the following roles:
+## 4. IAM Configuration
 
-| Role Name | Role ID | Purpose |
-| --- | --- | --- |
-| **Healthcare HL7v2 Store Editor** | `roles/healthcare.hl7V2StoreEditor` | Allows creating, ingesting, and deleting HL7v2 messages. |
-| **Healthcare Dataset Viewer** | `roles/healthcare.datasetViewer` | Allows listing datasets and stores to verify their existence. |
-
-### 3.2. Assigning Roles via CLI
-
-Bind the necessary permissions to your service account:
+The backend authenticates using a service account with minimal permissions:
 
 ```bash
-gcloud projects add-iam-policy-binding <GCP_PROJECT_ID> \
-    --member="serviceAccount:<SERVICE_ACCOUNT_EMAIL>" \
-    --role="roles/healthcare.hl7V2StoreEditor"
-
-gcloud projects add-iam-policy-binding <GCP_PROJECT_ID> \
-    --member="serviceAccount:<SERVICE_ACCOUNT_EMAIL>" \
-    --role="roles/healthcare.datasetViewer"
-
+gcloud healthcare fhir-stores add-iam-policy-binding hwb-fhir-store \
+    --dataset=hwb-dataset \
+    --location=us-central1 \
+    --member="serviceAccount:hwb-backend@PROJECT_ID.iam.gserviceaccount.com" \
+    --role="roles/healthcare.fhirResourceEditor"
 ```
 
 ---
 
-## 4. Message Ingestion & Verification
+## 5. Bundle Ingestion
 
-### 4.1. Ingestion Endpoint (REST API)
-
-The standard REST endpoint for creating (ingesting) a message follows this structure:
-
-`POST https://healthcare.googleapis.com/v1/projects/<GCP_PROJECT_ID>/locations/<REGION>/datasets/<DATASET_NAME>/hl7V2Stores/<HL7_STORE_NAME>/messages`
-
-### 4.2. Base64 Encoding Requirement
-
-Unlike standard REST APIs, the Healthcare API requires the raw HL7 message content to be **Base64 encoded** within the JSON payload.
-
-**Example Payload (`message.json`):**
-
-```json
-{
-  "message": {
-    "data": "TVnDiA... (Base64 encoded MSH segment)..."
-  }
-}
+RDA bundles are sent as `POST` requests to the FHIR Store's Bundle endpoint:
 
 ```
-
-### 4.3. Manual Verification (cURL)
-
-To list ingested messages and verify connectivity from a local terminal authorized via `gcloud`:
-
-```bash
-curl -X GET \
-    -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-    "[https://healthcare.googleapis.com/v1/projects/](https://healthcare.googleapis.com/v1/projects/)<GCP_PROJECT_ID>/locations/<REGION>/datasets/<DATASET_NAME>/hl7V2Stores/<HL7_STORE_NAME>/messages?view=FULL"
-
+POST https://healthcare.googleapis.com/v1/projects/{project}/locations/{location}/datasets/{dataset}/fhirStores/{store}/fhir/Bundle
+Content-Type: application/fhir+json; charset=utf-8
+Authorization: Bearer {token}
 ```
+
+Each bundle is a FHIR `document` type with a `Composition` as the first entry. The store validates FHIRPath constraints before accepting the bundle.
 
 ---
 
-## 5. Operations & Best Practices
+## 6. Environment Variables
 
-* **Monitoring Dashboard:** Message counts, ingestion errors, and latency can be monitored visually in the [Cloud Healthcare Console](https://console.cloud.google.com/healthcare/browser).
-* **Data Export:** Raw messages can be periodically exported to **Google Cloud Storage (GCS)** buckets via the console for long-term auditing, backup, or bulk analysis.
-* **Audit Compliance:** Access logs (who viewed or ingested a message) are automatically generated by Google Cloud Audit Logging. Ensure Data Access audit logs are enabled in your project's IAM settings.
-* **Error Handling:** If an HL7 message fails validation (e.g., missing mandatory MSH segments), the API will return a `400 Bad Request`. Ensure your upstream systems are capturing and alerting on these rejections.
+| Variable | Description | Example |
+|---|---|---|
+| `GCP_PROJECT_ID` | Google Cloud project ID | `migrants-unicef` |
+| `GCP_LOCATION` | Dataset region | `us-central1` |
+| `GCP_DATASET_ID` | Healthcare dataset name | `hwb-dataset` |
+| `GCP_FHIR_STORE_ID` | FHIR store name | `hwb-fhir-store` |
+
+---
+
+## 7. Future: Profile Validation
+
+To enable validation against the IHCE Implementation Guide profiles:
+
+1. Package the StructureDefinition, ValueSet, and CodeSystem resources from the IG as a FHIR `transaction` bundle.
+2. Import the bundle into the FHIR Store.
+3. Enable profile validation, required field validation, reference type validation, and FHIRPath validation in the store settings.
+
+This will cause the store to reject bundles that don't conform to the RDA profiles.
