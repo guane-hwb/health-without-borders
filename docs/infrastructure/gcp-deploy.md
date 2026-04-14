@@ -8,7 +8,7 @@ The system utilizes a fully serverless, highly available, and containerized arch
 
 * **Compute:** [Google Cloud Run](https://cloud.google.com/run) (Stateless containers).
 * **Database:** [Google Cloud SQL](https://cloud.google.com/sql) (Managed PostgreSQL 15).
-* **Interoperability:** [Cloud Healthcare API](https://cloud.google.com/healthcare-api) (HL7v2 Message Store & FHIR translation).
+* **Interoperability:** [Cloud Healthcare API](https://cloud.google.com/healthcare-api) (FHIR R4 Store for RDA bundles).
 * **Security:** [Secret Manager](https://cloud.google.com/secret-manager) (Secure vault for passwords and keys).
 * **Registry:** [Artifact Registry](https://cloud.google.com/artifact-registry) (Docker image storage).
 * **CI/CD:** [Cloud Build](https://cloud.google.com/build) (Serverless build pipeline).
@@ -170,14 +170,17 @@ gcloud secrets add-iam-policy-binding hwb-secret-key \
 
 ## 5. Healthcare & Artifact Registry Setup
 
-**1. Healthcare Interoperability:**
+**1. Healthcare Interoperability (FHIR R4 Store):**
 
 ```bash
 gcloud healthcare datasets create <DATASET_NAME> --location=<REGION>
 
-gcloud healthcare hl7v2-stores create <HL7_STORE_NAME> \
+gcloud healthcare fhir-stores create <FHIR_STORE_NAME> \
     --dataset=<DATASET_NAME> \
-    --location=<REGION>
+    --location=<REGION> \
+    --version=R4 \
+    --enable-referential-integrity \
+    --enable-resource-versioning
 
 ```
 
@@ -221,13 +224,7 @@ gcloud run deploy <CLOUD_RUN_SERVICE> \
     --set-env-vars="GCP_PROJECT_ID=<GCP_PROJECT_ID>" \
     --set-env-vars="GCP_LOCATION=<REGION>" \
     --set-env-vars="GCP_DATASET_ID=<DATASET_NAME>" \
-    --set-env-vars="GCP_HL7_STORE_ID=<HL7_STORE_NAME>" \
-    --set-env-vars="HL7_SENDING_APP=HWB_BACKEND" \
-    --set-env-vars="HL7_SENDING_FACILITY=HWB_FIELD_CLINIC" \
-    --set-env-vars="HL7_RECEIVING_APP=GCP_HEALTHCARE" \
-    --set-env-vars="HL7_RECEIVING_FACILITY=GCP_DATALAKE" \
-    --set-env-vars="HL7_PROCESSING_ID=D" \
-    --set-env-vars="HL7_VERSION_ID=2.5.1" \
+    --set-env-vars="GCP_FHIR_STORE_ID=<FHIR_STORE_NAME>" \
     --update-secrets="DB_PASS=hwb-db-pass:latest,SECRET_KEY=hwb-secret-key:latest"
 
 ```
@@ -314,5 +311,5 @@ gcloud sql instances patch <DB_INSTANCE_NAME> --no-assign-ip
 
 * **Application Logs:** [Cloud Run Console](https://console.cloud.google.com/run) -> "Logs" tab.
 * **Database Performance:** [Cloud SQL Console](https://console.cloud.google.com/sql).
-* **HL7v2 Metrics:** [Cloud Healthcare API Dashboard](https://console.cloud.google.com/healthcare).
+* **FHIR Store Metrics:** [Cloud Healthcare API Dashboard](https://console.cloud.google.com/healthcare).
 * **CI/CD Pipeline:** [Cloud Build History](https://console.cloud.google.com/cloud-build/builds).

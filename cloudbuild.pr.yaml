@@ -12,12 +12,6 @@ steps:
         export SECRET_KEY="dummy_secret_for_testing_only"
         export DB_PASS="dummy_pass"
         export DATABASE_URL="sqlite:///./test.db"
-        export HL7_SENDING_APP="HWB_BACKEND"
-        export HL7_SENDING_FACILITY="HWB_FIELD_CLINIC"
-        export HL7_RECEIVING_APP="GCP_HEALTHCARE"
-        export HL7_RECEIVING_FACILITY="GCP_DATALAKE"
-        export HL7_PROCESSING_ID="D"
-        export HL7_VERSION_ID="2.5.1"
         uv run ruff check
         uv run mypy app/core/rate_limit.py app/core/logging.py --ignore-missing-imports
         uv run pytest --cov=app tests/

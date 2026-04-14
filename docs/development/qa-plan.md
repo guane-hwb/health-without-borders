@@ -8,7 +8,7 @@ This document outlines the Quality Assurance (QA) strategy, testing methodologie
 
 Our backend relies on a robust automated testing strategy using `pytest`. The strategy is divided into three main layers:
 
-* **Unit Testing:** Focuses on isolated business logic, Pydantic schema validations, and utility functions (e.g., LLM parsing, HL7 generation).
+* **Unit Testing:** Focuses on isolated business logic, Pydantic schema validations, and utility functions (e.g., LLM parsing, FHIR bundle generation).
 * **Integration Testing:** Tests the FastAPI endpoints and their interaction with the PostgreSQL database using a dedicated test database and rolled-back transactions.
 * **Coverage Goals:** We are committed to progressively increasing our test coverage as part of our Open Source roadmap:
   * Milestone 1 (Q2): 15% code coverage.
@@ -30,7 +30,7 @@ Our application strictly enforces data validation using **Pydantic** (V2) schema
 
 **Key Data Structures:**
 
-* **PatientRecord:** Contains demographic data, linked to HL7 constraints.
+* **PatientRecord:** Contains demographic data, linked to FHIR RDA constraints (Resolution 1888/2025).
 * **DiagnosisItem:** Enforces WHO ICD-10 and ICD-11 coding standards.
 * **ClinicalEvaluation:** Handles textual data for AI processing.
 

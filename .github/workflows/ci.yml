@@ -46,12 +46,6 @@ jobs:
           SECRET_KEY: "dummy_secret_for_ci_only"
           DB_PASS: "dummy_pass"
           DATABASE_URL: "sqlite:///./test.db"
-          HL7_SENDING_APP: "HWB_BACKEND"
-          HL7_SENDING_FACILITY: "HWB_FIELD_CLINIC"
-          HL7_RECEIVING_APP: "GCP_HEALTHCARE"
-          HL7_RECEIVING_FACILITY: "GCP_DATALAKE"
-          HL7_PROCESSING_ID: "D"
-          HL7_VERSION_ID: "2.5.1"
         run: uv run pytest --cov=app --cov-report=term-missing --cov-report=html --cov-fail-under=60
 
       - name: Upload coverage report

@@ -17,10 +17,10 @@ This document defines the execution model for the current remediation effort acr
 - Define acceptance criteria by phase.
 - Standardize commit and PR documentation.
 
-### Phase 1 - Functional critical fixes (schema and HL7)
+### Phase 1 - Functional critical fixes (schema and FHIR)
 
 - Remove schema duplication in patient medical history.
-- Align HL7 generation with current payload contracts.
+- Align FHIR RDA bundle generation with current payload contracts.
 - Update tests to match current authorization model.
 
 ### Phase 2 - Authentication and authorization hardening

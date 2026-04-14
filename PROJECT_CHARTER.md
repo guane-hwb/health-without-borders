@@ -4,12 +4,12 @@
 To ensure that every migrant child and adolescent has continuous, secure, and standardized access to their medical history, eliminating health data silos across borders and empowering healthcare providers in any connectivity environment.
 
 ## 2. Mission
-To develop, maintain, and scale an open-source, interoperable (HL7/FHIR compliant), and offline-first backend infrastructure. This system equips healthcare workers and humanitarian organizations in border regions with a robust RESTful API to securely manage, synchronize, and protect the medical records of vulnerable migrant populations.
+To develop, maintain, and scale an open-source, interoperable (FHIR R4 compliant), and offline-first backend infrastructure. This system equips healthcare workers and humanitarian organizations in border regions with a robust RESTful API to securely manage, synchronize, and protect the medical records of vulnerable migrant populations.
 
 ## 3. Community and Ecosystem
 The Health Without Borders project thrives on collaboration. Our community comprises:
 * **Software Engineers & Architects:** Contributing to the FastAPI backend, offline-first synchronization logic, and scalable GCP deployments.
-* **Health Informatics Experts:** Guiding the implementation of HL7/FHIR standards and medical catalogs (ICD-10, CVX).
+* **Health Informatics Experts:** Guiding the implementation of FHIR R4 standards and medical catalogs (ICD-10/11, CVX).
 * **Humanitarian Organizations & NGOs:** Deploying the software in the field and providing user feedback.
 
 We are committed to building a safe, inclusive, and welcoming environment for everyone. All contributors and maintainers are expected to strictly adhere to our [Code of Conduct](CODE_OF_CONDUCT.md).
