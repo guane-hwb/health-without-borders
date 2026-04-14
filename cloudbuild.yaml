@@ -63,7 +63,7 @@ steps:
       - 'private-ranges-only'
       # 3. Actualizar las variables de entorno para que config.py las lea
       - '--update-env-vars'
-      - 'INSTANCE_CONNECTION_NAME=migrants-unicef:us-central1:hwb-db-cluster,DB_USER=postgres,DB_NAME=hwb_db'
+      - 'INSTANCE_CONNECTION_NAME=migrants-unicef:us-central1:hwb-db-cluster,DB_USER=postgres,DB_NAME=hwb_db,GCP_PROJECT_ID=migrants-unicef,GCP_LOCATION=us-central1,GCP_DATASET_ID=hwb-dataset,GCP_FHIR_STORE_ID=hwb-fhir-store'
 
 # Maximum build time (15 minutes)
 timeout: '900s'
