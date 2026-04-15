@@ -176,7 +176,12 @@ class GenerativeProcessor:
             }
 
 
-# Module-level singleton
-medical_llm_processor = GenerativeProcessor(
-    model_name=settings.LLM_MODEL_NAME,
-)
+_medical_llm_processor: Optional[GenerativeProcessor] = None
+
+def get_medical_llm_processor() -> GenerativeProcessor:
+    global _medical_llm_processor
+    if _medical_llm_processor is None:
+        _medical_llm_processor = GenerativeProcessor(
+            model_name=settings.LLM_MODEL_NAME,
+        )
+    return _medical_llm_processor
