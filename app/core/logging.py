@@ -1,7 +1,9 @@
 import logging
 import logging.config
 import sys
+
 from app.core.config import settings
+
 
 def setup_logging():
     """

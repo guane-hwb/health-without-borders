@@ -1,25 +1,25 @@
 import asyncio
 import logging
-from typing import Optional
 from datetime import date
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.db.models import User, UserRole
 from app.api.deps import get_current_user
-
+from app.core.config import settings
+from app.core.rate_limit import limiter
+from app.db.models import User, UserRole
 from app.db.session import get_db
 from app.schemas.patient import PatientFullRecord, PatientSyncResponse
+from app.services.fhir_service import convert_to_fhir_rda
+from app.services.gcp_service import send_to_google_healthcare
 from app.services.llm.service import medical_llm_processor
 from app.services.patient_service import (
     create_or_update_patient,
-    get_patient_by_device_uid, 
-    find_patient_strict
+    find_patient_strict,
+    get_patient_by_device_uid,
 )
-from app.services.fhir_service import convert_to_fhir_rda
-from app.services.gcp_service import send_to_google_healthcare
-from app.core.config import settings
-from app.core.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 

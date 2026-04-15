@@ -9,9 +9,11 @@ Provides two medical coding capabilities:
 import json
 import logging
 from typing import List, Optional
+
 from google import genai
 from google.genai import types
 
+from app.core.config import settings
 from app.schemas.patient import DiagnosisItem
 from app.services.llm.prompts import (
     SYSTEM_INSTRUCTION,
@@ -19,8 +21,10 @@ from app.services.llm.prompts import (
     build_clinical_prompt,
     build_family_history_prompt,
 )
-from app.services.llm.schemas import DIAGNOSIS_RESPONSE_SCHEMA, FAMILY_HISTORY_RESPONSE_SCHEMA
-from app.core.config import settings
+from app.services.llm.schemas import (
+    DIAGNOSIS_RESPONSE_SCHEMA,
+    FAMILY_HISTORY_RESPONSE_SCHEMA,
+)
 
 logger = logging.getLogger(__name__)
 

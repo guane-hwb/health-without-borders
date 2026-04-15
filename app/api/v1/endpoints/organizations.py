@@ -1,12 +1,13 @@
 import logging
 from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
-from app.db.models import Organization, User, UserRole
-from app.schemas.organization import OrganizationCreate, OrganizationResponse
 from app.api.deps import get_current_user
+from app.db.models import Organization, User, UserRole
+from app.db.session import get_db
+from app.schemas.organization import OrganizationCreate, OrganizationResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

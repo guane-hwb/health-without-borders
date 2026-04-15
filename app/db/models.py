@@ -1,9 +1,23 @@
-import uuid
 import enum  # stdlib
-from sqlalchemy import Column, String, Boolean, DateTime, Date, Text, JSON, Integer, ForeignKey, Enum as SAEnum
-from sqlalchemy.sql import func
+import uuid
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+
 from app.db.base import Base
+
 
 class Organization(Base):
     """

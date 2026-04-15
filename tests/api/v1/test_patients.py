@@ -1,8 +1,10 @@
 from unittest.mock import patch
+
 from fastapi.testclient import TestClient
-from app.main import app
+
 from app.api.deps import get_current_user
 from app.db.models import UserRole
+from app.main import app
 
 
 class MockUser:

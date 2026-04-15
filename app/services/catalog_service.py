@@ -1,5 +1,7 @@
 import logging
+
 from sqlalchemy.orm import Session
+
 from app.db.models import DiagnosisCIE10, VaccineCVX
 
 logger = logging.getLogger(__name__)

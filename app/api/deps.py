@@ -1,11 +1,11 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import jwt, JWTError
+from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
 from app.core.config import settings
 from app.db.models import User
+from app.db.session import get_db
 from app.schemas.token import TokenPayload
 
 # Define where the frontend goes to get the token (the login URL)

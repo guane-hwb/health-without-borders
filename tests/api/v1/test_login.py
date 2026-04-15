@@ -15,7 +15,6 @@ from fastapi.testclient import TestClient
 from app.core.security import get_password_hash
 from app.db.models import Organization, User, UserRole
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -1,5 +1,7 @@
 from typing import Optional
+
 from pydantic import BaseModel, Field
+
 
 class OrganizationBase(BaseModel):
     name: str = Field(..., min_length=3, description="Name of the organization")

@@ -1,6 +1,8 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
 from app.core.config import settings
+
 
 def get_database_uri() -> str:
     """

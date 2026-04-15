@@ -22,13 +22,18 @@ Architecture:
     └── ... additional resources per sections
 """
 
-import uuid
 import logging
-from datetime import datetime, date
-from typing import Dict, Any, List, Optional
+import uuid
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional
+
 from app.schemas.patient import (
-    PatientFullRecord, MedicalHistoryItem, AllergyCategory, BiologicalSex,
-    DiagnosisType, FamilyRelationship
+    AllergyCategory,
+    BiologicalSex,
+    DiagnosisType,
+    FamilyRelationship,
+    MedicalHistoryItem,
+    PatientFullRecord,
 )
 
 logger = logging.getLogger(__name__)
