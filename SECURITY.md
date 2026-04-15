@@ -14,7 +14,7 @@ We take the security of Health Without Borders seriously, especially given that 
 
 Instead, please report them via one of the following channels:
 
-1. **GitHub Security Advisories:** Use the "Report a vulnerability" button on the [Security tab](https://github.com/guanes/health-without-borders/security/advisories) of this repository.
+1. **GitHub Security Advisories:** Use the "Report a vulnerability" button on the [Security tab](https://github.com/guane-hwb/health-without-borders/security/advisories) of this repository.
 2. **Email:** Send a detailed report to the project maintainers at the email listed in the repository contact information.
 
 ### What to include
