@@ -1,7 +1,9 @@
 import logging
-import requests
+
 import google.auth
+import requests
 from google.auth.transport.requests import Request
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)

@@ -1,8 +1,8 @@
-from enum import Enum
-from pydantic import BaseModel, Field
-from typing import List, Optional
 from datetime import date, datetime
+from enum import Enum
+from typing import List, Optional
 
+from pydantic import BaseModel, Field
 
 # ============================================================================
 # ENUMS — Coded values per Resolution 866/2021 & 1888/2025
@@ -28,7 +28,7 @@ class BiologicalSex(str, Enum):
     """Sexo biológico — SISPRO CodeSystem Sexo."""
     M = "M"     # Masculino
     F = "F"     # Femenino
-    I = "I"     # Indeterminado
+    I = "I"     # Indeterminado # noqa: E741
 
 
 class GenderIdentity(str, Enum):

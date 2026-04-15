@@ -1,6 +1,10 @@
 from typing import Optional
+
 from pydantic import BaseModel, EmailStr, Field, field_validator
+
 from app.db.models import UserRole
+
+
 class UserBase(BaseModel):
     email: EmailStr
     full_name: str = Field(..., min_length=3, description="Full name of the user")

@@ -9,9 +9,11 @@ Provides two medical coding capabilities:
 import json
 import logging
 from typing import List, Optional
+
 from google import genai
 from google.genai import types
 
+from app.core.config import settings
 from app.schemas.patient import DiagnosisItem
 from app.services.llm.prompts import (
     SYSTEM_INSTRUCTION,
@@ -19,8 +21,10 @@ from app.services.llm.prompts import (
     build_clinical_prompt,
     build_family_history_prompt,
 )
-from app.services.llm.schemas import DIAGNOSIS_RESPONSE_SCHEMA, FAMILY_HISTORY_RESPONSE_SCHEMA
-from app.core.config import settings
+from app.services.llm.schemas import (
+    DIAGNOSIS_RESPONSE_SCHEMA,
+    FAMILY_HISTORY_RESPONSE_SCHEMA,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +176,12 @@ class GenerativeProcessor:
             }
 
 
-# Module-level singleton
-medical_llm_processor = GenerativeProcessor(
-    model_name=settings.LLM_MODEL_NAME,
-)
+_medical_llm_processor: Optional[GenerativeProcessor] = None
+
+def get_medical_llm_processor() -> GenerativeProcessor:
+    global _medical_llm_processor
+    if _medical_llm_processor is None:
+        _medical_llm_processor = GenerativeProcessor(
+            model_name=settings.LLM_MODEL_NAME,
+        )
+    return _medical_llm_processor

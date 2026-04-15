@@ -1,11 +1,13 @@
 import logging
 from datetime import date
 from typing import Optional
+
+from fastapi import HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, func
+
 from app.db.models import Patient
 from app.schemas.patient import PatientFullRecord
-from fastapi import HTTPException, status
 
 # Setup Logger
 logger = logging.getLogger(__name__)

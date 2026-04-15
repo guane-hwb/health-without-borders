@@ -10,6 +10,7 @@ env/
 
 # Python Cache & Build
 datalake/
+.ruff_cache/
 __pycache__/
 *.pyc
 *.pyo

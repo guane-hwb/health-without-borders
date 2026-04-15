@@ -1,25 +1,25 @@
 import asyncio
 import logging
-from typing import Optional
 from datetime import date
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.db.models import User, UserRole
 from app.api.deps import get_current_user
-
-from app.db.session import get_db
-from app.schemas.patient import PatientFullRecord, PatientSyncResponse
-from app.services.llm.service import medical_llm_processor
-from app.services.patient_service import (
-    create_or_update_patient,
-    get_patient_by_device_uid, 
-    find_patient_strict
-)
-from app.services.fhir_service import convert_to_fhir_rda
-from app.services.gcp_service import send_to_google_healthcare
 from app.core.config import settings
 from app.core.rate_limit import limiter
+from app.db.models import User, UserRole
+from app.db.session import get_db
+from app.schemas.patient import PatientFullRecord, PatientSyncResponse
+from app.services.fhir_service import convert_to_fhir_rda
+from app.services.gcp_service import send_to_google_healthcare
+from app.services.llm.service import get_medical_llm_processor
+from app.services.patient_service import (
+    create_or_update_patient,
+    find_patient_strict,
+    get_patient_by_device_uid,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -157,12 +157,13 @@ async def sync_patient(
         )
     
     try:
+        processor = get_medical_llm_processor()
         # --- LLM PROCESSING: Only for visits that don't have diagnoses yet ---
         for visit in patient_data.medicalHistory:
             if not visit.diagnosis:
                 eval_data = visit.clinicalEvaluation
                 ai_diagnoses = await asyncio.to_thread(
-                    medical_llm_processor.extract_diagnoses,
+                    processor.extract_diagnoses,
                     history=eval_data.historyOfCurrentIllness,
                     physical=eval_data.generalPhysicalExamination,
                     systems=eval_data.systemsExamination,
@@ -175,7 +176,7 @@ async def sync_patient(
             for fh_item in patient_data.backgroundHistory.familyHistory:
                 if fh_item.conditionDescription and not fh_item.conditionCie10Code:
                     coded = await asyncio.to_thread(
-                        medical_llm_processor.code_family_history_item,
+                        processor.code_family_history_item,
                         fh_item.conditionDescription
                     )
                     fh_item.conditionCie10Code = coded.get("icd10Code")

@@ -1,9 +1,10 @@
 import logging
+
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
-from app.db.models import User
 from app.api.deps import get_current_user
+from app.db.models import User
 from app.db.session import get_db
 from app.schemas.catalog import CatalogSyncResponse
 from app.services.catalog_service import get_all_diagnoses, get_all_vaccines
