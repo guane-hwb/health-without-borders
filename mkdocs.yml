@@ -1,8 +1,8 @@
 site_name: Health Without Borders - API Docs
 site_description: Interoperable Medical Records Platform for Migrant Children and Adolescents.
 site_url: https://guanes.github.io/health-without-borders/
-repo_url: https://github.com/guanes/health-without-borders
-repo_name: guanes/health-without-borders
+repo_url: https://github.com/guane-hwb/health-without-borders
+repo_name: guane-hwb/health-without-borders
 
 theme:
   name: material

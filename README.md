@@ -5,7 +5,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Available-2496ED.svg)
 ![GCP](https://img.shields.io/badge/Google_Cloud-Run-4285F4.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![CI](https://github.com/guanes/health-without-borders/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/guane-hwb/health-without-borders/actions/workflows/ci.yml/badge.svg)
 
 **Interoperable Medical Records Platform for Migrant Children and Adolescents.**
 
@@ -93,7 +93,7 @@ Key sections:
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/guanes/health-without-borders.git
+git clone https://github.com/guane-hwb/health-without-borders.git
 cd health-without-borders
 
 # 2. Copy environment variables template

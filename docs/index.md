@@ -4,7 +4,7 @@
 
 This site documents the Backend API of the Health Without Borders initiative — a RESTful API built to guarantee continuity of medical care for migrant populations through a secure, FHIR R4-standardized system resilient to intermittent connectivity in border areas.
 
-Source code: [github.com/guanes/health-without-borders](https://github.com/guanes/health-without-borders)
+Source code: [github.com/guane-hwb/health-without-borders](https://github.com/guane-hwb/health-without-borders)
 
 ---
 
@@ -43,7 +43,7 @@ Source code: [github.com/guanes/health-without-borders](https://github.com/guane
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/guanes/health-without-borders.git
+git clone https://github.com/guane-hwb/health-without-borders.git
 cd health-without-borders
 
 # 2. Copy environment variables template
@@ -72,6 +72,6 @@ The interactive API will be available at: **http://localhost:8000/docs**
 
 ## Contributing
 
-We welcome contributions from the community. Please read the [CONTRIBUTING.md](https://github.com/guanes/health-without-borders/blob/main/CONTRIBUTING.md) guide and our [Code of Conduct](https://github.com/guanes/health-without-borders/blob/main/CODE_OF_CONDUCT.md) before submitting a Pull Request.
+We welcome contributions from the community. Please read the [CONTRIBUTING.md](https://github.com/guane-hwb/health-without-borders/blob/main/CONTRIBUTING.md) guide and our [Code of Conduct](https://github.com/guane-hwb/health-without-borders/blob/main/CODE_OF_CONDUCT.md) before submitting a Pull Request.
 
 This project is licensed under the **MIT License**.
