@@ -57,3 +57,43 @@ Both tasks use Chain of Thought + Few-Shot prompting with strict rules to preven
 * **ICD-11 caution** — The LLM must return `null` for `icd11Code` if it is not 100% certain of the exact code. It is better to return null than to hallucinate a code.
 * **No overcoding** — Symptoms integral to the primary diagnosis (e.g., "abdominal pain" with gastroenteritis) are not coded separately.
 * **Spanish descriptions** — All medical descriptions are returned in professional medical Spanish.
+
+## 6. Vendor-Neutral Abstraction Layer
+
+The LLM service is accessed through a Protocol-based abstraction layer that decouples the medical coding logic from any specific AI provider. This supports the Digital Public Good requirement of vendor neutrality.
+
+### Architecture
+
+```
+app/services/llm/
+├── base.py       # MedicalCodingService Protocol — the contract
+├── gemini.py     # Google Vertex AI / Gemini implementation
+├── noop.py       # No-op implementation (for local dev without LLM access)
+├── factory.py    # Reads LLM_BACKEND config, returns right instance
+├── prompts.py    # Provider-agnostic prompt builders
+├── schemas.py    # Provider-agnostic structured output schemas
+└── __init__.py   # Re-exports medical_llm_processor singleton + Protocol
+```
+
+The endpoint imports `medical_llm_processor` from `app.services.llm`. It never imports a concrete LLM client. The factory reads the `LLM_BACKEND` environment variable at startup to decide which implementation to use.
+
+Note that `prompts.py` and `schemas.py` are provider-agnostic — prompts are plain strings and the response schemas are plain dicts. Any new LLM backend can reuse them.
+
+### Configuration
+
+Set `LLM_BACKEND` in your `.env` file:
+
+| Value | Effect |
+|---|---|
+| `gemini` (default) | Uses Google Vertex AI with Gemini 2.5 Pro |
+| `noop` | Returns deterministic fallback codes without any LLM call |
+
+### Adding a New LLM Backend
+
+To support OpenAI, Anthropic, local Llama, or any other provider:
+
+1. Create a new module in `app/services/llm/` implementing the `MedicalCodingService` Protocol — two methods: `extract_diagnoses()` and `code_family_history_item()`.
+2. Register it in `factory.py` with a new branch in `get_llm_service()`.
+3. Set `LLM_BACKEND="your_backend_name"` in the environment.
+
+The prompts and response schemas work across any structured-output-capable LLM, so most of the work is just adapting the API call format.

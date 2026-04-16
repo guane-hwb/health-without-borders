@@ -56,40 +56,48 @@ def test_sync_patient_success():
     # 1. Mock RBAC Authentication
     class MockUser:
         email = "doctor_prueba@hwb.org"
-        id = 1
-        role = "doctor"
+        id = "test-user-id"
+        role = UserRole.doctor
         organization_id = "org-123"
         
     app.dependency_overrides[get_current_user] = lambda: MockUser()
 
-    # 2. Valid Pydantic Payload
+    # 2. Valid Pydantic Payload (RDA-compliant — Res. 1888/2025)
     payload = {
         "patientId": "TEST-UNIT-001",
         "device_uid": "04:A2:TEST:UID",
         "patientInfo": {
-            "lastName": "Test",
-            "firstName": "User",
+            "identification": {
+                "documentType": "RC",
+                "documentNumber": "1234567890"
+            },
+            "firstLastName": "García",
+            "secondLastName": "López",
+            "firstName": "Sofía",
             "dob": "2020-01-01",
-            "gender": "M",
+            "nationalityCode": "VEN",
+            "biologicalSex": "F",
             "bloodType": "O+",
             "address": {
-                "street": "Test", "city": "Cucuta", "state": "NS", 
-                "zipCode": "540001", "country": "COL"
+                "city": "Cúcuta",
+                "cityCode": "54001",
+                "state": "Norte de Santander",
+                "country": "COL"
             }
         },
         "guardianInfo": {
-            "name": "Mom Test",
+            "name": "María López",
             "relationship": "Mother",
-            "phone": "123456789"
+            "phone": "3001234567"
         },
         "allergies": [],
         "medicalHistory": [],
         "vaccinationRecord": []
     }
     
-    # 3. Mock External GCP Service & Execute
-    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp:
-        mock_gcp.return_value = {"status": "success", "google_response": {}}
+    # 3. Mock External FHIR Store & Execute
+    with patch.object(fhir_backend, "send_bundle") as mock_fhir:
+        mock_fhir.return_value = {"status": "success", "response": {}}
         
         response = client.post("/api/v1/patients/sync", json=payload)
         
@@ -102,9 +110,7 @@ def test_sync_patient_success():
         data = response.json()
         assert data["status"] == "success"
         assert data["internal_id"] == "TEST-UNIT-001"
-        assert data["gcp_status"] == "success"
-        
-        mock_gcp.assert_called_once()
+        assert data["fhir_status"] == "success"
 
 ```
 
