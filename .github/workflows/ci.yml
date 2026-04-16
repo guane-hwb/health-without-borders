@@ -46,8 +46,8 @@ jobs:
           SECRET_KEY: "dummy_secret_for_ci_only"
           DB_PASS: "dummy_pass"
           DATABASE_URL: "sqlite:///./test.db"
-          GCP_PROJECT_ID: "test-project"
-          GOOGLE_APPLICATION_CREDENTIALS: ""
+          FHIR_BACKEND: "noop"
+          LLM_BACKEND: "noop"
         run: uv run pytest --cov=app --cov-report=term-missing --cov-report=html --cov-fail-under=60
 
       - name: Upload coverage report
