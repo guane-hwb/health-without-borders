@@ -1,9 +1,8 @@
 """
-Clinical NLP service powered by Google Vertex AI (Gemini).
+Google Vertex AI (Gemini) implementation of MedicalCodingService.
 
-Provides two medical coding capabilities:
-  1. extract_diagnoses()       — From clinical evaluation notes → List[DiagnosisItem]
-  2. code_family_history_item() — From condition description → ICD-10/11 codes
+This is the ONLY file in the LLM package that imports google-genai.
+All other code depends on the abstract MedicalCodingService Protocol.
 """
 
 import json
@@ -13,8 +12,8 @@ from typing import List, Optional
 from google import genai
 from google.genai import types
 
-from app.core.config import settings
 from app.schemas.patient import DiagnosisItem
+from app.services.llm.base import MedicalCodingService
 from app.services.llm.prompts import (
     SYSTEM_INSTRUCTION,
     SYSTEM_INSTRUCTION_FAMILY_HISTORY,
@@ -29,17 +28,20 @@ from app.services.llm.schemas import (
 logger = logging.getLogger(__name__)
 
 
-class GenerativeProcessor:
+class GeminiMedicalCodingService(MedicalCodingService):
     """
-    Clinical NLP service powered by Google Vertex AI.
-    Handles Gemini connection for structured extraction tasks.
+    Clinical NLP service powered by Google Vertex AI (Gemini).
+    
+    Handles two medical coding tasks:
+      1. extract_diagnoses() — from clinical evaluation notes → List[DiagnosisItem]
+      2. code_family_history_item() — from condition description → ICD-10/11 codes
     """
 
-    def __init__(self, model_name: str) -> None:
-        logger.info(f"Initializing GenerativeProcessor with model: {model_name}")
+    def __init__(self, model_name: str, project_id: Optional[str]) -> None:
+        logger.info(f"Initializing GeminiMedicalCodingService with model: {model_name}")
         self.client = genai.Client(
             vertexai=True,
-            project=settings.GCP_PROJECT_ID,
+            project=project_id,
             location="global",
         )
         self.model_name = model_name
@@ -48,9 +50,8 @@ class GenerativeProcessor:
         self, threshold: types.HarmBlockThreshold
     ) -> list[types.SafetySetting]:
         """
-        Configures safety filters. In medical environments,
-        it is usually necessary to lower the filters to prevent
-        legitimate anatomical terms from blocking the response.
+        Lowered safety filters for medical context — prevents legitimate
+        anatomical/clinical terms from being flagged as inappropriate.
         """
         return [
             types.SafetySetting(category=category, threshold=threshold)
@@ -65,7 +66,6 @@ class GenerativeProcessor:
     def _build_config(
         self, system_instruction: str, response_schema: dict
     ) -> types.GenerateContentConfig:
-        """Builds a Gemini generation config with structured JSON output."""
         return types.GenerateContentConfig(
             temperature=0.0,
             top_p=0.95,
@@ -79,8 +79,7 @@ class GenerativeProcessor:
             thinking_config=types.ThinkingConfig(thinking_budget=1024),
         )
 
-    def _call_gemini(self, prompt: str, config: types.GenerateContentConfig) -> str:
-        """Calls Gemini and returns the raw text response."""
+    def _call(self, prompt: str, config: types.GenerateContentConfig) -> str:
         response = self.client.models.generate_content(
             model=self.model_name,
             contents=[
@@ -92,10 +91,6 @@ class GenerativeProcessor:
         )
         return response.text
 
-    # ---------------------------------------------------------------
-    # 1. DIAGNOSIS EXTRACTION (from clinical evaluation notes)
-    # ---------------------------------------------------------------
-
     def extract_diagnoses(
         self,
         history: Optional[str],
@@ -103,31 +98,18 @@ class GenerativeProcessor:
         systems: Optional[str],
         plan: Optional[str],
     ) -> List[DiagnosisItem]:
-        """
-        Processes clinical notes and extracts ICD-10/11 coded diagnoses.
-
-        The LLM analyzes the four clinical evaluation fields and returns
-        one or more diagnoses with:
-          - icd10Code (WHO standard)
-          - icd11Code (WHO standard, null if uncertain)
-          - description (in Spanish)
-
-        The diagnosis type (impresión/confirmado) is NOT determined by the LLM;
-        it is set by the physician at the encounter level (MedicalHistoryItem.diagnosisType).
-        """
         prompt = build_clinical_prompt(history, physical, systems, plan)
         config = self._build_config(SYSTEM_INSTRUCTION, DIAGNOSIS_RESPONSE_SCHEMA)
 
         try:
-            raw = self._call_gemini(prompt, config)
+            raw = self._call(prompt, config)
             diagnoses_dicts = json.loads(raw)
             diagnoses = [DiagnosisItem(**d) for d in diagnoses_dicts]
-
-            logger.info(f"Gemini successfully extracted {len(diagnoses)} diagnoses.")
+            logger.info(f"Gemini extracted {len(diagnoses)} diagnoses.")
             return diagnoses
 
         except Exception as e:
-            logger.error(f"Error extracting diagnoses with Vertex AI: {str(e)}")
+            logger.error(f"Error extracting diagnoses with Gemini: {str(e)}")
             return [
                 DiagnosisItem(
                     icd10Code="Z00.0",
@@ -135,53 +117,25 @@ class GenerativeProcessor:
                 )
             ]
 
-    # ---------------------------------------------------------------
-    # 2. FAMILY HISTORY ICD CODING (from condition description)
-    # ---------------------------------------------------------------
-
     def code_family_history_item(self, condition_description: str) -> dict:
-        """
-        Maps a single family history condition description to ICD-10/11 codes.
-
-        Input:  "Glaucoma"  (free-text from the patient/frontend)
-        Output: {"icd10Code": "H40.9", "icd11Code": "9A61.Z", "description": "Glaucoma, no especificado"}
-
-        Returns a dict with icd10Code, icd11Code (nullable), and description.
-        The caller is responsible for merging these into the FamilyHistoryItem.
-        """
         prompt = build_family_history_prompt(condition_description)
         config = self._build_config(
             SYSTEM_INSTRUCTION_FAMILY_HISTORY, FAMILY_HISTORY_RESPONSE_SCHEMA
         )
 
         try:
-            raw = self._call_gemini(prompt, config)
+            raw = self._call(prompt, config)
             result = json.loads(raw)
-
             logger.info(
-                f"Gemini coded family history condition: "
+                f"Gemini coded family history: "
                 f"'{condition_description}' -> {result.get('icd10Code')}"
             )
             return result
 
         except Exception as e:
-            logger.error(
-                f"Error coding family history with Vertex AI: {str(e)}"
-            )
-            # Fallback: return the description as-is with a generic code
+            logger.error(f"Error coding family history with Gemini: {str(e)}")
             return {
                 "icd10Code": "Z84.8",
                 "icd11Code": None,
                 "description": f"{condition_description} (Fallo en codificación IA)",
             }
-
-
-_medical_llm_processor: Optional[GenerativeProcessor] = None
-
-def get_medical_llm_processor() -> GenerativeProcessor:
-    global _medical_llm_processor
-    if _medical_llm_processor is None:
-        _medical_llm_processor = GenerativeProcessor(
-            model_name=settings.LLM_MODEL_NAME,
-        )
-    return _medical_llm_processor

@@ -12,9 +12,9 @@ from app.core.rate_limit import limiter
 from app.db.models import User, UserRole
 from app.db.session import get_db
 from app.schemas.patient import PatientFullRecord, PatientSyncResponse
+from app.services.fhir import fhir_backend
 from app.services.fhir_service import convert_to_fhir_rda
-from app.services.gcp_service import send_to_google_healthcare
-from app.services.llm.service import get_medical_llm_processor
+from app.services.llm import medical_llm_processor
 from app.services.patient_service import (
     create_or_update_patient,
     find_patient_strict,
@@ -157,13 +157,12 @@ async def sync_patient(
         )
     
     try:
-        processor = get_medical_llm_processor()
         # --- LLM PROCESSING: Only for visits that don't have diagnoses yet ---
         for visit in patient_data.medicalHistory:
             if not visit.diagnosis:
                 eval_data = visit.clinicalEvaluation
                 ai_diagnoses = await asyncio.to_thread(
-                    processor.extract_diagnoses,
+                    medical_llm_processor.extract_diagnoses,
                     history=eval_data.historyOfCurrentIllness,
                     physical=eval_data.generalPhysicalExamination,
                     systems=eval_data.systemsExamination,
@@ -176,7 +175,7 @@ async def sync_patient(
             for fh_item in patient_data.backgroundHistory.familyHistory:
                 if fh_item.conditionDescription and not fh_item.conditionCie10Code:
                     coded = await asyncio.to_thread(
-                        processor.code_family_history_item,
+                        medical_llm_processor.code_family_history_item,
                         fh_item.conditionDescription
                     )
                     fh_item.conditionCie10Code = coded.get("icd10Code")
@@ -204,31 +203,31 @@ async def sync_patient(
         )
         logger.debug(f"Generated {len(fhir_bundles)} FHIR RDA Bundle(s) (delta)")
 
-        # 3. Send each Bundle to GCP
-        gcp_status = "success" if not fhir_bundles else "unknown"
+        # 3. Send each Bundle to the configured FHIR Store
+        fhir_status = "success" if not fhir_bundles else "unknown"
         all_success = True
         for i, bundle in enumerate(fhir_bundles):
-            gcp_response = await asyncio.to_thread(send_to_google_healthcare, bundle)
-            bundle_status = gcp_response.get("status", "unknown")
-            
+            result = await asyncio.to_thread(fhir_backend.send_bundle, bundle)
+            bundle_status = result.get("status", "unknown")
+
             if bundle_status != "success":
                 logger.warning(
-                    "Patient sync GCP warning patient_ref=%s bundle=%d status=%s",
+                    "Patient sync FHIR warning patient_ref=%s bundle=%d status=%s",
                     _mask_identifier(str(saved_patient.id)),
                     i,
                     bundle_status,
                 )
-                gcp_status = bundle_status
+                fhir_status = bundle_status
                 all_success = False
             else:
-                if gcp_status == "unknown":
-                    gcp_status = "success"
+                if fhir_status == "unknown":
+                    fhir_status = "success"
                 logger.info(
-                    "Patient sync GCP success patient_ref=%s bundle=%d",
+                    "Patient sync FHIR success patient_ref=%s bundle=%d",
                     _mask_identifier(str(saved_patient.id)), i
                 )
 
-        # 4. Update sync tracking ONLY if GCP succeeded
+        # 4. Update sync tracking ONLY if FHIR upload succeeded
         if all_success and fhir_bundles:
             saved_patient.synced_visit_count = len(patient_data.medicalHistory)
             saved_patient.rda_paciente_sent = True
@@ -242,7 +241,7 @@ async def sync_patient(
         return PatientSyncResponse(
             status="success",
             internal_id=str(saved_patient.id),
-            gcp_status=gcp_status,
+            fhir_status=fhir_status,
             vida_code=None,
             message="Patient synced and processed successfully"
         )

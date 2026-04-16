@@ -1,10 +1,11 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_current_user
 from app.db.models import UserRole
 from app.main import app
+from app.services.fhir import fhir_backend
 
 
 class MockUser:
@@ -154,23 +155,10 @@ def _clear_overrides():
 
 
 def _sync_patient(client, payload=None):
-    """Helper: sync a patient as doctor with GCP and LLM mocked."""
+    """Helper: sync a patient as doctor with GCP mocked."""
     _override_doctor()
-    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp, \
-         patch("app.api.v1.endpoints.patients.get_medical_llm_processor") as mock_llm:
-        
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
         mock_gcp.return_value = {"status": "success", "google_response": {}}
-        
-        # Configuramos el mock del LLM
-        mock_processor = MagicMock()
-        mock_processor.extract_diagnoses.return_value = [
-            {"icd10Code": "Z00.0", "description": "Diagnóstico simulado por mock"}
-        ]
-        mock_processor.code_family_history_item.return_value = {
-            "icd10Code": "Z84.8", "icd11Code": None, "description": "Historia familiar mock"
-        }
-        mock_llm.return_value = mock_processor
-
         return client.post("/api/v1/patients/sync", json=payload or MOCK_PATIENT_PAYLOAD)
 
 
@@ -188,18 +176,14 @@ def test_sync_patient_success(client: TestClient):
     data = response.json()
     assert data["status"] == "success"
     assert data["internal_id"] == "TEST-UNIT-001"
-    assert data["gcp_status"] == "success"
+    assert data["fhir_status"] == "success"
 
 
 def test_sync_patient_with_visit_generates_multiple_bundles(client: TestClient):
     """Syncing with 1 visit generates 2 FHIR bundles (RDA-Paciente + RDA-Consulta)."""
     _override_doctor()
-    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp, \
-         patch("app.api.v1.endpoints.patients.get_medical_llm_processor") as mock_llm:
-        
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
         mock_gcp.return_value = {"status": "success", "google_response": {}}
-        mock_llm.return_value = MagicMock()
-        
         response = client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
         _clear_overrides()
 
@@ -227,15 +211,8 @@ def test_sync_nurse_cannot_add_medical_history(client: TestClient):
             }
         ],
     }
-    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp, \
-         patch("app.api.v1.endpoints.patients.get_medical_llm_processor") as mock_llm:
-        
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
         mock_gcp.return_value = {"status": "success", "google_response": {}}
-        
-        mock_processor = MagicMock()
-        mock_processor.extract_diagnoses.return_value = [] 
-        mock_llm.return_value = mock_processor
-        
         response = client.post("/api/v1/patients/sync", json=payload_with_visit)
 
     _clear_overrides()
@@ -273,12 +250,8 @@ def test_sync_delta_only_sends_new_bundles(client: TestClient, db_session):
 
     # First sync: patient with 1 visit → expect 2 bundles
     _override_doctor()
-    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp, \
-         patch("app.api.v1.endpoints.patients.get_medical_llm_processor") as mock_llm:
-        
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
         mock_gcp.return_value = {"status": "success", "google_response": {}}
-        mock_llm.return_value = MagicMock()
-        
         client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
         first_call_count = mock_gcp.call_count
 
@@ -305,13 +278,8 @@ def test_sync_delta_only_sends_new_bundles(client: TestClient, db_session):
             }
         ],
     }
-    
-    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp2, \
-         patch("app.api.v1.endpoints.patients.get_medical_llm_processor") as mock_llm2:
-        
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp2:
         mock_gcp2.return_value = {"status": "success", "google_response": {}}
-        mock_llm2.return_value = MagicMock()
-        
         response = client.post("/api/v1/patients/sync", json=payload_two_visits)
         second_call_count = mock_gcp2.call_count
 
@@ -330,22 +298,14 @@ def test_sync_no_new_visits_skips_all_bundles(client: TestClient):
     """Re-syncing with same data generates zero bundles — nothing changed."""
     _override_doctor()
 
-    # First sync con 1 visit
-    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp, \
-         patch("app.api.v1.endpoints.patients.get_medical_llm_processor") as mock_llm:
-        
+    # First sync with 1 visit
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
         mock_gcp.return_value = {"status": "success", "google_response": {}}
-        mock_llm.return_value = MagicMock()
-        
         client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
 
     # Second sync with SAME data (no new visits)
-    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp2, \
-         patch("app.api.v1.endpoints.patients.get_medical_llm_processor") as mock_llm2:
-        
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp2:
         mock_gcp2.return_value = {"status": "success", "google_response": {}}
-        mock_llm2.return_value = MagicMock()
-        
         response = client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
         resync_call_count = mock_gcp2.call_count
 
@@ -361,18 +321,14 @@ def test_sync_gcp_failure_does_not_update_tracking(client: TestClient, db_sessio
     from app.db.models import Patient
 
     _override_doctor()
-    with patch("app.api.v1.endpoints.patients.send_to_google_healthcare") as mock_gcp, \
-         patch("app.api.v1.endpoints.patients.get_medical_llm_processor") as mock_llm:
-        
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
         mock_gcp.return_value = {"status": "error", "error": "GCP is down"}
-        mock_llm.return_value = MagicMock()
-        
         response = client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
 
     _clear_overrides()
 
     assert response.status_code == 201
-    assert response.json()["gcp_status"] == "error"
+    assert response.json()["fhir_status"] == "error"
 
     # Tracking should NOT have been updated
     patient = db_session.query(Patient).filter(Patient.id == "TEST-UNIT-002").first()
