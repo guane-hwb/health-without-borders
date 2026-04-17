@@ -46,9 +46,16 @@ jobs:
           SECRET_KEY: "dummy_secret_for_ci_only"
           DB_PASS: "dummy_pass"
           DATABASE_URL: "sqlite:///./test.db"
-          GCP_PROJECT_ID: "test-project"
-          GOOGLE_APPLICATION_CREDENTIALS: ""
-        run: uv run pytest --cov=app --cov-report=term-missing --cov-report=html --cov-fail-under=60
+          FHIR_BACKEND: "noop"
+          LLM_BACKEND: "noop"
+        run: uv run pytest --cov=app --cov-report=term-missing --cov-report=html --cov-report=xml --cov-fail-under=60
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: false
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4

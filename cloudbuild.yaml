@@ -13,6 +13,8 @@ steps:
         export SECRET_KEY="dummy_secret_for_testing_only"
         export DB_PASS="dummy_pass"
         export DATABASE_URL="sqlite:///./test.db"
+        export FHIR_BACKEND="noop"
+        export LLM_BACKEND="noop"
         uv run ruff check
         uv run mypy app/core/rate_limit.py app/core/logging.py --ignore-missing-imports
         uv run pytest --cov=app tests/

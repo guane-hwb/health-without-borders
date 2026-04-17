@@ -29,7 +29,15 @@ class Settings(BaseSettings):
     # Fallback for local development (standard TCP connection string)
     DATABASE_URL: Optional[str] = None
 
-    # --- GOOGLE CLOUD PLATFORM ---
+    # --- INTEROPERABILITY BACKEND SELECTION ---
+    # Controls which concrete implementation is used for the FHIR Store and LLM.
+    # Supported values for FHIR_BACKEND: "gcp", "noop"
+    # Supported values for LLM_BACKEND: "gemini", "noop"
+    # This makes the application vendor-neutral and deployable outside GCP.
+    FHIR_BACKEND: str = "gcp"
+    LLM_BACKEND: str = "gemini"
+
+    # --- GOOGLE CLOUD PLATFORM (only used when FHIR_BACKEND=gcp or LLM_BACKEND=gemini) ---
     GCP_PROJECT_ID: Optional[str] = None
     GCP_LOCATION: Optional[str] = None
     GCP_DATASET_ID: Optional[str] = None

@@ -430,6 +430,6 @@ class PatientFullRecord(BaseModel):
 class PatientSyncResponse(BaseModel):
     status: str
     internal_id: str
-    gcp_status: Optional[str] = "unknown"
+    fhir_status: Optional[str] = "unknown"
     vida_code: Optional[str] = Field(None, description="Código VIDA retornado por el mecanismo IHCE")
     message: str

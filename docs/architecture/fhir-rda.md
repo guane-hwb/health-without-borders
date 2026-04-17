@@ -105,3 +105,41 @@ Current setup in `hwb-fhir-store`:
 | Strict search | Disabled | Lenient mode for development |
 | Complex reference analysis | Enabled | Needed for extensions with references |
 | Profile validation | Disabled (pending IG import) | Will enable after importing RDA profiles |
+
+---
+
+## 8. Vendor-Neutral Abstraction Layer
+
+As a Digital Public Good, the project cannot depend exclusively on one cloud vendor. The FHIR Store is accessed through a Protocol-based abstraction layer that allows swapping the backend without touching the endpoint code.
+
+### Architecture
+
+```
+app/services/fhir/
+├── base.py       # FHIRStoreBackend Protocol — the contract
+├── gcp.py        # Google Cloud Healthcare API implementation
+├── noop.py       # No-op implementation (for local dev without a FHIR store)
+├── factory.py    # Reads FHIR_BACKEND config, returns right instance
+└── __init__.py   # Re-exports fhir_backend singleton + Protocol
+```
+
+The endpoint (`patients.py`) imports `fhir_backend` from `app.services.fhir`. It never imports a concrete backend directly. The factory reads the `FHIR_BACKEND` environment variable to decide which implementation to instantiate at startup.
+
+### Configuration
+
+Set `FHIR_BACKEND` in your `.env` file:
+
+| Value | Effect |
+|---|---|
+| `gcp` (default) | Uses Google Cloud Healthcare API FHIR Store |
+| `noop` | Discards bundles silently (useful for local dev and tests) |
+
+### Adding a New Backend
+
+To support another FHIR Store (Azure Health Data Services, AWS HealthLake, HAPI FHIR, a local Docker instance, etc.):
+
+1. Create a new module in `app/services/fhir/` implementing the `FHIRStoreBackend` Protocol (just one method: `send_bundle(bundle: dict) -> FHIRBundleSendResult`).
+2. Register it in `factory.py` with a new branch in `get_fhir_backend()`.
+3. Set `FHIR_BACKEND="your_backend_name"` in the environment.
+
+No other file in the codebase needs to change.
