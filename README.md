@@ -6,6 +6,7 @@
 ![GCP](https://img.shields.io/badge/Google_Cloud-Run-4285F4.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![CI](https://github.com/guane-hwb/health-without-borders/actions/workflows/ci.yml/badge.svg)
+[![Coverage](https://codecov.io/gh/guane-hwb/health-without-borders/graph/badge.svg)](https://codecov.io/gh/guane-hwb/health-without-borders)
 
 **Interoperable Medical Records Platform for Migrant Children and Adolescents.**
 
