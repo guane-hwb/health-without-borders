@@ -56,12 +56,19 @@ health-without-borders/
 │   ├── db/                           # Database layer (models, session)
 │   ├── schemas/                      # Pydantic models (RDA-compliant)
 │   └── services/                     # Business logic layer
-│       ├── llm/                      # LLM integration (Gemini)
-│       │   ├── service.py            # Diagnosis extraction & family history coding
-│       │   ├── prompts.py            # System instructions & prompt builders
-│       │   └── schemas.py            # Gemini structured output schemas
+│       ├── fhir/                     # FHIR Store abstraction (vendor-neutral)
+│       │   ├── base.py               # FHIRStoreBackend Protocol
+│       │   ├── gcp.py                # Google Cloud Healthcare API backend
+│       │   ├── noop.py               # No-op backend (dev/testing)
+│       │   └── factory.py            # Backend selection via FHIR_BACKEND env var
+│       ├── llm/                      # LLM abstraction (vendor-neutral)
+│       │   ├── base.py               # MedicalCodingService Protocol
+│       │   ├── gemini.py             # Google Vertex AI / Gemini backend
+│       │   ├── noop.py               # No-op backend (dev/testing)
+│       │   ├── factory.py            # Backend selection via LLM_BACKEND env var
+│       │   ├── prompts.py            # Provider-agnostic prompt builders
+│       │   └── schemas.py            # Provider-agnostic output schemas
 │       ├── fhir_service.py           # FHIR R4 RDA bundle generation
-│       ├── gcp_service.py            # Google Cloud Healthcare API client
 │       └── patient_service.py        # Patient CRUD & strict lookup
 ├── datalake/                         # Sample patient JSON files for testing
 ├── docs/                             # MkDocs documentation source
