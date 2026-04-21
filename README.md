@@ -94,8 +94,8 @@ Key sections:
 * [Local Setup Guide](https://guanes.github.io/health-without-borders/development/setup/)
 * [Security Protocols](https://guanes.github.io/health-without-borders/infrastructure/security/)
 * [GCP Deployment](https://guanes.github.io/health-without-borders/infrastructure/gcp-deploy/)
-* [Project Board](https://github.com/guane-hwb/health-without-borders/projects/1)
 
+**Project Board:** [github.com/users/guane-hwb/projects/1](https://github.com/users/guane-hwb/projects/1)
 ---
 
 ## Quick Start (Local Development)
