@@ -4,6 +4,8 @@ First off, thank you for considering contributing to Health Without Borders! It'
 
 We welcome contributions of all kinds: bug reports, feature requests, documentation improvements, and code patches.
 
+Full project documentation is available at [guanes-hwb.github.io/health-without-borders](https://guane-hwb.github.io/health-without-borders/).
+
 ## 1. Where do I go from here?
 
 If you've noticed a bug or have a feature request, please **open an issue** on our GitHub repository. If you want to contribute code, check our issues board for issues labeled `good first issue` or `help wanted`.
