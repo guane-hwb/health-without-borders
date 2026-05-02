@@ -1,0 +1,1810 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Interoperable Medical Records Platform for Migrant Children and Adolescents.">
+      
+      
+      
+        <link rel="canonical" href="https://guanes.github.io/health-without-borders/infrastructure/database/">
+      
+      
+        <link rel="prev" href="../../development/remediation-program/">
+      
+      
+        <link rel="next" href="../gcp-deploy/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.5">
+    
+    
+      
+        <title>Database Schema - Health Without Borders - API Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#database-architecture-schema" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Health Without Borders - API Docs" class="md-header__button md-logo" aria-label="Health Without Borders - API Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Health Without Borders - API Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Database Schema
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/guane-hwb/health-without-borders" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    guane-hwb/health-without-borders
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/fhir-rda/" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../development/setup/" class="md-tabs__link">
+          
+  
+  
+  Development
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+  Infrastructure and Security
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Health Without Borders - API Docs" class="md-nav__button md-logo" aria-label="Health Without Borders - API Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Health Without Borders - API Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/guane-hwb/health-without-borders" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    guane-hwb/health-without-borders
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/fhir-rda/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FHIR RDA Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/ai-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI & NLP Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/qa-plan/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    QA & PR Workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/remediation-program/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Remediation Program
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure and Security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Infrastructure and Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Database Schema
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Database Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-technology-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Technology Stack
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-data-dictionary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Data Dictionary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Data Dictionary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-organizations-tenants-organizations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1. Organizations (Tenants) (organizations)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-authentication-authorization-users" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2. Authentication &amp; Authorization (users)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-patient-demographics-patients" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3. Patient Demographics (patients)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-standard-clinical-catalogs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4. Standard Clinical Catalogs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.4. Standard Clinical Catalogs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#vaccines-catalog-catalog_vaccines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Vaccines Catalog (catalog_vaccines)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#diagnosis-catalog-catalog_cie10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnosis Catalog (catalog_cie10)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-architecture-design-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Architecture &amp; Design Decisions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Architecture &amp; Design Decisions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-strict-multi-tenancy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1. Strict Multi-Tenancy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-hybrid-relational-document-model-json" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2. Hybrid Relational-Document Model (JSON)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-delta-sync-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3. Delta Sync Tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-soft-deletion-is_active" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4. Soft Deletion (is_active)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-indexing-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5. Indexing Strategy
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-role-based-access-control-rbac-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Role-Based Access Control (RBAC) Matrix
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Role-Based Access Control (RBAC) Matrix">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-organizations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1. Organizations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-users" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2. Users
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-patients" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.3. Patients
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-design-rationale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.4. Design Rationale
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gcp-deploy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GCP Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../healthcare-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FHIR Store Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security Protocols
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../iso27001-technical-mapping/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ISO 27001 Mapping
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-technology-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Technology Stack
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-data-dictionary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Data Dictionary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Data Dictionary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-organizations-tenants-organizations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1. Organizations (Tenants) (organizations)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-authentication-authorization-users" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2. Authentication &amp; Authorization (users)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-patient-demographics-patients" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3. Patient Demographics (patients)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-standard-clinical-catalogs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4. Standard Clinical Catalogs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.4. Standard Clinical Catalogs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#vaccines-catalog-catalog_vaccines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Vaccines Catalog (catalog_vaccines)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#diagnosis-catalog-catalog_cie10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnosis Catalog (catalog_cie10)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-architecture-design-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Architecture &amp; Design Decisions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Architecture &amp; Design Decisions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-strict-multi-tenancy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1. Strict Multi-Tenancy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-hybrid-relational-document-model-json" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2. Hybrid Relational-Document Model (JSON)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-delta-sync-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3. Delta Sync Tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-soft-deletion-is_active" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4. Soft Deletion (is_active)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-indexing-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5. Indexing Strategy
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-role-based-access-control-rbac-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Role-Based Access Control (RBAC) Matrix
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Role-Based Access Control (RBAC) Matrix">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-organizations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1. Organizations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-users" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2. Users
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-patients" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.3. Patients
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-design-rationale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.4. Design Rationale
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="database-architecture-schema">Database Architecture &amp; Schema</h1>
+<p>This document details the data persistence layer for the <strong>Health Without Borders API</strong>. The system utilizes a relational database model optimized for transactional integrity, multi-tenancy, interoperability with FHIR R4 (Resolution 1888/2025), and seamless synchronization with offline-first mobile clients.</p>
+<h2 id="1-technology-stack">1. Technology Stack</h2>
+<ul>
+<li><strong>Engine:</strong> PostgreSQL 15 (Managed via Google Cloud SQL in production, Docker for local development).</li>
+<li><strong>ORM (Object-Relational Mapping):</strong> SQLAlchemy 2.0. Leverages the Data Mapper pattern to translate database schemas into Python objects, ensuring type safety and preventing SQL injection.</li>
+<li><strong>Driver:</strong> <code>psycopg2-binary</code> for standard TCP connections and Google Cloud Unix Socket integration.</li>
+<li><strong>Migration Strategy:</strong> Schema initialization and catalog seeding are handled via idempotent Python scripts located in the <code>scripts/</code> directory.</li>
+</ul>
+<hr />
+<h2 id="2-data-dictionary">2. Data Dictionary</h2>
+<h3 id="21-organizations-tenants-organizations">2.1. Organizations (Tenants) (<code>organizations</code>)</h3>
+<p>Serves as the root boundary for the Multi-Tenant architecture, isolating data between different NGOs, clinics, or humanitarian missions.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Column</th>
+<th style="text-align: left;">Type</th>
+<th style="text-align: left;">Constraints</th>
+<th style="text-align: left;">Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>id</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">PK, UUID v4</td>
+<td style="text-align: left;">Internal unique identifier.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>name</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">Unique, Not Null, Index</td>
+<td style="text-align: left;">The official name of the organization.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>is_active</code></td>
+<td style="text-align: left;">Boolean</td>
+<td style="text-align: left;">Default: True</td>
+<td style="text-align: left;">Soft delete flag for the entire tenant.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="22-authentication-authorization-users">2.2. Authentication &amp; Authorization (<code>users</code>)</h3>
+<p>This table manages access credentials and roles. Users are strictly bound to an organization to prevent cross-tenant data leaks.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Column</th>
+<th style="text-align: left;">Type</th>
+<th style="text-align: left;">Constraints</th>
+<th style="text-align: left;">Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>id</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">PK, UUID v4</td>
+<td style="text-align: left;">Internal unique identifier.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>organization_id</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">FK</td>
+<td style="text-align: left;">Links the user to a specific <code>Organization</code>.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>email</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">Unique, Not Null, Index</td>
+<td style="text-align: left;">The user's login username (OAuth2 standard).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>hashed_password</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">Not Null</td>
+<td style="text-align: left;">Bcrypt encrypted hash of the password.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>full_name</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">Nullable</td>
+<td style="text-align: left;">Human-readable name of the staff member.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>role</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">Default: 'doctor'</td>
+<td style="text-align: left;">RBAC assignment (<code>superadmin</code>, <code>org_admin</code>, <code>doctor</code>, <code>nurse</code>).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>is_active</code></td>
+<td style="text-align: left;">Boolean</td>
+<td style="text-align: left;">Default: True</td>
+<td style="text-align: left;">Used for soft-deleting users to preserve audit logs.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="23-patient-demographics-patients">2.3. Patient Demographics (<code>patients</code>)</h3>
+<p>Stores the core identity data of migrant children. Data is strictly scoped by <code>organization_id</code>. Relational columns mirror the most-queried RDA elements (Resolution 866/2021) so the database can filter without scanning JSON.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Column</th>
+<th style="text-align: left;">Type</th>
+<th style="text-align: left;">Constraints</th>
+<th style="text-align: left;">Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>id</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">PK</td>
+<td style="text-align: left;">Unique ID (generated UUID v4 from frontend).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>organization_id</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">FK, Not Null</td>
+<td style="text-align: left;">Ensures patients are only visible to their registering NGO.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>device_uid</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">Unique, Not Null, Index</td>
+<td style="text-align: left;">Hardware ID (NFC Bracelet/Tag) for physical 2FA.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>document_type</code></td>
+<td style="text-align: left;">Varchar(5)</td>
+<td style="text-align: left;">Index</td>
+<td style="text-align: left;">Identity document type — CC, CE, TI, RC, PT, PE, etc. (Res. 866 Elem. 2.1).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>document_number</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">Index</td>
+<td style="text-align: left;">Identity document number (Res. 866 Elem. 2.2).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>first_name</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">Not Null, Index</td>
+<td style="text-align: left;">Primer nombre (case-insensitive search).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>last_name</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">Not Null, Index</td>
+<td style="text-align: left;">Primer apellido (Res. 866 Elem. 3.1).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>second_last_name</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">Nullable</td>
+<td style="text-align: left;">Segundo apellido (Res. 866 Elem. 3.2).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>birth_date</code></td>
+<td style="text-align: left;">Date</td>
+<td style="text-align: left;">Not Null</td>
+<td style="text-align: left;">Date of birth for age calculation and vaccine schedules.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>biological_sex</code></td>
+<td style="text-align: left;">Varchar(2)</td>
+<td style="text-align: left;">Nullable</td>
+<td style="text-align: left;">Biological sex: M, F, I (Res. 866 Elem. 5).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>blood_type</code></td>
+<td style="text-align: left;">Varchar(5)</td>
+<td style="text-align: left;">Nullable</td>
+<td style="text-align: left;">Optional blood group (e.g., O+, A-).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>nationality_code</code></td>
+<td style="text-align: left;">Varchar(3)</td>
+<td style="text-align: left;">Index</td>
+<td style="text-align: left;">ISO 3166-1 country code (Res. 866 Elems. 1.1, 1.2). Critical for migrant population filtering.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>guardian_name</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">Nullable</td>
+<td style="text-align: left;">Name of the legal guardian or companion.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>guardian_phone</code></td>
+<td style="text-align: left;">Varchar</td>
+<td style="text-align: left;">Nullable</td>
+<td style="text-align: left;">Contact number for the guardian.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>full_record_json</code></td>
+<td style="text-align: left;">JSON</td>
+<td style="text-align: left;">Nullable</td>
+<td style="text-align: left;">Authoritative source for the complete patient payload (clinical evaluations, diagnoses, allergies, vaccinations, family history).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>synced_visit_count</code></td>
+<td style="text-align: left;">Integer</td>
+<td style="text-align: left;">Default: 0</td>
+<td style="text-align: left;">Number of <code>medicalHistory</code> entries already sent to the FHIR Store. Used for delta sync logic.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>rda_paciente_sent</code></td>
+<td style="text-align: left;">Boolean</td>
+<td style="text-align: left;">Default: false</td>
+<td style="text-align: left;">Whether the RDA-Paciente bundle has been sent to the FHIR Store at least once.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>created_at</code></td>
+<td style="text-align: left;">DateTime</td>
+<td style="text-align: left;">Default: now()</td>
+<td style="text-align: left;">Audit metadata — record creation timestamp.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>updated_at</code></td>
+<td style="text-align: left;">DateTime</td>
+<td style="text-align: left;">Default: now(), onupdate</td>
+<td style="text-align: left;">Audit metadata — last modification timestamp.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="24-standard-clinical-catalogs">2.4. Standard Clinical Catalogs</h3>
+<h4 id="vaccines-catalog-catalog_vaccines">Vaccines Catalog (<code>catalog_vaccines</code>)</h4>
+<p>Based on the <strong>CVX</strong> (Code for Vaccine Administered) standard.
+* <strong><code>code</code> (PK):</strong> The numeric CVX code (e.g., <code>90707</code> for MMR).
+* <strong><code>name</code>:</strong> The official descriptive name of the vaccine.
+* <strong><code>is_active</code>:</strong> Boolean flag.</p>
+<h4 id="diagnosis-catalog-catalog_cie10">Diagnosis Catalog (<code>catalog_cie10</code>)</h4>
+<p><em>Note: While this table exists for historical reference, the primary assignment of ICD-10 and ICD-11 codes is now performed dynamically via the LLM service (Vertex AI) during the sync process.</em>
+* <strong><code>code</code> (PK):</strong> The alphanumeric code (e.g., <code>A09.9</code>).
+* <strong><code>description</code>:</strong> The official Spanish translation.
+* <strong><code>is_common</code>:</strong> Boolean flag.</p>
+<hr />
+<h2 id="3-architecture-design-decisions">3. Architecture &amp; Design Decisions</h2>
+<h3 id="31-strict-multi-tenancy">3.1. Strict Multi-Tenancy</h3>
+<p>The database enforces tenant isolation at the schema level. Every <code>Patient</code> and <code>User</code> must belong to an <code>Organization</code>. Queries at the service layer automatically inject the <code>organization_id</code> of the requesting user, making it structurally impossible for a doctor in NGO "A" to query or modify a patient from NGO "B".</p>
+<h3 id="32-hybrid-relational-document-model-json">3.2. Hybrid Relational-Document Model (JSON)</h3>
+<p>Migrant populations often have unstructured or transient data.
+* <strong>Implementation:</strong> PostgreSQL's <code>JSON</code> data type stores the <code>full_record_json</code> field — the authoritative source for the complete patient payload.
+* <strong>Relational Columns:</strong> The most-queried fields (<code>document_number</code>, <code>first_name</code>, <code>last_name</code>, <code>nationality_code</code>) are mirrored as indexed relational columns for fast lookups without scanning JSON.
+* <strong>FHIR Source:</strong> The JSON is the source of truth used to build FHIR R4 RDA bundles for interoperability.</p>
+<h3 id="33-delta-sync-tracking">3.3. Delta Sync Tracking</h3>
+<p>Two columns (<code>synced_visit_count</code>, <code>rda_paciente_sent</code>) track which data has already been sent to the FHIR Store. This prevents duplicate bundle transmissions and enables automatic retry: if GCP fails, the tracking is not updated, so the next sync retries the failed bundles.</p>
+<h3 id="34-soft-deletion-is_active">3.4. Soft Deletion (<code>is_active</code>)</h3>
+<p>Rows in critical tables (Users, Organizations) are never physically deleted. This preserves historical integrity for future audits.</p>
+<h3 id="35-indexing-strategy">3.5. Indexing Strategy</h3>
+<ul>
+<li><strong>Search Optimization:</strong> B-Tree indexes on <code>first_name</code>, <code>last_name</code>, <code>document_number</code>, and <code>nationality_code</code> for fast patient lookups.</li>
+<li><strong>Data Integrity:</strong> Unique constraints on <code>users.email</code>, <code>patients.id</code>, and <code>patients.device_uid</code> to prevent duplicates during network sync anomalies.</li>
+</ul>
+<hr />
+<h2 id="4-role-based-access-control-rbac-matrix">4. Role-Based Access Control (RBAC) Matrix</h2>
+<h3 id="41-organizations">4.1. Organizations</h3>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th><code>superadmin</code></th>
+<th><code>org_admin</code></th>
+<th><code>doctor</code></th>
+<th><code>nurse</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST /organizations</code></td>
+<td>✅</td>
+<td>❌</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
+<tr>
+<td><code>GET /organizations</code></td>
+<td>✅ All orgs</td>
+<td>✅ Own org only</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
+</tbody>
+</table>
+<h3 id="42-users">4.2. Users</h3>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th><code>superadmin</code></th>
+<th><code>org_admin</code></th>
+<th><code>doctor</code></th>
+<th><code>nurse</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST /users</code></td>
+<td>✅ Any org</td>
+<td>✅ Own org only (<code>doctor</code>/<code>nurse</code> only)</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
+<tr>
+<td><code>GET /users</code></td>
+<td>✅ All users</td>
+<td>✅ Own org only</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
+</tbody>
+</table>
+<h3 id="43-patients">4.3. Patients</h3>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th><code>superadmin</code></th>
+<th><code>org_admin</code></th>
+<th><code>doctor</code></th>
+<th><code>nurse</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /patients/scan/{device_uid}</code></td>
+<td>❌</td>
+<td>✅</td>
+<td>✅ Own org</td>
+<td>✅ Own org</td>
+</tr>
+<tr>
+<td><code>POST /patients/sync</code></td>
+<td>❌</td>
+<td>❌</td>
+<td>✅ Full record</td>
+<td>✅ Vaccines only¹</td>
+</tr>
+<tr>
+<td><code>GET /patients/search</code></td>
+<td>❌</td>
+<td>✅</td>
+<td>✅ Own org</td>
+<td>✅ Own org</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>¹ A <code>nurse</code> can call <code>POST /patients/sync</code> but the service layer blocks any attempt to add or modify <code>medicalHistory</code>. Only vaccine records can be appended.</p>
+</blockquote>
+<h3 id="44-design-rationale">4.4. Design Rationale</h3>
+<ul>
+<li><strong><code>superadmin</code> has zero clinical access.</strong> It is a platform administrator role. It cannot read, create, or modify any patient record.</li>
+<li><strong><code>org_admin</code> manages staff, not patients.</strong> It can provision and list users within its organization but has no access to clinical data.</li>
+<li><strong>Multi-tenancy is enforced at the query level</strong>, not just the role check. Every database query is automatically scoped to <code>current_user.organization_id</code>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "search.suggest"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
