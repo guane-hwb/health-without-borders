@@ -16,16 +16,16 @@ from app.schemas.patient import DiagnosisItem
 from app.services.llm.base import MedicalCodingService
 from app.services.llm.prompts import (
     SYSTEM_INSTRUCTION,
-    SYSTEM_INSTRUCTION_FAMILY_HISTORY,
     SYSTEM_INSTRUCTION_CHRONIC_CONDITION,
+    SYSTEM_INSTRUCTION_FAMILY_HISTORY,
+    build_chronic_condition_prompt,
     build_clinical_prompt,
     build_family_history_prompt,
-    build_chronic_condition_prompt,
 )
 from app.services.llm.schemas import (
+    CHRONIC_CONDITION_RESPONSE_SCHEMA,
     DIAGNOSIS_RESPONSE_SCHEMA,
     FAMILY_HISTORY_RESPONSE_SCHEMA,
-    CHRONIC_CONDITION_RESPONSE_SCHEMA,
 )
 
 logger = logging.getLogger(__name__)
