@@ -614,3 +614,84 @@ def test_search_missing_mandatory_params_returns_422(client: TestClient):
     _clear_overrides()
 
     assert response.status_code == 422
+
+
+def test_sync_llm_codes_chronic_conditions(client: TestClient):
+    """
+    When a chronic condition lacks ICD codes, the LLM codes it.
+    The endpoint must call medical_llm_processor.code_chronic_condition
+    and persist the coded values on the item.
+    """
+    payload_with_chronic = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "TEST-UNIT-CHRONIC-001",
+        "device_uid": "04:A2:CHRONIC:UID",
+        "backgroundHistory": {
+            **MOCK_PATIENT_PAYLOAD["backgroundHistory"],
+            "chronicConditions": [
+                {
+                    # No ICD codes yet — triggers LLM coding
+                    "chronicDescription": "Diabetes mellitus tipo 2",
+                    "chronicCie10Code": None,
+                    "chronicCie11Code": None,
+                }
+            ],
+        },
+    }
+ 
+    _override_doctor()
+    with (
+        patch(
+            "app.api.v1.endpoints.patients.medical_llm_processor.code_chronic_condition",
+            return_value={
+                "icd10Code": "E11",
+                "icd11Code": "5A11",
+                "description": "Diabetes mellitus tipo 2",
+            },
+        ) as mock_code_chronic,
+        patch.object(fhir_backend, "send_bundle") as mock_gcp,
+    ):
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload_with_chronic)
+ 
+    _clear_overrides()
+ 
+    assert response.status_code == 201
+    mock_code_chronic.assert_called_once_with("Diabetes mellitus tipo 2")
+ 
+ 
+def test_sync_skips_chronic_coding_when_code_already_present(client: TestClient):
+    """
+    If a chronic condition already has an ICD-10 code, the LLM must NOT
+    be called for that item (idempotent re-sync).
+    """
+    payload_already_coded = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "TEST-UNIT-CHRONIC-002",
+        "device_uid": "04:A2:CHRONIC:UID2",
+        "backgroundHistory": {
+            **MOCK_PATIENT_PAYLOAD["backgroundHistory"],
+            "chronicConditions": [
+                {
+                    "chronicDescription": "Diabetes mellitus tipo 2",
+                    "chronicCie10Code": "E11",   # already coded — skip LLM
+                    "chronicCie11Code": "5A11",
+                }
+            ],
+        },
+    }
+ 
+    _override_doctor()
+    with (
+        patch(
+            "app.api.v1.endpoints.patients.medical_llm_processor.code_chronic_condition"
+        ) as mock_code_chronic,
+        patch.object(fhir_backend, "send_bundle") as mock_gcp,
+    ):
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload_already_coded)
+ 
+    _clear_overrides()
+ 
+    assert response.status_code == 201
+    mock_code_chronic.assert_not_called()
