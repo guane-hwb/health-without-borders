@@ -90,3 +90,51 @@ def test_create_user_doctor_forbidden(client: TestClient):
     
     assert response.status_code == 403
     assert "Not enough privileges" in response.json()["detail"]
+
+
+def test_get_me_returns_current_user_profile(client: TestClient):
+    """GET /me returns the authenticated user's own profile with correct fields."""
+
+    class MockDoctor:
+        id = "user-doc-001"
+        email = "doctor@clinic.org"
+        full_name = "Dr. House"
+        role = UserRole.doctor
+        organization_id = "org-123"
+        is_active = True
+
+    app.dependency_overrides[get_current_user] = lambda: MockDoctor()
+
+    response = client.get("/api/v1/users/me")
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["email"] == "doctor@clinic.org"
+    assert data["full_name"] == "Dr. House"
+    assert data["role"] == UserRole.doctor
+    assert data["organization_id"] == "org-123"
+
+
+def test_get_me_works_for_all_roles(client: TestClient):
+    """GET /me is accessible to any authenticated role — no privilege check on this endpoint."""
+
+    for role in [UserRole.org_admin, UserRole.nurse, UserRole.superadmin]:
+
+        class MockUser:
+            id = f"user-{role}-001"
+            email = f"{role}@clinic.org"
+            full_name = f"User {role}"
+            organization_id = "org-123"
+            is_active = True
+
+        MockUser.role = role
+        app.dependency_overrides[get_current_user] = lambda u=MockUser(): u
+
+        response = client.get("/api/v1/users/me")
+
+        assert response.status_code == 200, f"Expected 200 for role {role}, got {response.status_code}"
+        assert response.json()["email"] == f"{role}@clinic.org"
+
+    app.dependency_overrides.clear()

@@ -1,25 +1,27 @@
 """
-FHIR RDA Service — Resolution 1888/2025 Compliance
+FHIR RDA Service — Resolution 1888/2025 + IG RDA v0.8.1 Full Compliance
 
-Generates FHIR R4 Bundles of type "document" for:
-  - RDA-Paciente (patient self-reported health background)
-  - RDA-Consulta (ambulatory encounter clinical data)
+REWRITTEN v3.0 to match field-by-field with the official MinSalud Postman
+collection v1.4 (InteropAPI_Minsalud_Sandbox_-_Prestadores_v_1_4).
 
-Each Bundle follows the IHCE Implementation Guide:
-  https://vulcano.ihcecol.gov.co/guia/
+Source of truth: JSON bodies from "enviar-rda-paciente" and
+"enviar-rda-consulta-externa" in the Postman collection.
 
-Architecture:
-  Bundle(type=document)
-    ├── Composition (root — sections with references)
-    ├── Patient (PatientRDA profile)
-    ├── Organization (IPS — CareDeliveryOrganizationRDA)
-    ├── Organization (EAPB — HealthBenefitPlanAdminOrganizationRDA)  [optional]
-    ├── Practitioner (PractitionerRDA)
-    ├── Encounter (EncounterAmbulatoryRDA)
-    ├── Condition (ConditionRDA / ConditionStatementRDA)
-    ├── AllergyIntolerance (AllergyIntoleranceRDA / StatementRDA)
-    ├── FamilyMemberHistory (FamilyMemberHistoryRDA)
-    └── ... additional resources per sections
+KEY CHANGES v2.0 → v3.0 (all verified against Postman):
+  - Bundle: Added "language": "es-CO"
+  - References: Changed from urn:uuid to #id-style (contained references)
+  - Composition: Corrected LOINC codes, added confidentiality/attester/custodian/event
+  - Patient: Colombian surname extensions, _city/_country/_gender extensions,
+             active=true, deceasedBoolean=false, address.type="physical"
+  - Organization IPS: Dual-coding with 2 identifiers (NIT + CodigoPrestador)
+  - Practitioner: Dual-coding + Colombian surname extensions
+  - AllergyIntolerance: TipoAlergia in code.coding (NOT extension), verificationStatus
+  - RiskAssessment: Type in code.coding, description in code.text, status="registered"
+  - Occupation Observation: SNOMED CT (184104002), NOT LOINC
+  - Encounter: identifier, Location resource, diagnosis[].extension for type
+  - Condition: category + verificationStatus per Postman
+  - Section LOINC codes corrected for 4 sections
+  - Incapacity: Observation (AttendanceAllowanceRDA) with SNOMED components
 """
 
 import logging
@@ -30,72 +32,125 @@ from typing import Any, Dict, List, Optional
 from app.schemas.patient import (
     AllergyCategory,
     BiologicalSex,
+    ChronicConditionItem,
+    ColombianGenderGroup,
     DiagnosisType,
     FamilyRelationship,
+    IncapacityInfo,
     MedicalHistoryItem,
+    MedicationRequestItem,
+    MedicationStatementItem,
     PatientFullRecord,
+    RiskFactorType,
 )
 
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# CONSTANTS — FHIR System URIs for Colombian RDA
+# CONSTANTS — FHIR System URIs (ALL verified against Postman v1.4)
 # ============================================================================
 
 FHIR_RDA_BASE = "https://fhir.minsalud.gov.co/rda"
 
-# Terminology systems
-SYSTEM_SISPRO_ID_TYPE = "https://web.sispro.gov.co/CodeSystem/identification-type"
-SYSTEM_SISPRO_SEX = "https://web.sispro.gov.co/CodeSystem/Sexo"
-SYSTEM_SISPRO_ETHNICITY = "https://web.sispro.gov.co/CodeSystem/Etnia"
-SYSTEM_SISPRO_DISABILITY = "https://web.sispro.gov.co/CodeSystem/CategoriaDiscapacidad"
-SYSTEM_SISPRO_ZONE = "https://web.sispro.gov.co/CodeSystem/Zona"
-SYSTEM_SISPRO_MUNICIPALITY = "https://web.sispro.gov.co/CodeSystem/Municipio"
-SYSTEM_SISPRO_COUNTRY = "urn:iso:std:iso:3166"
-SYSTEM_SISPRO_VIA_INGRESO = "https://web.sispro.gov.co/CodeSystem/ViaIngresoUsuario"
-SYSTEM_SISPRO_CAUSA_EXTERNA = "https://web.sispro.gov.co/CodeSystem/RIPSCausaExterna"
-SYSTEM_SISPRO_MODALITY = "https://web.sispro.gov.co/CodeSystem/ModalidadAtencion"
-SYSTEM_SISPRO_SERVICE_GROUP = "https://web.sispro.gov.co/CodeSystem/GrupoServicios"
-SYSTEM_SISPRO_ENVIRONMENT = "https://web.sispro.gov.co/CodeSystem/EntornoAtencion"
-SYSTEM_SISPRO_DISCHARGE = "https://web.sispro.gov.co/CodeSystem/CondicionyDestinoUsuarioEgreso"
-SYSTEM_SISPRO_ALLERGY_CAT = "https://web.sispro.gov.co/CodeSystem/CategoriaAlergia"
-SYSTEM_SISPRO_FAMILY_REL = "https://web.sispro.gov.co/CodeSystem/ParentescoAntecedente"
-SYSTEM_SISPRO_DIAG_TYPE = "https://web.sispro.gov.co/CodeSystem/TipoDiagnostico"
-SYSTEM_SISPRO_RISK_FACTOR = "https://web.sispro.gov.co/CodeSystem/TipoFactorRiesgo"
-SYSTEM_REPS = "https://web.sispro.gov.co/CodeSystem/IPSCodHabilitacion"
+# Patient demographics
+SYSTEM_PERSON_ID = f"{FHIR_RDA_BASE}/CodeSystem/ColombianPersonIdentifier"
+SYSTEM_ETHNICITY = f"{FHIR_RDA_BASE}/CodeSystem/ColombianEthnicGroup"
+SYSTEM_DISABILITY = f"{FHIR_RDA_BASE}/CodeSystem/ColombianDisabilityClassification"
+SYSTEM_GENDER_IDENTITY = f"{FHIR_RDA_BASE}/CodeSystem/ColombianGenderIdentity"
+SYSTEM_GENDER_GROUP = f"{FHIR_RDA_BASE}/CodeSystem/ColombianGenderGroup"
+SYSTEM_ZONE = f"{FHIR_RDA_BASE}/CodeSystem/ColombianResidenceZone"
+SYSTEM_MUNICIPALITY = f"{FHIR_RDA_BASE}/CodeSystem/DIVIPOLA"
+SYSTEM_COUNTRY = f"{FHIR_RDA_BASE}/CodeSystem/ISO31661"
 
+# Encounter context
+SYSTEM_MODALITY = f"{FHIR_RDA_BASE}/CodeSystem/ColombianTechModality"
+SYSTEM_SERVICE_GROUP = f"{FHIR_RDA_BASE}/CodeSystem/GrupoServicios"
+SYSTEM_ENVIRONMENT = f"{FHIR_RDA_BASE}/CodeSystem/EntornoAtencion"
+SYSTEM_CAUSA_EXTERNA = f"{FHIR_RDA_BASE}/CodeSystem/RIPSCausaExternaVersion2"
+SYSTEM_DIAG_TYPE = f"{FHIR_RDA_BASE}/CodeSystem/RIPSTipoDiagnosticoPrincipalVersion2"
+SYSTEM_DIAG_ROLE = f"{FHIR_RDA_BASE}/CodeSystem/ColombianDiagnosisRole"
+SYSTEM_DISCHARGE = f"{FHIR_RDA_BASE}/CodeSystem/CondicionyDestinoUsuarioEgreso"
+SYSTEM_VIA_INGRESO = f"{FHIR_RDA_BASE}/CodeSystem/ViaIngreso"
+SYSTEM_REPS_SERVICES = f"{FHIR_RDA_BASE}/CodeSystem/REPShealthcareServices"
+SYSTEM_CUPS = f"{FHIR_RDA_BASE}/CodeSystem/CUPS"
+SYSTEM_FINALIDAD_CONSULTA = f"{FHIR_RDA_BASE}/CodeSystem/RIPSFinalidadConsultaVersion2"
+
+# Clinical terminologies
+SYSTEM_FAMILY_REL = f"{FHIR_RDA_BASE}/CodeSystem/ParentescoAntecedente"
+SYSTEM_OCCUPATION = f"{FHIR_RDA_BASE}/CodeSystem/CIUO88AC"
+SYSTEM_INCAPACITY = f"{FHIR_RDA_BASE}/CodeSystem/ColombianLicenseScope"
+SYSTEM_ALLERGY_CAT = f"{FHIR_RDA_BASE}/CodeSystem/TipoAlergia"
+SYSTEM_RISK_FACTOR = f"{FHIR_RDA_BASE}/CodeSystem/FactorRiesgo"
+SYSTEM_ORG_IDS = f"{FHIR_RDA_BASE}/CodeSystem/ColombianOrganizationIdentifiers"
+SYSTEM_DCI = f"{FHIR_RDA_BASE}/CodeSystem/MipresINN"
+SYSTEM_IUM = f"{FHIR_RDA_BASE}/CodeSystem/IUM"
+SYSTEM_HEALTH_TECH_CAT = f"{FHIR_RDA_BASE}/CodeSystem/ColombianHealthTechnologyCategory"
+
+# International terminologies
 SYSTEM_CIE10 = "http://hl7.org/fhir/sid/icd-10"
-SYSTEM_CIE11 = "http://id.who.int/icd/release/11/mms"
+SYSTEM_CIE11 = "http://hl7.org/fhir/sid/icd-11"
 SYSTEM_LOINC = "http://loinc.org"
+SYSTEM_SNOMED = "http://snomed.info/sct"
 SYSTEM_UNITS = "http://unitsofmeasure.org"
 SYSTEM_CONDITION_CLINICAL = "http://terminology.hl7.org/CodeSystem/condition-clinical"
+SYSTEM_CONDITION_VER_STATUS = "http://terminology.hl7.org/CodeSystem/condition-ver-status"
 SYSTEM_ALLERGY_CLINICAL = "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical"
 SYSTEM_ACT_CODE = "http://terminology.hl7.org/CodeSystem/v3-ActCode"
+SYSTEM_HL7_ID_TYPE = "http://terminology.hl7.org/CodeSystem/v2-0203"
+SYSTEM_PARTICIPATION = "http://terminology.hl7.org/CodeSystem/v3-ParticipationType"
+SYSTEM_CONFIDENTIALITY = "http://terminology.hl7.org/CodeSystem/v3-Confidentiality"
+SYSTEM_CONDITION_CATEGORY = "http://terminology.hl7.org/CodeSystem/condition-category"
+
+# NamingSystem URIs
+NAMING_SYSTEM_RNEC = f"{FHIR_RDA_BASE}/NamingSystem/RNEC"
+NAMING_SYSTEM_REPS = f"{FHIR_RDA_BASE}/NamingSystem/REPS"
+NAMING_SYSTEM_ENCOUNTERS = f"{FHIR_RDA_BASE}/NamingSystem/Encounters"
+
+# Extension URLs
+EXT_BASE = f"{FHIR_RDA_BASE}/StructureDefinition"
+EXT_FATHERS_FAMILY = f"{EXT_BASE}/ExtensionFathersFamilyName"
+EXT_MOTHERS_FAMILY = f"{EXT_BASE}/ExtensionMothersFamilyName"
+EXT_NATIONALITY = f"{EXT_BASE}/ExtensionPatientNationality"
+EXT_ETHNICITY = f"{EXT_BASE}/ExtensionPatientEthnicity"
+EXT_DISABILITY = f"{EXT_BASE}/ExtensionPatientDisability"
+EXT_GENDER_IDENTITY = f"{EXT_BASE}/ExtensionPatientGenderIdentity"
+EXT_BIOLOGICAL_GENDER = f"{EXT_BASE}/ExtensionBiologicalGender"
+EXT_BIRTH_TIME = f"{EXT_BASE}/ExtensionBirthTime"
+EXT_DIVIPOLA = f"{EXT_BASE}/ExtensionDivipolaMunicipality"
+EXT_COUNTRY_CODE = f"{EXT_BASE}/ExtensionCountryCode"
+EXT_RESIDENCE_ZONE = f"{EXT_BASE}/ExtensionResidenceZone"
+EXT_DIAG_TYPE = f"{EXT_BASE}/ExtensionDiagnosisType"
+EXT_DISCHARGE = f"{EXT_BASE}/ExtensionDischargeDisposition"
+EXT_ENTRY_ROUTE = f"{EXT_BASE}/ExtensionEntryRoute"
 
 # Profile canonical URLs
-PROFILE_PATIENT = f"{FHIR_RDA_BASE}/StructureDefinition/PatientRDA"
-PROFILE_ORG_IPS = f"{FHIR_RDA_BASE}/StructureDefinition/CareDeliveryOrganizationRDA"
-PROFILE_ORG_EAPB = f"{FHIR_RDA_BASE}/StructureDefinition/HealthBenefitPlanAdminOrganizationRDA"
-PROFILE_PRACTITIONER = f"{FHIR_RDA_BASE}/StructureDefinition/PractitionerRDA"
-PROFILE_ENCOUNTER_AMB = f"{FHIR_RDA_BASE}/StructureDefinition/EncounterAmbulatoryRDA"
-PROFILE_CONDITION = f"{FHIR_RDA_BASE}/StructureDefinition/ConditionRDA"
-PROFILE_CONDITION_STMT = f"{FHIR_RDA_BASE}/StructureDefinition/ConditionStatementRDA"
-PROFILE_ALLERGY = f"{FHIR_RDA_BASE}/StructureDefinition/AllergyIntoleranceRDA"
-PROFILE_ALLERGY_STMT = f"{FHIR_RDA_BASE}/StructureDefinition/AllergyIntoleranceStatementRDA"
-PROFILE_FAMILY_HISTORY = f"{FHIR_RDA_BASE}/StructureDefinition/FamilyMemberHistoryRDA"
-PROFILE_COMPOSITION_PATIENT = f"{FHIR_RDA_BASE}/StructureDefinition/CompositionPatientStatementRDA"
-PROFILE_COMPOSITION_AMB = f"{FHIR_RDA_BASE}/StructureDefinition/CompositionAmbulatoryRDA"
-PROFILE_BUNDLE_PATIENT = f"{FHIR_RDA_BASE}/StructureDefinition/BundlePatientStatementRDA"
-PROFILE_BUNDLE_AMB = f"{FHIR_RDA_BASE}/StructureDefinition/BundleAmbulatoryRDA"
+PROFILE_PATIENT = f"{EXT_BASE}/PatientRDA"
+PROFILE_ORG_IPS = f"{EXT_BASE}/CareDeliveryOrganizationRDA"
+PROFILE_ORG_EAPB = f"{EXT_BASE}/HealthBenefitPlanAdminOrganizationRDA"
+PROFILE_PRACTITIONER = f"{EXT_BASE}/PractitionerRDA"
+PROFILE_ENCOUNTER_AMB = f"{EXT_BASE}/EncounterAmbulatoryRDA"
+PROFILE_CONDITION = f"{EXT_BASE}/ConditionRDA"
+PROFILE_CONDITION_STMT = f"{EXT_BASE}/ConditionStatementRDA"
+PROFILE_ALLERGY = f"{EXT_BASE}/AllergyIntoleranceRDA"
+PROFILE_ALLERGY_STMT = f"{EXT_BASE}/AllergyIntoleranceStatementRDA"
+PROFILE_FAMILY_HISTORY = f"{EXT_BASE}/FamilyMemberHistoryRDA"
+PROFILE_COMPOSITION_PATIENT = f"{EXT_BASE}/CompositionPatientStatementRDA"
+PROFILE_COMPOSITION_AMB = f"{EXT_BASE}/CompositionAmbulatoryRDA"
+PROFILE_BUNDLE_PATIENT = f"{EXT_BASE}/BundlePatientStatementRDA"
+PROFILE_BUNDLE_AMB = f"{EXT_BASE}/BundleAmbulatoryRDA"
+PROFILE_MEDICATION_STMT = f"{EXT_BASE}/MedicationStatementRDA"
+PROFILE_MEDICATION_REQ = f"{EXT_BASE}/MedicationRequestRDA"
+PROFILE_OCCUPATION_OBS = f"{EXT_BASE}/PatientOccupationAtEncounterRDA"
+PROFILE_ATTENDANCE_ALLOWANCE = f"{EXT_BASE}/AttendanceAllowanceRDA"
+PROFILE_SERVICE_REQUEST = f"{EXT_BASE}/ServiceRequestRDA"
+PROFILE_DOC_REFERENCE = f"{EXT_BASE}/DocumentReferenceEPIRDA"
+PROFILE_RISK_FACTOR = f"{EXT_BASE}/RiskFactorRDA"
+PROFILE_LOCATION = f"{EXT_BASE}/CareDeliveryLocationRDA"
 
 
 # ============================================================================
 # HELPERS
 # ============================================================================
-
-def _uuid() -> str:
-    return f"urn:uuid:{uuid.uuid4()}"
-
 
 def _fhir_datetime(dt_obj) -> str:
     if not dt_obj:
@@ -112,10 +167,22 @@ def _sex_to_fhir(sex: BiologicalSex) -> str:
     return {"M": "male", "F": "female", "I": "other"}.get(sex.value, "unknown")
 
 
+def _sex_to_gender_group(sex: BiologicalSex) -> ColombianGenderGroup:
+    return {
+        "M": ColombianGenderGroup.HOMBRE,
+        "F": ColombianGenderGroup.MUJER,
+        "I": ColombianGenderGroup.INDETERMINADO,
+    }.get(sex.value, ColombianGenderGroup.INDETERMINADO)
+
+
+def _gender_group_display(gg: ColombianGenderGroup) -> str:
+    return {"01": "Hombre", "02": "Mujer", "03": "Indeterminado"}.get(gg.value, "Indeterminado")
+
+
 def _allergy_category_display(cat: AllergyCategory) -> str:
     return {
         "01": "Medicamento", "02": "Alimento", "03": "Sustancia del ambiente",
-        "04": "Sustancia en contacto con la piel", "05": "Picadura de insectos", "06": "Otra"
+        "04": "Sustancia en contacto con la piel", "05": "Picadura de insectos", "06": "Otra",
     }.get(cat.value, "Otra")
 
 
@@ -125,19 +192,108 @@ def _family_rel_display(rel: FamilyRelationship) -> str:
 
 def _diag_type_display(dt: DiagnosisType) -> str:
     return {
-        "01": "Impresión diagnóstica", "02": "Confirmado nuevo", "03": "Confirmado repetido"
+        "01": "Impresión diagnóstica", "02": "Confirmado Nuevo", "03": "Confirmado Repetido",
     }.get(dt.value, "Impresión diagnóstica")
 
 
-def _build_section(title: str, code_system: str, code_code: str, code_display: str,
-                   refs: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _risk_factor_display(rf_type: RiskFactorType) -> str:
+    return {
+        "01": "Químicos", "02": "Físicos", "03": "Biomecánicos",
+        "04": "Psicosociales", "05": "Biológicos", "06": "Otro",
+    }.get(rf_type.value, "Otro")
+
+
+def _zone_display(code: str) -> str:
+    return {"01": "Urbana", "02": "Rural"}.get(code, "Urbana")
+
+
+def _doc_type_display(code: str) -> str:
+    return {
+        "CC": "Cédula ciudadanía", "TI": "Tarjeta de identidad",
+        "RC": "Registro civil", "CE": "Cédula de extranjería",
+        "PA": "Pasaporte", "CN": "Certificado de nacido vivo",
+        "CD": "Carné diplomático", "SC": "Salvoconducto de permanencia",
+        "PE": "Permiso Especial de Permanencia", "PT": "Permiso Temporal de Permanencia",
+        "PPT": "Permiso por protección temporal", "DE": "Documento Extranjero",
+        "AS": "Adulto sin identificar", "MS": "Menor sin identificar",
+        "SI": "Sin identificación",
+    }.get(code, code)
+
+
+def _modality_display(code: str) -> str:
+    return {"01": "Intramural", "02": "Extramural domiciliaria",
+            "03": "Extramural jornada de salud", "04": "Telemedicina"}.get(code, "")
+
+
+def _service_group_display(code: str) -> str:
+    return {"01": "Consulta externa", "02": "Apoyo diagnóstico",
+            "03": "Internación", "04": "Quirúrgico", "05": "Atención inmediata"}.get(code, "")
+
+
+def _environment_display(code: str) -> str:
+    return {"01": "Hogar", "02": "Comunitario", "03": "Escolar",
+            "04": "Laboral", "05": "Institucional"}.get(code, "")
+
+
+def _ref(resource_id: str) -> str:
+    """Build a #id reference. Post-processing will rewrite to urn:uuid for GCP."""
+    return f"#{resource_id}"
+
+
+def _assign_fullurls_and_rewrite_refs(bundle: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Build a FHIR Composition section that satisfies the FHIRPath constraint:
-    'text.exists() or entry.exists() or section.exists()'
-    
-    When refs is non-empty: includes 'entry' with the references.
-    When refs is empty: includes 'emptyReason' and a 'text' element (no 'entry' key at all).
+    Post-process a Bundle for GCP Healthcare API compatibility.
+
+    1. Assigns a urn:uuid fullUrl to each entry based on resource.id.
+    2. Rewrites all #id references to the corresponding urn:uuid.
+    3. Keeps resource.id intact (MinSalud needs it).
+
+    This makes Bundles dual-compatible: GCP resolves via fullUrl/reference,
+    MinSalud resolves via resource.id / #id.
     """
+    import uuid as _uuid
+
+    # Step 1: Build id → urn:uuid mapping and assign fullUrls
+    id_to_urn: Dict[str, str] = {}
+    for entry in bundle.get("entry", []):
+        resource = entry.get("resource", {})
+        res_id = resource.get("id")
+        if res_id:
+            urn = f"urn:uuid:{_uuid.uuid4()}"
+            id_to_urn[res_id] = urn
+            entry["fullUrl"] = urn
+        elif "fullUrl" not in entry:
+            entry["fullUrl"] = f"urn:uuid:{_uuid.uuid4()}"
+
+    # Step 2: Rewrite all #id references to urn:uuid
+    def _rewrite(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k == "reference" and isinstance(v, str) and v.startswith("#"):
+                    ref_id = v[1:]  # strip "#"
+                    if ref_id in id_to_urn:
+                        obj[k] = id_to_urn[ref_id]
+                else:
+                    _rewrite(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _rewrite(item)
+
+    _rewrite(bundle)
+    return bundle
+
+
+def _patient_id(patient: PatientFullRecord) -> str:
+    ident = patient.patientInfo.identification
+    return f"{ident.documentType.value}-{ident.documentNumber}"
+
+
+# ============================================================================
+# SECTION & BUNDLE SHELL BUILDERS
+# ============================================================================
+
+def _build_section(title: str, code_system: str, code_code: str,
+                   code_display: str, refs: List[Dict[str, Any]]) -> Dict[str, Any]:
     section: Dict[str, Any] = {
         "title": title,
         "code": {"coding": [{"system": code_system, "code": code_code, "display": code_display}]},
@@ -158,279 +314,421 @@ def _build_section(title: str, code_system: str, code_code: str, code_display: s
 
 def _build_bundle_shell(bundle_id: str, profile: str, timestamp: str,
                         composition_entry: Dict, resource_entries: List[Dict]) -> Dict[str, Any]:
-    """
-    Build a FHIR Bundle of type 'document' with the required 'identifier' field.
-    
-    FHIR R4 FHIRPath constraint for document bundles:
-    'type = "document" implies (identifier.system.exists() and identifier.value.exists())'
-    """
     return {
         "resourceType": "Bundle",
         "id": bundle_id,
-        "identifier": {
-            "system": f"{FHIR_RDA_BASE}/bundle-identifier",
-            "value": bundle_id
-        },
+        "language": "es-CO",
+        "identifier": {"system": f"{FHIR_RDA_BASE}/bundle-identifier", "value": bundle_id},
         "meta": {"profile": [profile]},
         "type": "document",
         "timestamp": timestamp,
-        "entry": [composition_entry] + resource_entries
+        "entry": [composition_entry] + resource_entries,
     }
 
 
 # ============================================================================
-# RESOURCE BUILDERS
+# RESOURCE BUILDERS — Patient
 # ============================================================================
 
 def _build_patient_resource(patient: PatientFullRecord) -> Dict[str, Any]:
-    """Build FHIR Patient resource conforming to PatientRDA profile."""
     pi = patient.patientInfo
     ident = pi.identification
+    pat_id = _patient_id(patient)
 
-    resource = {
+    resource: Dict[str, Any] = {
         "resourceType": "Patient",
+        "id": pat_id,
         "meta": {"profile": [PROFILE_PATIENT]},
+        "extension": [
+            {
+                "url": EXT_NATIONALITY,
+                "valueCoding": {
+                    "system": SYSTEM_COUNTRY,
+                    "code": pi.nationalityCode,
+                    "display": pi.nationalityName or pi.nationalityCode,
+                },
+            }
+        ],
         "identifier": [
             {
                 "type": {
-                    "coding": [{
-                        "system": SYSTEM_SISPRO_ID_TYPE,
-                        "code": ident.documentType.value
-                    }]
+                    "coding": [
+                        {"system": SYSTEM_HL7_ID_TYPE, "code": "PN", "display": "Person number"},
+                        {"system": SYSTEM_PERSON_ID, "code": ident.documentType.value,
+                         "display": _doc_type_display(ident.documentType.value)},
+                    ]
                 },
-                "value": ident.documentNumber
+                "id": "NationalPersonIdentifier-0",
+                "use": "official",
+                "system": NAMING_SYSTEM_RNEC,
+                "value": ident.documentNumber,
             }
         ],
-        "name": [{
-            "use": "official",
-            "family": pi.firstLastName,
-            "_family": {
-                "extension": [{
-                    "url": "http://hl7.org/fhir/StructureDefinition/humanname-fathers-family",
-                    "valueString": pi.firstLastName
-                }]
-            },
-            "given": [g for g in [pi.firstName, pi.secondName] if g]
-        }],
+        "active": True,
         "gender": _sex_to_fhir(pi.biologicalSex),
         "birthDate": pi.dob.isoformat(),
-        "extension": [
-            {
-                "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionPatientNationality",
-                "valueCoding": {
-                    "system": SYSTEM_SISPRO_COUNTRY,
-                    "code": pi.nationalityCode,
-                    "display": pi.nationalityName or pi.nationalityCode
-                }
-            }
-        ]
+        "deceasedBoolean": False,
     }
 
-    # Second last name extension
+    # --- Name (Colombian surname extensions) ---
+    family_value = pi.firstLastName
     if pi.secondLastName:
-        resource["name"][0]["_family"]["extension"].append({
-            "url": "http://hl7.org/fhir/StructureDefinition/humanname-mothers-family",
-            "valueString": pi.secondLastName
-        })
+        family_value = f"{pi.firstLastName} {pi.secondLastName}"
 
-    # Address
+    family_exts = [{"url": EXT_FATHERS_FAMILY, "valueString": pi.firstLastName}]
+    if pi.secondLastName:
+        family_exts.append({"url": EXT_MOTHERS_FAMILY, "valueString": pi.secondLastName})
+
+    resource["name"] = [{
+        "given": [g for g in [pi.firstName, pi.secondName] if g],
+        "use": "official",
+        "family": family_value,
+        "_family": {"extension": family_exts},
+    }]
+
+    # --- Address (_city, _country, extension for zone) ---
     addr = pi.address
     fhir_addr: Dict[str, Any] = {
+        "id": "HomeAddress-0",
         "use": "home",
+        "type": "physical",
         "city": addr.city,
-        "state": addr.state,
-        "country": addr.country
     }
     if addr.street:
         fhir_addr["line"] = [addr.street]
+    if addr.state:
+        fhir_addr["state"] = addr.state
+    if addr.cityCode:
+        fhir_addr["_city"] = {
+            "extension": [{
+                "url": EXT_DIVIPOLA,
+                "valueCoding": {"code": addr.cityCode, "system": SYSTEM_MUNICIPALITY},
+            }]
+        }
+    fhir_addr["country"] = addr.countryName or "Colombia"
+    fhir_addr["_country"] = {
+        "extension": [{
+            "url": EXT_COUNTRY_CODE,
+            "valueCoding": {"system": SYSTEM_COUNTRY, "code": addr.country},
+        }]
+    }
+    if addr.zone:
+        fhir_addr["extension"] = [{
+            "url": EXT_RESIDENCE_ZONE,
+            "valueCoding": {
+                "system": SYSTEM_ZONE,
+                "code": addr.zone.value,
+                "display": _zone_display(addr.zone.value),
+            },
+        }]
     if addr.zipCode:
         fhir_addr["postalCode"] = addr.zipCode
-    if addr.cityCode:
-        fhir_addr["extension"] = [{
-            "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionMunicipalityCode",
-            "valueCoding": {"system": SYSTEM_SISPRO_MUNICIPALITY, "code": addr.cityCode}
-        }]
-    if addr.zone:
-        fhir_addr.setdefault("extension", []).append({
-            "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionResidenceZone",
-            "valueCoding": {"system": SYSTEM_SISPRO_ZONE, "code": addr.zone.value}
-        })
     resource["address"] = [fhir_addr]
 
-    # Ethnicity
+    # --- _gender extension (ColombianGenderGroup) ---
+    gg = _sex_to_gender_group(pi.biologicalSex)
+    resource["_gender"] = {
+        "extension": [{
+            "url": EXT_BIOLOGICAL_GENDER,
+            "valueCoding": {
+                "system": SYSTEM_GENDER_GROUP,
+                "code": gg.value,
+                "display": _gender_group_display(gg),
+            },
+        }]
+    }
+
+    # --- Additional patient extensions ---
     if pi.ethnicity:
         resource["extension"].append({
-            "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionPatientEthnicity",
-            "valueCoding": {"system": SYSTEM_SISPRO_ETHNICITY, "code": pi.ethnicity.value}
+            "url": EXT_ETHNICITY,
+            "valueCoding": {"system": SYSTEM_ETHNICITY, "code": pi.ethnicity.value},
         })
-
-    # Disability
     if pi.disabilityCategory:
         resource["extension"].append({
-            "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionPatientDisability",
-            "valueCoding": {"system": SYSTEM_SISPRO_DISABILITY, "code": pi.disabilityCategory.value}
+            "url": EXT_DISABILITY,
+            "valueCoding": {"system": SYSTEM_DISABILITY, "code": pi.disabilityCategory.value},
         })
-
-    # Gender identity (optional)
     if pi.genderIdentity:
         resource["extension"].append({
-            "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionPatientGenderIdentity",
-            "valueCoding": {
-                "system": "https://web.sispro.gov.co/CodeSystem/MDECIdentidadGenero",
-                "code": pi.genderIdentity.value
-            }
+            "url": EXT_GENDER_IDENTITY,
+            "valueCoding": {"system": SYSTEM_GENDER_IDENTITY, "code": pi.genderIdentity.value},
         })
 
-    # Guardian as contact
+    # --- Guardian contact ---
     gi = patient.guardianInfo
-    resource["contact"] = [{
-        "relationship": [{"text": gi.relationship}],
-        "name": {"text": gi.name},
-        "telecom": [{"system": "phone", "value": gi.phone}] if gi.phone else []
-    }]
+    if gi and gi.name:
+        resource["contact"] = [{
+            "relationship": [{"text": gi.relationship}],
+            "name": {"text": gi.name},
+            "telecom": [{"system": "phone", "value": gi.phone}] if gi.phone else [],
+        }]
 
     return resource
 
 
+# ============================================================================
+# RESOURCE BUILDERS — Organization, Practitioner, Location
+# ============================================================================
+
 def _build_organization_ips(provider) -> Optional[Dict[str, Any]]:
-    """Build IPS Organization resource."""
     if not provider:
         return None
+    org_id = provider.repsCode
+    nit = provider.nitNumber or "Desconocido"
     return {
         "resourceType": "Organization",
+        "id": org_id,
         "meta": {"profile": [PROFILE_ORG_IPS]},
-        "identifier": [{"system": SYSTEM_REPS, "value": provider.repsCode}],
-        "name": provider.name,
-        "active": True
+        "identifier": [
+            {
+                "id": "TaxIdentifier-0",
+                "use": "official",
+                "type": {
+                    "coding": [
+                        {"system": SYSTEM_HL7_ID_TYPE, "code": "TAX", "display": "Tax ID number"},
+                        {"system": SYSTEM_ORG_IDS, "code": "NIT",
+                         "display": "Número de Identificación Tributaria"},
+                    ]
+                },
+                "value": nit,
+            },
+            {
+                "id": "HealthcareProviderIdentifier-0",
+                "use": "official",
+                "type": {
+                    "coding": [
+                        {"system": SYSTEM_HL7_ID_TYPE, "code": "PRN", "display": "Provider number"},
+                        {"system": SYSTEM_ORG_IDS, "code": "CodigoPrestador",
+                         "display": "Código de habilitación de prestador de servicios de salud"},
+                    ]
+                },
+                "system": NAMING_SYSTEM_REPS,
+                "value": org_id,
+            },
+        ],
     }
 
 
 def _build_organization_eapb(payer) -> Optional[Dict[str, Any]]:
-    """Build EAPB Organization resource."""
     if not payer or not payer.code:
         return None
     return {
         "resourceType": "Organization",
-        "meta": {"profile": [PROFILE_ORG_EAPB]},
-        "identifier": [{"system": "https://www.adres.gov.co/ENTIDADES_SGSSS", "value": payer.code}],
+        "id": payer.code,
         "name": payer.name or "",
-        "active": True
     }
 
 
-def _build_practitioner(pract) -> Optional[Dict[str, Any]]:
-    """Build Practitioner resource."""
+def _build_practitioner(pract, pract_id: str) -> Optional[Dict[str, Any]]:
     if not pract:
         return None
+
+    if pract.firstLastName:
+        family_val = pract.firstLastName
+        if pract.secondLastName:
+            family_val = f"{pract.firstLastName} {pract.secondLastName}"
+        family_exts = [{"url": EXT_FATHERS_FAMILY, "valueString": pract.firstLastName}]
+        if pract.secondLastName:
+            family_exts.append({"url": EXT_MOTHERS_FAMILY, "valueString": pract.secondLastName})
+        given = [g for g in [pract.firstName, pract.secondName] if g]
+        name_entry: Dict[str, Any] = {
+            "use": "official",
+            "family": family_val,
+            "_family": {"extension": family_exts},
+            "given": given if given else [pract.name.split()[0]] if pract.name else [],
+        }
+    else:
+        parts = pract.name.split() if pract.name else [""]
+        name_entry = {"use": "official", "family": parts[-1] if parts else "",
+                      "given": parts[:-1] if len(parts) > 1 else parts}
+
     return {
         "resourceType": "Practitioner",
+        "id": pract_id,
         "meta": {"profile": [PROFILE_PRACTITIONER]},
         "identifier": [{
-            "type": {"coding": [{"system": SYSTEM_SISPRO_ID_TYPE, "code": pract.documentType.value}]},
-            "value": pract.documentNumber
+            "id": "NationalPersonIdentifier-0",
+            "use": "official",
+            "type": {
+                "coding": [
+                    {"system": SYSTEM_HL7_ID_TYPE, "code": "PN", "display": "Person number"},
+                    {"system": SYSTEM_PERSON_ID, "code": pract.documentType.value,
+                     "display": _doc_type_display(pract.documentType.value)},
+                ]
+            },
+            "value": pract.documentNumber,
         }],
-        "name": [{"text": pract.name}]
+        "name": [name_entry],
     }
 
 
-def _build_encounter_ambulatory(
-    visit: MedicalHistoryItem, patient_ref: str, org_ref: Optional[str], pract_ref: Optional[str]
+def _build_location(provider) -> Optional[Dict[str, Any]]:
+    if not provider:
+        return None
+    seat = provider.locationSeatCode or f"{provider.repsCode}-01"
+    return {
+        "resourceType": "Location",
+        "id": seat,
+        "meta": {"profile": [PROFILE_LOCATION]},
+        "identifier": [{"use": "official", "system": NAMING_SYSTEM_REPS, "value": seat}],
+        "name": provider.name,
+        "managingOrganization": {"reference": _ref(provider.repsCode)},
+    }
+
+
+# ============================================================================
+# RESOURCE BUILDERS — Encounter
+# ============================================================================
+
+def _build_encounter(
+    visit: MedicalHistoryItem,
+    patient_id: str,
+    org_id: Optional[str],
+    pract_id: Optional[str],
+    location_id: Optional[str],
+    encounter_id: str,
 ) -> Dict[str, Any]:
-    """Build Encounter resource conforming to EncounterAmbulatoryRDA."""
+    enc_types: List[Dict[str, Any]] = [
+        {"coding": [{"system": SYSTEM_MODALITY, "code": visit.careModality.value,
+                      "display": _modality_display(visit.careModality.value)}]},
+        {"coding": [{"system": SYSTEM_SERVICE_GROUP, "code": visit.serviceGroup.value,
+                      "display": _service_group_display(visit.serviceGroup.value)}]},
+    ]
+    if visit.healthcareServiceCode:
+        enc_types.append({"coding": [{"system": SYSTEM_REPS_SERVICES,
+                                       "code": visit.healthcareServiceCode,
+                                       "display": visit.healthcareServiceDisplay or ""}]})
+    enc_types.append({"coding": [{"system": SYSTEM_ENVIRONMENT,
+                                   "code": visit.careEnvironment.value,
+                                   "display": _environment_display(visit.careEnvironment.value)}]})
+
     enc: Dict[str, Any] = {
         "resourceType": "Encounter",
+        "id": encounter_id,
         "meta": {"profile": [PROFILE_ENCOUNTER_AMB]},
+        "identifier": [{
+            "id": "EncounterIdentifier",
+            "use": "usual",
+            "system": NAMING_SYSTEM_ENCOUNTERS,
+            "value": visit.encounterIdentifier or f"ENC-{encounter_id}",
+        }],
         "status": "finished",
         "class": {"system": SYSTEM_ACT_CODE, "code": "AMB", "display": "ambulatory"},
-        "subject": {"reference": patient_ref},
-        "period": {
-            "start": _fhir_datetime(visit.startDateTime)
-        },
-        "extension": [
-            {
-                "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionCareModality",
-                "valueCoding": {"system": SYSTEM_SISPRO_MODALITY, "code": visit.careModality.value}
-            },
-            {
-                "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionServiceGroup",
-                "valueCoding": {"system": SYSTEM_SISPRO_SERVICE_GROUP, "code": visit.serviceGroup.value}
-            },
-            {
-                "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionCareEnvironment",
-                "valueCoding": {"system": SYSTEM_SISPRO_ENVIRONMENT, "code": visit.careEnvironment.value}
-            }
-        ]
+        "type": enc_types,
+        "subject": {"reference": _ref(patient_id)},
+        "period": {"start": _fhir_datetime(visit.startDateTime)},
     }
 
     if visit.endDateTime:
         enc["period"]["end"] = _fhir_datetime(visit.endDateTime)
 
-    if org_ref:
-        enc["serviceProvider"] = {"reference": org_ref}
+    if visit.cupsCode:
+        enc["serviceType"] = {"coding": [{"system": SYSTEM_CUPS, "code": visit.cupsCode,
+                                           "display": visit.cupsDisplay or ""}]}
 
-    if pract_ref:
-        enc["participant"] = [{"individual": {"reference": pract_ref}}]
+    if pract_id:
+        enc["participant"] = [{
+            "id": "AttenderPhysician",
+            "type": [{"coding": [{"system": SYSTEM_PARTICIPATION, "code": "ATND", "display": "attender"}]}],
+            "individual": {"reference": _ref(pract_id)},
+        }]
     elif visit.physician:
         enc["participant"] = [{"individual": {"display": visit.physician}}]
 
-    if visit.location:
+    if visit.externalCause:
+        enc["reasonCode"] = [{"coding": [{"system": SYSTEM_CAUSA_EXTERNA,
+                                           "code": visit.externalCause,
+                                           "display": visit.externalCauseDisplay or ""}]}]
+
+    enc_extensions: List[Dict[str, Any]] = []
+    if visit.dischargeDisposition:
+        enc_extensions.append({
+            "url": EXT_DISCHARGE,
+            "extension": [{"url": "DispositionCode",
+                           "valueCoding": {"system": SYSTEM_DISCHARGE,
+                                           "code": visit.dischargeDisposition.value}}],
+        })
+    if visit.entryRoute:
+        enc_extensions.append({
+            "url": EXT_ENTRY_ROUTE,
+            "valueCoding": {"system": SYSTEM_VIA_INGRESO, "code": visit.entryRoute},
+        })
+    if enc_extensions:
+        enc["extension"] = enc_extensions
+
+    if location_id:
+        enc["location"] = [{"location": {"reference": _ref(location_id)}}]
+    elif visit.location:
         enc["location"] = [{"location": {"display": visit.location}}]
 
-    if visit.entryRoute:
-        enc["extension"].append({
-            "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionEntryRoute",
-            "valueCoding": {"system": SYSTEM_SISPRO_VIA_INGRESO, "code": visit.entryRoute}
-        })
-
-    if visit.externalCause:
-        enc["extension"].append({
-            "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionExternalCause",
-            "valueCoding": {"system": SYSTEM_SISPRO_CAUSA_EXTERNA, "code": visit.externalCause}
-        })
+    if org_id:
+        enc["serviceProvider"] = {"reference": _ref(org_id)}
 
     return enc
 
 
-def _build_condition(diag, patient_ref: str, encounter_ref: str, diagnosis_type: "DiagnosisType") -> Dict[str, Any]:
-    """Build Condition (diagnosis) resource. diagnosis_type comes from the encounter level."""
+# ============================================================================
+# RESOURCE BUILDERS — Clinical resources
+# ============================================================================
+
+def _build_condition(diag, patient_id: str, cond_id: str) -> Dict[str, Any]:
     coding = [{"system": SYSTEM_CIE10, "code": diag.icd10Code, "display": diag.description}]
     if diag.icd11Code:
         coding.append({"system": SYSTEM_CIE11, "code": diag.icd11Code})
-
     return {
         "resourceType": "Condition",
+        "id": cond_id,
         "meta": {"profile": [PROFILE_CONDITION]},
-        "clinicalStatus": {"coding": [{"system": SYSTEM_CONDITION_CLINICAL, "code": "active"}]},
+        "clinicalStatus": {"coding": [{"code": "active", "system": SYSTEM_CONDITION_CLINICAL,
+                                        "display": "Active"}]},
+        "verificationStatus": {"coding": [{"code": "confirmed", "display": "Confirmed"}]},
+        "category": [{"coding": [{"system": SYSTEM_CONDITION_CATEGORY,
+                                   "code": "encounter-diagnosis",
+                                   "display": "Encounter Diagnosis"}]}],
         "code": {"coding": coding},
-        "subject": {"reference": patient_ref},
-        "encounter": {"reference": encounter_ref},
-        "extension": [{
-            "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionDiagnosisType",
-            "valueCoding": {
-                "system": SYSTEM_SISPRO_DIAG_TYPE,
-                "code": diagnosis_type.value,
-                "display": _diag_type_display(diagnosis_type)
-            }
-        }]
+        "subject": {"reference": _ref(patient_id)},
     }
 
 
-def _build_allergy_statement(allergy, patient_ref: str) -> Dict[str, Any]:
-    """Build AllergyIntolerance (patient-declared) resource."""
+def _build_condition_statement(cond: ChronicConditionItem, patient_id: str,
+                                cond_id: str) -> Dict[str, Any]:
+    resource: Dict[str, Any] = {
+        "resourceType": "Condition",
+        "id": cond_id,
+        "meta": {"profile": [PROFILE_CONDITION_STMT]},
+        "clinicalStatus": {"coding": [{"code": "active", "system": SYSTEM_CONDITION_CLINICAL,
+                                        "display": "Active"}]},
+        "verificationStatus": {"coding": [{"code": "unconfirmed", "display": "Unconfirmed"}]},
+        "category": [{"coding": [{"system": SYSTEM_CONDITION_CATEGORY,
+                                   "code": "encounter-diagnosis",
+                                   "display": "Encounter Diagnosis"}]}],
+        "subject": {"reference": _ref(patient_id)},
+    }
+    if cond.chronicCie10Code:
+        coding = [{"system": SYSTEM_CIE10, "code": cond.chronicCie10Code,
+                   "display": cond.chronicDescription}]
+        if cond.chronicCie11Code:
+            coding.append({"system": SYSTEM_CIE11, "code": cond.chronicCie11Code})
+        resource["code"] = {"coding": coding}
+    else:
+        resource["code"] = {"text": cond.chronicDescription}
+    return resource
+
+
+def _build_allergy_statement(allergy, patient_id: str, a_id: str) -> Dict[str, Any]:
     resource: Dict[str, Any] = {
         "resourceType": "AllergyIntolerance",
+        "id": a_id,
         "meta": {"profile": [PROFILE_ALLERGY_STMT]},
-        "clinicalStatus": {"coding": [{"system": SYSTEM_ALLERGY_CLINICAL, "code": "active"}]},
-        "patient": {"reference": patient_ref},
-        "code": {"text": allergy.allergen},
-        "extension": [{
-            "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionAllergyCategory",
-            "valueCoding": {
-                "system": SYSTEM_SISPRO_ALLERGY_CAT,
-                "code": allergy.category.value,
-                "display": _allergy_category_display(allergy.category)
-            }
-        }]
+        "clinicalStatus": {"coding": [{"code": "active", "display": "Active"}]},
+        "verificationStatus": {"coding": [{"code": "unconfirmed", "display": "Unconfirmed"}]},
+        "code": {
+            "coding": [{"system": SYSTEM_ALLERGY_CAT, "code": allergy.category.value,
+                        "display": _allergy_category_display(allergy.category)}],
+            "text": allergy.allergen,
+        },
+        "patient": {"reference": _ref(patient_id)},
     }
     if allergy.reaction:
         resource["reaction"] = [{"manifestation": [{"text": allergy.reaction}]}]
@@ -439,302 +737,508 @@ def _build_allergy_statement(allergy, patient_ref: str) -> Dict[str, Any]:
     return resource
 
 
-def _build_family_member_history(fh_item, patient_ref: str) -> Dict[str, Any]:
-    """Build FamilyMemberHistory resource."""
-    coding = [{"system": SYSTEM_CIE10, "code": fh_item.conditionCie10Code}]
-    if fh_item.conditionDescription:
-        coding[0]["display"] = fh_item.conditionDescription
-    if fh_item.conditionCie11Code:
-        coding.append({"system": SYSTEM_CIE11, "code": fh_item.conditionCie11Code})
+def _build_allergy_encounter(allergy, patient_id: str, encounter_id: str,
+                              a_id: str) -> Dict[str, Any]:
+    r = _build_allergy_statement(allergy, patient_id, a_id)
+    r["meta"]["profile"] = [PROFILE_ALLERGY]
+    r["encounter"] = {"reference": _ref(encounter_id)}
+    r.pop("verificationStatus", None)
+    return r
 
+
+def _build_family_member_history(fh, patient_id: str, fmh_id: str) -> Dict[str, Any]:
+    coding = [{"system": SYSTEM_CIE10, "code": fh.conditionCie10Code or ""}]
+    if fh.conditionDescription:
+        coding[0]["display"] = fh.conditionDescription
+    if fh.conditionCie11Code:
+        coding.append({"system": SYSTEM_CIE11, "code": fh.conditionCie11Code})
     return {
         "resourceType": "FamilyMemberHistory",
+        "id": fmh_id,
         "meta": {"profile": [PROFILE_FAMILY_HISTORY]},
-        "status": "completed",
-        "patient": {"reference": patient_ref},
-        "relationship": {
-            "coding": [{
-                "system": SYSTEM_SISPRO_FAMILY_REL,
-                "code": fh_item.relationship.value,
-                "display": _family_rel_display(fh_item.relationship)
-            }]
+        "status": "partial",
+        "patient": {"reference": _ref(patient_id)},
+        "relationship": {"coding": [{"system": SYSTEM_FAMILY_REL,
+                                      "code": fh.relationship.value,
+                                      "display": _family_rel_display(fh.relationship)}]},
+        "condition": [{"code": {"coding": coding}}],
+    }
+
+
+def _build_medication_statement(med: MedicationStatementItem, patient_id: str,
+                                 m_id: str) -> Dict[str, Any]:
+    mc: Dict[str, Any] = {}
+    if med.dciCode:
+        mc["coding"] = [{"system": SYSTEM_DCI, "code": med.dciCode, "display": med.medicationName}]
+    else:
+        mc["text"] = med.medicationName
+    r: Dict[str, Any] = {
+        "resourceType": "MedicationStatement",
+        "id": m_id,
+        "meta": {"profile": [PROFILE_MEDICATION_STMT]},
+        "status": med.status.value,
+        "medicationCodeableConcept": mc,
+        "subject": {"reference": _ref(patient_id)},
+    }
+    if med.dosage:
+        r["dosage"] = [{"text": med.dosage}]
+    if med.notes:
+        r["note"] = [{"text": med.notes}]
+    return r
+
+
+def _build_medication_request(rx: MedicationRequestItem, patient_id: str,
+                               encounter_id: str, pract_id: Optional[str],
+                               rx_id: str, now: str) -> Dict[str, Any]:
+    mc: Dict[str, Any] = {}
+    codings = []
+    if rx.dciCode:
+        codings.append({"system": SYSTEM_DCI, "code": rx.dciCode, "display": rx.medicationName})
+    if rx.iumCode:
+        codings.append({"system": SYSTEM_IUM, "code": rx.iumCode})
+    mc = {"coding": codings} if codings else {"text": rx.medicationName}
+
+    r: Dict[str, Any] = {
+        "resourceType": "MedicationRequest",
+        "id": rx_id,
+        "meta": {"profile": [PROFILE_MEDICATION_REQ]},
+        "status": rx.status.value,
+        "intent": rx.intent.value,
+        "category": [{"coding": [{"system": SYSTEM_HEALTH_TECH_CAT, "code": "02",
+                                   "display": "Medicamento con registro sanitario"}]}],
+        "reportedBoolean": True,
+        "medicationCodeableConcept": mc,
+        "subject": {"reference": _ref(patient_id)},
+        "encounter": {"reference": _ref(encounter_id)},
+        "authoredOn": now,
+    }
+    if pract_id:
+        r["requester"] = {"reference": _ref(pract_id)}
+    parts = []
+    if rx.dosage:
+        parts.append(rx.dosage)
+    if rx.frequency:
+        parts.append(f"Frecuencia: {rx.frequency}")
+    if rx.duration:
+        parts.append(f"Duración: {rx.duration}")
+    if rx.route:
+        parts.append(f"Vía: {rx.route}")
+    if parts:
+        r["dosageInstruction"] = [{"text": ". ".join(parts)}]
+    if rx.notes:
+        r["note"] = [{"text": rx.notes}]
+    return r
+
+
+def _build_risk_assessment(rf, patient_id: str, encounter_id: str,
+                            rf_id: str) -> Dict[str, Any]:
+    return {
+        "resourceType": "RiskAssessment",
+        "id": rf_id,
+        "meta": {"profile": [PROFILE_RISK_FACTOR]},
+        "status": "registered",
+        "code": {
+            "coding": [{"system": SYSTEM_RISK_FACTOR, "code": rf.type.value,
+                        "display": _risk_factor_display(rf.type)}],
+            "text": rf.name,
         },
-        "condition": [{"code": {"coding": coding}}]
+        "subject": {"reference": _ref(patient_id)},
+        "encounter": {"reference": _ref(encounter_id)},
+    }
+
+
+def _build_occupation_obs(occ_code: str, occ_display: Optional[str],
+                           patient_id: str, obs_id: str) -> Dict[str, Any]:
+    vc: Dict[str, Any] = {"coding": [{"system": SYSTEM_OCCUPATION, "code": occ_code}]}
+    if occ_display:
+        vc["coding"][0]["display"] = occ_display
+    return {
+        "resourceType": "Observation",
+        "id": obs_id,
+        "meta": {"profile": [PROFILE_OCCUPATION_OBS]},
+        "status": "final",
+        "code": {
+            "coding": [{"system": SYSTEM_SNOMED, "code": "184104002",
+                        "display": "ocupación del paciente"}],
+            "text": "Ocupación del paciente en el momento de la atención",
+        },
+        "subject": {"reference": _ref(patient_id)},
+        "valueCodeableConcept": vc,
+    }
+
+
+def _build_attendance_allowance(incap: IncapacityInfo, patient_id: str,
+                                 encounter_id: str, obs_id: str) -> Dict[str, Any]:
+    components = [{
+        "id": "LicenseScope",
+        "code": {
+            "coding": [{"system": SYSTEM_SNOMED, "code": "255590007", "display": "alcance"}],
+            "text": "Incapacidad - Alcance de la incapacidad",
+        },
+        "valueCodeableConcept": {"coding": [{
+            "system": SYSTEM_INCAPACITY, "code": incap.scope.value,
+            "display": "Nueva" if incap.scope.value == "01" else "Prórroga",
+        }]},
+    }]
+    if incap.maternityLeaveDays is not None:
+        components.append({
+            "id": "MaternityLicenseTime",
+            "code": {
+                "coding": [{"system": SYSTEM_SNOMED, "code": "410670007", "display": "tiempo"}],
+                "text": "Días de licencia de maternidad",
+            },
+            "valueQuantity": {"value": incap.maternityLeaveDays, "unit": "días",
+                              "system": SYSTEM_UNITS, "code": "d"},
+        })
+    return {
+        "resourceType": "Observation",
+        "id": obs_id,
+        "meta": {"profile": [PROFILE_ATTENDANCE_ALLOWANCE]},
+        "status": "final",
+        "code": {
+            "coding": [{"system": SYSTEM_SNOMED, "code": "160983005",
+                        "display": "permiso de concurrencia"}],
+            "text": "Datos incapacidad (SIPE – Sistema de Incapacidades y Prestaciones Economicas)",
+        },
+        "subject": {"reference": _ref(patient_id)},
+        "encounter": {"reference": _ref(encounter_id)},
+        "component": components,
     }
 
 
 # ============================================================================
-# BUNDLE BUILDERS — RDA Documents
+# BUNDLE BUILDERS — RDA-Paciente
 # ============================================================================
 
 def build_rda_paciente(patient: PatientFullRecord) -> Dict[str, Any]:
     """
-    Generate RDA-Paciente: a FHIR Bundle of type 'document' containing
-    the patient's self-reported health background (allergies, family history,
-    chronic conditions).
-    
-    Per Resolution 1888/2025 Art. 3(a) and the IG at:
-    https://vulcano.ihcecol.gov.co/RDA-paciente.html
+    RDA-Paciente: Composition type LOINC 102089-0.
+    Matches Postman "enviar-rda-paciente" field by field.
     """
     logger.debug(f"Building RDA-Paciente for patient {patient.patientId}")
 
     entries: List[Dict[str, Any]] = []
-    patient_url = _uuid()
     now = datetime.utcnow().isoformat() + "Z"
+    pat_id = _patient_id(patient)
 
-    # 1. Patient resource
-    patient_resource = _build_patient_resource(patient)
-    entries.append({"fullUrl": patient_url, "resource": patient_resource})
+    # Patient resource
+    entries.append({"resource": _build_patient_resource(patient)})
 
-    # 2. Composition sections
+    # Organization IPS (from first visit if available)
+    org_id = None
+    provider = None
+    if patient.medicalHistory:
+        provider = patient.medicalHistory[0].provider
+    if provider:
+        org_id = provider.repsCode
+        entries.append({"resource": _build_organization_ips(provider)})
+
+    # Practitioner (from first visit if available)
+    pract_id = None
+    pract = None
+    if patient.medicalHistory:
+        pract = patient.medicalHistory[0].practitioner
+    if pract:
+        pract_id = f"{pract.documentType.value}-{pract.documentNumber}"
+        entries.append({"resource": _build_practitioner(pract, pract_id)})
+
+    # --- Sections ---
     sections = []
+    idx = {"cond": 0, "allergy": 0, "fmh": 0, "medstmt": 0}
 
-    # Section: Allergies (patient-declared)
-    allergy_refs = []
-    for allergy in patient.allergies:
-        allergy_url = _uuid()
-        entries.append({
-            "fullUrl": allergy_url,
-            "resource": _build_allergy_statement(allergy, patient_url)
-        })
-        allergy_refs.append({"reference": allergy_url})
-
+    # Section 1: Chronic conditions (ConditionStatementRDA)
+    cond_refs = []
+    if patient.backgroundHistory:
+        for c in patient.backgroundHistory.chronicConditions:
+            cid = f"Condition-{idx['cond']}" 
+            idx["cond"] += 1
+            entries.append({"resource": _build_condition_statement(c, pat_id, cid)})
+            cond_refs.append({"reference": _ref(cid)})
     sections.append(_build_section(
-        "Alergias e intolerancias declaradas por el paciente",
-        SYSTEM_LOINC, "48765-2", "Allergies and adverse reactions",
-        allergy_refs
-    ))
+        "Historial de diagnósticos de problemas de salud",
+        SYSTEM_LOINC, "11450-4", "Problem list - Reported", cond_refs))
 
-    # Section: Family history (patient-declared)
-    family_refs = []
+    # Section 2: Allergies (AllergyIntoleranceStatementRDA)
+    allergy_refs = []
+    for a in patient.allergies:
+        aid = f"AllergyIntolerance-{idx['allergy']}" 
+        idx["allergy"] += 1
+        entries.append({"resource": _build_allergy_statement(a, pat_id, aid)})
+        allergy_refs.append({"reference": _ref(aid)})
+    sections.append(_build_section(
+        "Historial de alergias, intolerancias y reacciones adversas",
+        SYSTEM_LOINC, "48765-2", "Allergies and adverse reactions Document", allergy_refs))
+
+    # Section 3: Medication history (MedicationStatementRDA)
+    med_refs = []
+    if patient.backgroundHistory and patient.backgroundHistory.medications:
+        for m in patient.backgroundHistory.medications:
+            mid = f"MedicationStatement-{idx['medstmt']}" 
+            idx["medstmt"] += 1
+            entries.append({"resource": _build_medication_statement(m, pat_id, mid)})
+            med_refs.append({"reference": _ref(mid)})
+    sections.append(_build_section(
+        "Historial de medicamentos",
+        SYSTEM_LOINC, "10160-0", "History of Medication use Narrative", med_refs))
+
+    # Section 4: Family history (FamilyMemberHistoryRDA)
+    fmh_refs = []
     if patient.backgroundHistory and patient.backgroundHistory.familyHistory:
         for fh in patient.backgroundHistory.familyHistory:
-            fh_url = _uuid()
-            entries.append({
-                "fullUrl": fh_url,
-                "resource": _build_family_member_history(fh, patient_url)
-            })
-            family_refs.append({"reference": fh_url})
-
+            fid = f"FamilyMemberHistory-{idx['fmh']}" 
+            idx["fmh"] += 1
+            entries.append({"resource": _build_family_member_history(fh, pat_id, fid)})
+            fmh_refs.append({"reference": _ref(fid)})
     sections.append(_build_section(
-        "Antecedentes familiares declarados por el paciente",
-        SYSTEM_LOINC, "10157-6", "Family history",
-        family_refs
-    ))
+        "Historial de antecedentes familiares",
+        SYSTEM_LOINC, "10157-6", "History of family member diseases Narrative", fmh_refs))
 
-    # Section: Chronic conditions / pathological background (patient-declared)
-    condition_refs = []
-    if patient.backgroundHistory and patient.backgroundHistory.chronicConditions:
-        cond_url = _uuid()
-        entries.append({
-            "fullUrl": cond_url,
-            "resource": {
-                "resourceType": "Condition",
-                "meta": {"profile": [PROFILE_CONDITION_STMT]},
-                "clinicalStatus": {"coding": [{"system": SYSTEM_CONDITION_CLINICAL, "code": "active"}]},
-                "code": {"text": patient.backgroundHistory.chronicConditions},
-                "subject": {"reference": patient_url}
-            }
-        })
-        condition_refs.append({"reference": cond_url})
-
-    sections.append(_build_section(
-        "Condiciones de salud declaradas por el paciente",
-        SYSTEM_LOINC, "11450-4", "Problem list",
-        condition_refs
-    ))
-
-    # 3. Composition (root of the document)
-    composition_url = _uuid()
-    composition = {
-        "fullUrl": composition_url,
+    # --- Composition ---
+    author_ref = _ref(pract_id) if pract_id else (_ref(org_id) if org_id else _ref(pat_id))
+    composition: Dict[str, Any] = {
         "resource": {
             "resourceType": "Composition",
             "meta": {"profile": [PROFILE_COMPOSITION_PATIENT]},
             "status": "final",
-            "type": {
-                "coding": [{
-                    "system": SYSTEM_LOINC,
-                    "code": "60591-5",
-                    "display": "Patient summary Document"
-                }]
-            },
-            "subject": {"reference": patient_url},
+            "type": {"coding": [{"system": SYSTEM_LOINC, "code": "102089-0",
+                                  "display": "FHIR resource patient medical record"}]},
+            "subject": {"reference": _ref(pat_id)},
             "date": now,
-            "author": [{"reference": patient_url}],
-            "title": "Resumen Digital de Atención en Salud - RDA Paciente",
-            "section": sections
+            "author": [{"reference": author_ref}],
+            "title": "Resumen Digital de Atención en Salud - RDA de antecedentes manifestados por el paciente",
+            "confidentiality": "N",
+            "section": sections,
         }
     }
+    if org_id:
+        composition["resource"]["attester"] = [{"mode": "legal", "party": {"reference": _ref(org_id)}}]
+        composition["resource"]["custodian"] = {"reference": _ref(org_id)}
 
-    # Build final Bundle — Composition MUST be the first entry
+    # event with modality + service group + period (from first visit)
+    if patient.medicalHistory:
+        v0 = patient.medicalHistory[0]
+        composition["resource"]["event"] = [{
+            "code": [
+                {"coding": [{"system": SYSTEM_MODALITY, "code": v0.careModality.value,
+                              "display": _modality_display(v0.careModality.value)}]},
+                {"coding": [{"system": SYSTEM_SERVICE_GROUP, "code": v0.serviceGroup.value,
+                              "display": _service_group_display(v0.serviceGroup.value)}]},
+            ],
+            "period": {
+                "start": _fhir_datetime(v0.startDateTime),
+                "end": _fhir_datetime(v0.endDateTime) if v0.endDateTime else _fhir_datetime(v0.startDateTime),
+            },
+        }]
+
     bundle = _build_bundle_shell(
-        bundle_id=str(uuid.uuid4()),
-        profile=PROFILE_BUNDLE_PATIENT,
-        timestamp=now,
-        composition_entry=composition,
-        resource_entries=entries
-    )
+        bundle_id=str(uuid.uuid4()), profile=PROFILE_BUNDLE_PATIENT,
+        timestamp=now, composition_entry=composition, resource_entries=entries)
 
+    bundle = _assign_fullurls_and_rewrite_refs(bundle)
     logger.debug(f"RDA-Paciente bundle built with {len(bundle['entry'])} entries")
     return bundle
 
 
-def build_rda_consulta(
-    patient: PatientFullRecord,
-    visit: MedicalHistoryItem
-) -> Dict[str, Any]:
+# ============================================================================
+# BUNDLE BUILDERS — RDA-Consulta Externa
+# ============================================================================
+
+def build_rda_consulta(patient: PatientFullRecord,
+                       visit: MedicalHistoryItem) -> Dict[str, Any]:
     """
-    Generate RDA-Consulta: a FHIR Bundle of type 'document' for a single
-    ambulatory encounter.
-    
-    Per Resolution 1888/2025 Art. 3(c) and the IG at:
-    https://vulcano.ihcecol.gov.co/RDA-consulta.html
+    RDA-Consulta: Composition type LOINC 51845-6.
+    Matches Postman "enviar-rda-consulta-externa" field by field.
     """
     logger.debug(f"Building RDA-Consulta for patient {patient.patientId}")
 
     entries: List[Dict[str, Any]] = []
     now = datetime.utcnow().isoformat() + "Z"
+    pat_id = _patient_id(patient)
 
     # 1. Patient
-    patient_url = _uuid()
-    entries.append({"fullUrl": patient_url, "resource": _build_patient_resource(patient)})
+    entries.append({"resource": _build_patient_resource(patient)})
 
     # 2. Organization IPS
-    org_url = None
+    org_id = None
+    location_id = None
     if visit.provider:
-        org_url = _uuid()
-        entries.append({"fullUrl": org_url, "resource": _build_organization_ips(visit.provider)})
+        org_id = visit.provider.repsCode
+        entries.append({"resource": _build_organization_ips(visit.provider)})
+        loc_resource = _build_location(visit.provider)
+        if loc_resource:
+            location_id = loc_resource["id"]
+            # Location added after Encounter below
 
-    # 3. Organization EAPB
-    eapb_url = None
-    if visit.payer:
-        eapb_resource = _build_organization_eapb(visit.payer)
-        if eapb_resource:
-            eapb_url = _uuid()
-            entries.append({"fullUrl": eapb_url, "resource": eapb_resource})
-
-    # 4. Practitioner
-    pract_url = None
+    # 3. Practitioner
+    pract_id = None
     if visit.practitioner:
-        pract_url = _uuid()
-        entries.append({"fullUrl": pract_url, "resource": _build_practitioner(visit.practitioner)})
+        pract_id = f"{visit.practitioner.documentType.value}-{visit.practitioner.documentNumber}"
+        entries.append({"resource": _build_practitioner(visit.practitioner, pract_id)})
 
-    # 5. Encounter
-    encounter_url = _uuid()
-    entries.append({
-        "fullUrl": encounter_url,
-        "resource": _build_encounter_ambulatory(visit, patient_url, org_url, pract_url)
-    })
+    # 4. Encounter
+    encounter_id = "Encounter-0"
+    enc_resource = _build_encounter(visit, pat_id, org_id, pract_id, location_id, encounter_id)
+    # Diagnoses will be attached below
 
-    # 6. Sections for the Composition
+    # --- Sections + clinical resources ---
     sections = []
+    idx = {"cond": 0, "allergy": 0, "rf": 0, "rx": 0, "sr": 0, "obs": 0}
 
-    # Section: Payer
-    if eapb_url:
-        sections.append({
-            "title": "Pagadores",
-            "entry": [{"reference": eapb_url}]
-        })
-
-    # Section: Allergies (encounter-identified)
-    allergy_refs = []
-    for allergy in patient.allergies:
-        a_url = _uuid()
-        allergy_resource = _build_allergy_statement(allergy, patient_url)
-        allergy_resource["meta"]["profile"] = [PROFILE_ALLERGY]  # encounter-identified profile
-        allergy_resource["encounter"] = {"reference": encounter_url}
-        entries.append({"fullUrl": a_url, "resource": allergy_resource})
-        allergy_refs.append({"reference": a_url})
-
+    # Section 1: Payer
+    eapb_id = None
+    payer_refs = []
+    if visit.payer:
+        eapb_r = _build_organization_eapb(visit.payer)
+        if eapb_r:
+            eapb_id = eapb_r["id"]
+            entries.append({"resource": eapb_r})
+            payer_refs.append({"reference": _ref(eapb_id)})
     sections.append(_build_section(
-        "Alergias e intolerancias identificadas durante la atención",
-        SYSTEM_LOINC, "48765-2", "Allergies and adverse reactions",
-        allergy_refs
-    ))
+        "Entidad(es) responsable(s) por el plan de beneficios en salud (consulta)",
+        SYSTEM_LOINC, "48768-6", "Payment sources Document", payer_refs))
 
-    # Section: Diagnoses
+    # Section 2: Otros datos demográficos — Occupation (SNOMED 184104002)
+    occ_refs = []
+    if visit.occupation:
+        oid = f"Observation-{idx['obs']}" 
+        idx["obs"] += 1
+        entries.append({"resource": _build_occupation_obs(
+            visit.occupation, visit.occupationDescription, pat_id, oid)})
+        occ_refs.append({"reference": _ref(oid)})
+    sections.append(_build_section(
+        "Otros datos demográficos",
+        SYSTEM_LOINC, "74208-0", "Demographic information + History of occupation Document",
+        occ_refs))
+
+    # Section 3: Incapacidad (AttendanceAllowanceRDA)
+    incap_refs = []
+    if visit.incapacity:
+        iid = f"Observation-{idx['obs']}" 
+        idx["obs"] += 1
+        entries.append({"resource": _build_attendance_allowance(
+            visit.incapacity, pat_id, encounter_id, iid)})
+        incap_refs.append({"reference": _ref(iid)})
+    sections.append(_build_section(
+        "Datos incapacidad (SIPE – Sistema de Incapacidades y Prestaciones Economicas)",
+        SYSTEM_LOINC, "105583-9", "Worker Sick leave form", incap_refs))
+
+    # Section 4: Diagnoses
     diag_refs = []
-    for diag in visit.diagnosis:
-        d_url = _uuid()
-        entries.append({
-            "fullUrl": d_url,
-            "resource": _build_condition(diag, patient_url, encounter_url, visit.diagnosisType)
+    encounter_diagnoses = []
+    for i, diag in enumerate(visit.diagnosis):
+        cid = f"Condition-{idx['cond']}" 
+        idx["cond"] += 1
+        entries.append({"resource": _build_condition(diag, pat_id, cid)})
+        diag_refs.append({"reference": _ref(cid)})
+        encounter_diagnoses.append({
+            "id": "MainDiagnosis" if i == 0 else f"Diagnosis-{i}",
+            "extension": [{
+                "url": EXT_DIAG_TYPE,
+                "valueCoding": {"system": SYSTEM_DIAG_TYPE, "code": visit.diagnosisType.value,
+                                "display": _diag_type_display(visit.diagnosisType)},
+            }],
+            "condition": {"reference": _ref(cid)},
+            "use": {"coding": [{"system": SYSTEM_DIAG_ROLE, "code": "8319008",
+                                "display": "diagnóstico primario"}]},
+            "rank": i + 1,
         })
-        diag_refs.append({"reference": d_url})
-
+    if encounter_diagnoses:
+        enc_resource["diagnosis"] = encounter_diagnoses
     sections.append(_build_section(
-        "Diagnósticos de problemas de salud",
-        SYSTEM_LOINC, "11450-4", "Problem list",
-        diag_refs
-    ))
+        "Historial de diagnósticos de problemas de salud",
+        SYSTEM_LOINC, "11450-4", "Problem list - Reported", diag_refs))
 
-    # Section: Risk factors
-    if visit.riskFactors:
-        rf_refs = []
-        for rf in visit.riskFactors:
-            rf_url = _uuid()
-            entries.append({
-                "fullUrl": rf_url,
-                "resource": {
-                    "resourceType": "RiskAssessment",
-                    "meta": {"profile": [f"{FHIR_RDA_BASE}/StructureDefinition/RiskFactorRDA"]},
-                    "status": "final",
-                    "subject": {"reference": patient_url},
-                    "encounter": {"reference": encounter_url},
-                    "extension": [{
-                        "url": f"{FHIR_RDA_BASE}/StructureDefinition/ExtensionRiskFactorType",
-                        "valueCoding": {"system": SYSTEM_SISPRO_RISK_FACTOR, "code": rf.type.value}
-                    }],
-                    "note": [{"text": rf.name}]
-                }
-            })
-            rf_refs.append({"reference": rf_url})
-        sections.append({
-            "title": "Factores de riesgo",
-            "entry": rf_refs
-        })
+    # Now add Encounter + Location entries
+    entries.append({"resource": enc_resource})
+    if location_id and visit.provider:
+        entries.append({"resource": _build_location(visit.provider)})
 
-    # 7. Composition
-    composition_url = _uuid()
-    author_ref = pract_url if pract_url else patient_url
-    composition = {
-        "fullUrl": composition_url,
+    # Section 5: Allergies (encounter-identified)
+    allergy_refs = []
+    for a in patient.allergies:
+        aid = f"AllergyIntolerance-{idx['allergy']}" 
+        idx["allergy"] += 1
+        entries.append({"resource": _build_allergy_encounter(a, pat_id, encounter_id, aid)})
+        allergy_refs.append({"reference": _ref(aid)})
+    sections.append(_build_section(
+        "Historial de alergias, intolerancias y reacciones adversas",
+        SYSTEM_LOINC, "48765-2", "Allergies and adverse reactions Document", allergy_refs))
+
+    # Section 6: Risk factors
+    rf_refs = []
+    for rf in visit.riskFactors:
+        rid = f"RiskAssessment-{idx['rf']}" 
+        idx["rf"] += 1
+        entries.append({"resource": _build_risk_assessment(rf, pat_id, encounter_id, rid)})
+        rf_refs.append({"reference": _ref(rid)})
+    sections.append(_build_section(
+        "Factores de riesgo",
+        SYSTEM_LOINC, "75492-9", "Risk assessment and screening note", rf_refs))
+
+    # Section 7: Prescribed medications
+    rx_refs = []
+    for rx in visit.prescriptions:
+        rxid = f"MedicationRequest-{idx['rx']}" 
+        idx["rx"] += 1
+        entries.append({"resource": _build_medication_request(
+            rx, pat_id, encounter_id, pract_id, rxid, now)})
+        rx_refs.append({"reference": _ref(rxid)})
+    sections.append(_build_section(
+        "Historial de medicamentos",
+        SYSTEM_LOINC, "10160-0", "History of Medication use Narrative", rx_refs))
+
+    # Section 8: Service requests / orders (emptyReason)
+    sections.append(_build_section(
+        "Órdenes, prescripciones o solicitudes de servicio",
+        SYSTEM_LOINC, "61146-1", "Orders for services Document", []))
+
+    # Section 9: Supporting documents (emptyReason)
+    sections.append(_build_section(
+        "Documentos de soporte",
+        SYSTEM_LOINC, "55107-7", "Addendum Document", []))
+
+    # --- Composition ---
+    author_ref = _ref(org_id) if org_id else (_ref(pract_id) if pract_id else _ref(pat_id))
+    attester_ref = _ref(pract_id) if pract_id else (_ref(org_id) if org_id else _ref(pat_id))
+    custodian_ref = _ref(org_id) if org_id else _ref(pat_id)
+
+    comp: Dict[str, Any] = {
         "resource": {
             "resourceType": "Composition",
             "meta": {"profile": [PROFILE_COMPOSITION_AMB]},
             "status": "final",
-            "type": {
-                "coding": [{
-                    "system": SYSTEM_LOINC,
-                    "code": "34133-9",
-                    "display": "Summarization of episode note"
-                }]
-            },
-            "subject": {"reference": patient_url},
-            "encounter": {"reference": encounter_url},
+            "type": {"coding": [{"system": SYSTEM_LOINC, "code": "51845-6",
+                                  "display": "Outpatient Consult note"}]},
+            "subject": {"reference": _ref(pat_id)},
+            "encounter": {"reference": _ref(encounter_id)},
             "date": now,
             "author": [{"reference": author_ref}],
-            "title": "Resumen Digital de Atención en Salud - RDA Consulta Externa",
-            "section": sections
+            "title": "RDA Consulta",
+            "confidentiality": "N",
+            "attester": [{"mode": "legal", "party": {"reference": attester_ref}}],
+            "custodian": {"reference": custodian_ref},
+            "event": [{
+                "period": {
+                    "start": _fhir_datetime(visit.startDateTime),
+                    "end": _fhir_datetime(visit.endDateTime) if visit.endDateTime
+                           else _fhir_datetime(visit.startDateTime),
+                },
+            }],
+            "section": sections,
         }
     }
 
-    # Build final Bundle
     bundle = _build_bundle_shell(
-        bundle_id=str(uuid.uuid4()),
-        profile=PROFILE_BUNDLE_AMB,
-        timestamp=now,
-        composition_entry=composition,
-        resource_entries=entries
-    )
+        bundle_id=str(uuid.uuid4()), profile=PROFILE_BUNDLE_AMB,
+        timestamp=now, composition_entry=comp, resource_entries=entries)
 
+    bundle = _assign_fullurls_and_rewrite_refs(bundle)
     logger.debug(f"RDA-Consulta bundle built with {len(bundle['entry'])} entries")
     return bundle
 
 
 # ============================================================================
-# LEGACY COMPATIBILITY — Maintains old function signature
+# LEGACY COMPATIBILITY — Delta sync logic
 # ============================================================================
 
 def convert_to_fhir_rda(
@@ -743,44 +1247,32 @@ def convert_to_fhir_rda(
     rda_paciente_already_sent: bool = False,
 ) -> List[Dict[str, Any]]:
     """
-    Generates only the FHIR RDA bundles that need to be sent to the FHIR Store.
-    
+    Generates only the FHIR RDA bundles that need to be sent.
+
     Delta logic:
-      - RDA-Paciente: generated only if not previously sent, or if background 
-        data (allergies, family history, chronic conditions) changed.
+      - RDA-Paciente: generated only if not previously sent, or if background
+        data changed (new allergies, family history, conditions).
       - RDA-Consulta: generated only for NEW visits (index >= previous_visit_count).
-    
-    Args:
-        patient: The full patient record (after LLM processing).
-        previous_visit_count: How many visits were already synced to the FHIR Store.
-        rda_paciente_already_sent: Whether the RDA-Paciente bundle was sent before.
-    
+
     Returns:
         List of FHIR Bundles to send. May be empty if nothing changed.
     """
     bundles = []
     total_visits = len(patient.medicalHistory)
     new_visit_count = total_visits - previous_visit_count
- 
-    # RDA-Paciente: always send on first sync; on subsequent syncs, send if 
-    # background data might have changed (new allergies, family history, etc.)
-    # For simplicity and correctness, we always regenerate it — the FHIR Store 
-    # will version it. This is safer than trying to diff the background data.
+
     if not rda_paciente_already_sent or new_visit_count > 0:
         bundles.append(build_rda_paciente(patient))
- 
-    # RDA-Consulta: only for visits that haven't been sent yet
+
     if new_visit_count > 0:
         new_visits = patient.medicalHistory[previous_visit_count:]
         for visit in new_visits:
             bundles.append(build_rda_consulta(patient, visit))
-        logger.info(
-            f"Delta: {new_visit_count} new visit(s) for patient {patient.patientId}"
-        )
+        logger.info(f"Delta: {new_visit_count} new visit(s) for patient {patient.patientId}")
     elif not rda_paciente_already_sent:
         logger.info(f"First sync for patient {patient.patientId}, no visits yet")
     else:
         logger.info(f"No new visits for patient {patient.patientId}, skipping RDA-Consulta")
- 
+
     logger.info(f"Generated {len(bundles)} RDA bundle(s) for patient {patient.patientId}")
     return bundles

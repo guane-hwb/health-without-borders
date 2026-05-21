@@ -29,7 +29,7 @@ class MockUnauthorized:
     organization_id = "org-123"
 
 
-# RDA-compliant mock payload (Resolution 1888/2025)
+# RDA-compliant mock payload (Resolution 1888/2025 + IG RDA v0.8.1 / schema v3.0)
 MOCK_PATIENT_PAYLOAD = {
     "patientId": "TEST-UNIT-001",
     "device_uid": "04:A2:TEST:UID",
@@ -52,9 +52,9 @@ MOCK_PATIENT_PAYLOAD = {
             "cityCode": "54001",
             "state": "Norte de Santander",
             "zipCode": "540001",
-            "country": "COL",
+            "country": "170",           # ISO 3166-1 numeric for Colombia
             "countryName": "Colombia",
-            "zone": "U",
+            "zone": "01",               # v3.0: "01" = URBANA (was "U")
         },
         "bloodType": "O+",
         "weight": 15.5,
@@ -67,20 +67,22 @@ MOCK_PATIENT_PAYLOAD = {
         "device_uid": "GUARDIAN-UID-001",
     },
     "backgroundHistory": {
-        "chronicConditions": None,
+        "chronicConditions": [],        # v3.0: list, not None
         "personalHistory": None,
         "familyHistory": [
             {
-                "conditionCie10Code": "E11",
-                "conditionDescription": "Diabetes mellitus tipo 2",
-                "relationship": "04",
+                # conditionCie10Code is Optional — omitted here intentionally
+                # so the LLM coding path is exercised in sync tests
+                "conditionDescription": "Diabetes mellitus tipo 2",  # required field
+                "relationship": "04",   # FamilyRelationship.ABUELOS
             }
         ],
         "familyHistoryNotes": "Abuelo paterno con diabetes.",
+        "medications": [],              # v3.0: new required list field
     },
     "allergies": [
         {
-            "category": "01",
+            "category": "01",           # AllergyCategory.MEDICAMENTO
             "allergen": "Penicilina",
             "reaction": "Habones",
             "notes": "Reacción leve en la infancia reportada por la madre",
@@ -113,11 +115,17 @@ MOCK_PATIENT_WITH_VISIT = {
             "provider": {
                 "repsCode": "540015400101",
                 "name": "Hospital Erasmo Meoz",
+                "nitNumber": "890500600",               # v3.0: required for dual NIT coding
+                "locationSeatCode": "540015400101-01",  # v3.0: sede identifier
             },
             "practitioner": {
                 "documentType": "CC",
                 "documentNumber": "88001234",
                 "name": "GOMEZ, ANDREA",
+                "firstName": "Andrea",       # v3.0: desglose para ExtensionFathersFamilyName
+                "secondName": None,
+                "firstLastName": "Gomez",
+                "secondLastName": None,
             },
             "location": "HOSPITAL_ERASMO_MEOZ",
             "physician": "GOMEZ, ANDREA",
@@ -130,6 +138,7 @@ MOCK_PATIENT_WITH_VISIT = {
             "diagnosis": [
                 {
                     "icd10Code": "J06.9",
+                    "icd11Code": None,
                     "description": "Infección aguda de las vías respiratorias superiores",
                 }
             ],
@@ -203,11 +212,36 @@ def test_sync_nurse_cannot_add_medical_history(client: TestClient):
             {
                 "type": "Consultation",
                 "startDateTime": "2026-02-01T10:00:00",
+                "endDateTime": None,
                 "careModality": "01",
                 "serviceGroup": "01",
                 "careEnvironment": "05",
-                "clinicalEvaluation": {"historyOfCurrentIllness": "Fiebre"},
+                "provider": {
+                    "repsCode": "540015400101",
+                    "name": "Hospital Erasmo Meoz",
+                    "nitNumber": "890500600",
+                    "locationSeatCode": "540015400101-01",
+                },
+                "practitioner": {
+                    "documentType": "CC",
+                    "documentNumber": "88001234",
+                    "name": "GOMEZ, ANDREA",
+                    "firstName": "Andrea",
+                    "secondName": None,
+                    "firstLastName": "Gomez",
+                    "secondLastName": None,
+                },
+                "clinicalEvaluation": {
+                    "historyOfCurrentIllness": "Fiebre",
+                    "generalPhysicalExamination": None,
+                    "systemsExamination": None,
+                    "treatmentPlanObservations": None,
+                },
                 "diagnosis": [],
+                "diagnosisType": "01",
+                "riskFactors": [],
+                "incapacity": None,
+                "payer": None,
             }
         ],
     }
@@ -267,14 +301,42 @@ def test_sync_delta_only_sends_new_bundles(client: TestClient, db_session):
             {
                 "type": "Consultation",
                 "startDateTime": "2026-04-10T09:00:00",
+                "endDateTime": None,
                 "careModality": "01",
                 "serviceGroup": "01",
                 "careEnvironment": "05",
+                "provider": {
+                    "repsCode": "540015400101",
+                    "name": "Hospital Erasmo Meoz",
+                    "nitNumber": "890500600",
+                    "locationSeatCode": "540015400101-01",
+                },
+                "practitioner": {
+                    "documentType": "CC",
+                    "documentNumber": "88001234",
+                    "name": "GOMEZ, ANDREA",
+                    "firstName": "Andrea",
+                    "secondName": None,
+                    "firstLastName": "Gomez",
+                    "secondLastName": None,
+                },
                 "clinicalEvaluation": {
                     "historyOfCurrentIllness": "Control post-infección respiratoria.",
+                    "generalPhysicalExamination": None,
+                    "systemsExamination": None,
+                    "treatmentPlanObservations": None,
                 },
-                "diagnosis": [{"icd10Code": "Z09", "description": "Examen de seguimiento"}],
+                "diagnosis": [
+                    {
+                        "icd10Code": "Z09",
+                        "icd11Code": None,
+                        "description": "Examen de seguimiento",
+                    }
+                ],
                 "diagnosisType": "02",
+                "riskFactors": [],
+                "incapacity": None,
+                "payer": None,
             }
         ],
     }
@@ -552,3 +614,84 @@ def test_search_missing_mandatory_params_returns_422(client: TestClient):
     _clear_overrides()
 
     assert response.status_code == 422
+
+
+def test_sync_llm_codes_chronic_conditions(client: TestClient):
+    """
+    When a chronic condition lacks ICD codes, the LLM codes it.
+    The endpoint must call medical_llm_processor.code_chronic_condition
+    and persist the coded values on the item.
+    """
+    payload_with_chronic = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "TEST-UNIT-CHRONIC-001",
+        "device_uid": "04:A2:CHRONIC:UID",
+        "backgroundHistory": {
+            **MOCK_PATIENT_PAYLOAD["backgroundHistory"],
+            "chronicConditions": [
+                {
+                    # No ICD codes yet — triggers LLM coding
+                    "chronicDescription": "Diabetes mellitus tipo 2",
+                    "chronicCie10Code": None,
+                    "chronicCie11Code": None,
+                }
+            ],
+        },
+    }
+ 
+    _override_doctor()
+    with (
+        patch(
+            "app.api.v1.endpoints.patients.medical_llm_processor.code_chronic_condition",
+            return_value={
+                "icd10Code": "E11",
+                "icd11Code": "5A11",
+                "description": "Diabetes mellitus tipo 2",
+            },
+        ) as mock_code_chronic,
+        patch.object(fhir_backend, "send_bundle") as mock_gcp,
+    ):
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload_with_chronic)
+ 
+    _clear_overrides()
+ 
+    assert response.status_code == 201
+    mock_code_chronic.assert_called_once_with("Diabetes mellitus tipo 2")
+ 
+ 
+def test_sync_skips_chronic_coding_when_code_already_present(client: TestClient):
+    """
+    If a chronic condition already has an ICD-10 code, the LLM must NOT
+    be called for that item (idempotent re-sync).
+    """
+    payload_already_coded = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "TEST-UNIT-CHRONIC-002",
+        "device_uid": "04:A2:CHRONIC:UID2",
+        "backgroundHistory": {
+            **MOCK_PATIENT_PAYLOAD["backgroundHistory"],
+            "chronicConditions": [
+                {
+                    "chronicDescription": "Diabetes mellitus tipo 2",
+                    "chronicCie10Code": "E11",   # already coded — skip LLM
+                    "chronicCie11Code": "5A11",
+                }
+            ],
+        },
+    }
+ 
+    _override_doctor()
+    with (
+        patch(
+            "app.api.v1.endpoints.patients.medical_llm_processor.code_chronic_condition"
+        ) as mock_code_chronic,
+        patch.object(fhir_backend, "send_bundle") as mock_gcp,
+    ):
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload_already_coded)
+ 
+    _clear_overrides()
+ 
+    assert response.status_code == 201
+    mock_code_chronic.assert_not_called()

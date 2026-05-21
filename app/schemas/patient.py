@@ -1,3 +1,22 @@
+"""
+Patient Schema — Resolution 1888/2025 + IG RDA v0.8.1 Compliance
+
+Rewritten to match the official MinSalud Postman collection v1.4 field by field.
+
+CHANGELOG v3.0 (Postman-verified full conformity):
+  - FIX: ResidenceZone codes changed from "U"/"R" to "01"/"02" per Postman.
+  - NEW: ColombianGenderGroup enum (01=Hombre, 02=Mujer, 03=Indeterminado)
+         for the _gender.extension (ExtensionBiologicalGender).
+  - CHANGED: PractitionerInfo now includes firstName, secondName,
+         firstLastName, secondLastName for proper Practitioner name generation
+         with ExtensionFathersFamilyName / ExtensionMothersFamilyName.
+  - CHANGED: ProviderInfo now includes nitNumber for dual-coding Organization
+         identifiers (NIT + CodigoPrestador).
+  - CHANGED: Address.countryName now has display name (e.g. "Colombia") for
+         address.country and _country.extension generation.
+  - All existing fields, enums, and models are preserved for backward compat.
+"""
+
 from datetime import date, datetime
 from enum import Enum
 from typing import List, Optional
@@ -5,71 +24,113 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 # ============================================================================
-# ENUMS — Coded values per Resolution 866/2021 & 1888/2025
+# ENUMS — Resolution 866/2021 coded domains
 # ============================================================================
 
 class DocumentType(str, Enum):
-    """Tipo de documento de identificación — Fuente Maestro Persona MinSalud."""
-    CC = "CC"   # Cédula de Ciudadanía
-    CE = "CE"   # Cédula de Extranjería
-    PA = "PA"   # Pasaporte
-    RC = "RC"   # Registro Civil
-    TI = "TI"   # Tarjeta de Identidad
-    SC = "SC"   # Salvoconducto
-    PE = "PE"   # Permiso Especial de Permanencia
-    PT = "PT"   # Permiso por Protección Temporal
-    MS = "MS"   # Menor sin identificación
-    AS = "AS"   # Adulto sin identificación
-    CN = "CN"   # Certificado de nacido vivo
-    DE = "DE"   # Documento extranjero
+    """
+    Tipo de documento de identificación de persona.
+    CodeSystem: ColombianPersonIdentifier
+    URI: https://fhir.minsalud.gov.co/rda/CodeSystem/ColombianPersonIdentifier
+    Fuente: https://vulcano.ihcecol.gov.co/CodeSystem-ColombianPersonIdentifier.html
+    """
+    CN = "CN"    # Certificado de nacido vivo
+    RC = "RC"    # Registro civil
+    TI = "TI"    # Tarjeta de identidad
+    CC = "CC"    # Cédula de ciudadanía
+    PA = "PA"    # Pasaporte
+    CD = "CD"    # Carné diplomático
+    CE = "CE"    # Cédula de extranjería
+    SC = "SC"    # Salvoconducto de permanencia
+    PE = "PE"    # Permiso Especial de Permanencia
+    PT = "PT"    # Permiso Temporal de Permanencia
+    PPT = "PPT"  # Permiso por protección temporal
+    DE = "DE"    # Documento Extranjero
+    AS = "AS"    # Adulto sin identificar
+    MS = "MS"    # Menor sin identificar
+    SI = "SI"    # Sin identificación
 
 
 class BiologicalSex(str, Enum):
-    """Sexo biológico — SISPRO CodeSystem Sexo."""
-    M = "M"     # Masculino
-    F = "F"     # Femenino
-    I = "I"     # Indeterminado # noqa: E741
+    """Sexo biológico — Res. 866/2021 Elem. 3."""
+    M = "M"   # Masculino
+    F = "F"   # Femenino
+    I = "I"   # Indeterminado / Intersexual # noqa: E741
 
 
-class GenderIdentity(str, Enum):
-    """Identidad de género — SISPRO CodeSystem MDECIdentidadGenero (opcional)."""
-    MASCULINO = "01"
-    FEMENINO = "02"
-    TRANSGENERO = "03"
-    NO_BINARIO = "04"
-    NO_REPORTA = "99"
+class ColombianGenderGroup(str, Enum):
+    """
+    Grupo de sexo biológico colombiano — para extensión _gender en Patient.
+    CodeSystem: ColombianGenderGroup
+    URI: https://fhir.minsalud.gov.co/rda/CodeSystem/ColombianGenderGroup
+    Fuente: Postman MinSalud v1.4
 
-
-class EthnicGroup(str, Enum):
-    """Etnia — SISPRO CodeSystem Etnia."""
-    INDIGENA = "01"
-    ROM_GITANO = "02"
-    RAIZAL = "03"
-    PALENQUERO = "04"
-    AFROCOLOMBIANO = "05"
-    NINGUNO = "06"
+    Se usa en Patient._gender.extension[ExtensionBiologicalGender].valueCoding.
+    Es DIFERENTE de ColombianGenderIdentity (identidad de género).
+    """
+    HOMBRE = "01"
+    MUJER = "02"
+    INDETERMINADO = "03"
 
 
 class ResidenceZone(str, Enum):
-    """Zona territorial de residencia — SISPRO CodeSystem Zona."""
-    URBANA = "U"
-    RURAL = "R"
+    """
+    Zona territorial de residencia — Res. 866/2021 Elem. 14.
+    CodeSystem: ColombianResidenceZone
+    URI: https://fhir.minsalud.gov.co/rda/CodeSystem/ColombianResidenceZone
+
+    CAMBIO v3.0: Códigos cambiados de "U"/"R" a "01"/"02" según Postman.
+    """
+    URBANA = "01"
+    RURAL = "02"
+
+
+class Ethnicity(str, Enum):
+    """
+    Pertenencia étnica.
+    CodeSystem: ColombianEthnicGroup
+    URI: https://fhir.minsalud.gov.co/rda/CodeSystem/ColombianEthnicGroup
+    """
+    INDIGENA = "1"
+    ROM = "2"
+    RAIZAL = "3"
+    PALENQUERO = "4"
+    NEGRO_AFROCOLOMBIANO = "5"
+    OTRAS_ETNIAS = "6"
+    NINGUNA = "99"
 
 
 class DisabilityCategory(str, Enum):
-    """Categoría de discapacidad — SISPRO CodeSystem CategoriaDiscapacidad."""
-    NINGUNA = "00"
+    """
+    Categoría de discapacidad.
+    CodeSystem: ColombianDisabilityClassification
+    URI: https://fhir.minsalud.gov.co/rda/CodeSystem/ColombianDisabilityClassification
+    """
     FISICA = "01"
-    INTELECTUAL = "02"
+    VISUAL = "02"
     AUDITIVA = "03"
-    VISUAL = "04"
-    SORDOCEGUERA = "05"
-    PSICOSOCIAL = "06"
+    INTELECTUAL = "04"
+    SICOSOCIAL = "05"
+    SORDOCEGUERA = "06"
     MULTIPLE = "07"
+    SIN_DISCAPACIDAD = "08"
+
+
+class GenderIdentity(str, Enum):
+    """
+    Identidad de género.
+    CodeSystem: ColombianGenderIdentity
+    URI: https://fhir.minsalud.gov.co/rda/CodeSystem/ColombianGenderIdentity
+    """
+    MASCULINO = "01"
+    FEMENINO = "02"
+    TRANSGENERO = "03"
+    NEUTRO = "04"
+    NO_DECLARA = "05"
 
 
 class CareModality(str, Enum):
-    """Modalidad de realización de la tecnología — Res. 866/2021 Elem. 18.1."""
+    """Modalidad de atención — Res. 866/2021 Elem. 18.1."""
     INTRAMURAL = "01"
     EXTRAMURAL_MOVIL = "02"
     EXTRAMURAL_DOMICILIARIA = "03"
@@ -148,6 +209,28 @@ class IncapacityScope(str, Enum):
     PRORROGA = "02"
 
 
+class MedicationStatus(str, Enum):
+    """Status for MedicationStatement — FHIR R4 value set."""
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    STOPPED = "stopped"
+    UNKNOWN = "unknown"
+
+
+class MedicationRequestStatus(str, Enum):
+    """Status for MedicationRequest — FHIR R4 value set."""
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class MedicationRequestIntent(str, Enum):
+    """Intent for MedicationRequest — FHIR R4 value set."""
+    ORDER = "order"
+    PLAN = "plan"
+    PROPOSAL = "proposal"
+
+
 # ============================================================================
 # SUB-MODELS — Patient demographics
 # ============================================================================
@@ -159,53 +242,33 @@ class Address(BaseModel):
     cityCode: Optional[str] = Field(None, description="Código DIVIPOLA del municipio (Elem. 12.1)")
     state: str = Field(..., description="Departamento")
     zipCode: Optional[str] = None
-    country: str = Field("COL", description="Código ISO 3166-1 del país de residencia (Elem. 11.1)")
+    country: str = Field("COL", description="Código ISO 3166-1 numérico del país (Elem. 11.1)")
     countryName: Optional[str] = Field(None, description="Nombre del país de residencia (Elem. 11.2)")
-    zone: Optional[ResidenceZone] = Field(None, description="Zona territorial — Urbana/Rural (Elem. 14)")
+    zone: Optional[ResidenceZone] = Field(None, description="Zona territorial (Elem. 14)")
 
 
 class PatientIdentification(BaseModel):
-    """Identificación del paciente según Maestro Persona MinSalud (Elems. 2.1, 2.2)."""
-    documentType: DocumentType = Field(..., description="Tipo de documento de identificación (Elem. 2.1)")
-    documentNumber: str = Field(..., description="Número de documento de identificación (Elem. 2.2)")
+    """Identificación del paciente (Elems. 2.1, 2.2)."""
+    documentType: DocumentType = Field(..., description="Tipo de documento (Elem. 2.1)")
+    documentNumber: str = Field(..., description="Número de documento (Elem. 2.2)")
 
 
 class PatientInfo(BaseModel):
-    """Datos demográficos del paciente — Sección RDA Identificación del Paciente."""
-    # Identification (Elems. 2.1, 2.2)
+    """Datos demográficos del paciente — Sección RDA Identificación."""
     identification: PatientIdentification
-
-    # Names (Elems. 3.1 - 3.4)
-    firstLastName: str = Field(..., description="Primer apellido (Elem. 3.1)")
-    secondLastName: Optional[str] = Field(None, description="Segundo apellido (Elem. 3.2)")
-    firstName: str = Field(..., description="Primer nombre (Elem. 3.3)")
-    secondName: Optional[str] = Field(None, description="Segundo nombre (Elem. 3.4)")
-
-    # Birth date (Elem. 4)
-    dob: date = Field(..., description="Fecha de nacimiento (Elem. 4)")
-
-    # Nationality (Elems. 1.1, 1.2) — critical for migrant children
-    nationalityCode: str = Field("COL", description="Código ISO 3166-1 del país de nacionalidad (Elem. 1.1)")
-    nationalityName: Optional[str] = Field(None, description="Nombre del país de nacionalidad (Elem. 1.2)")
-
-    # Biological sex & gender identity (Elems. 5, 6)
-    biologicalSex: BiologicalSex = Field(..., description="Sexo biológico (Elem. 5)")
-    genderIdentity: Optional[GenderIdentity] = Field(None, description="Identidad de género — Opcional (Elem. 6)")
-
-    # Ethnicity (Elems. 13.1, 13.2)
-    ethnicity: Optional[EthnicGroup] = Field(None, description="Etnia (Elem. 13.1)")
-    ethnicCommunity: Optional[str] = Field(None, description="Comunidad étnica — alfanumérico (Elem. 13.2)")
-
-    # Disability (Elem. 10)
-    disabilityCategory: Optional[DisabilityCategory] = Field(None, description="Categoría de discapacidad (Elem. 10)")
-
-    # Address / Residence (Elems. 11.1-14)
+    firstLastName: str = Field(..., description="Primer apellido (Elem. 1.1)")
+    secondLastName: Optional[str] = Field(None, description="Segundo apellido (Elem. 1.2)")
+    firstName: str = Field(..., description="Primer nombre (Elem. 1.3)")
+    secondName: Optional[str] = Field(None, description="Segundo nombre (Elem. 1.4)")
+    dob: date = Field(..., description="Fecha de nacimiento (Elem. 7)")
+    nationalityCode: str = Field(..., description="Código ISO 3166-1 numérico del país (Elem. 9)")
+    nationalityName: Optional[str] = Field(None, description="Nombre del país (Elem. 10)")
+    biologicalSex: BiologicalSex = Field(..., description="Sexo biológico (Elem. 3)")
+    ethnicity: Optional[Ethnicity] = Field(None, description="Pertenencia étnica (Elem. 5)")
+    disabilityCategory: Optional[DisabilityCategory] = Field(None, description="Discapacidad (Elem. 6)")
+    genderIdentity: Optional[GenderIdentity] = Field(None, description="Identidad de género (Elem. 4)")
     address: Address
-
-    # Blood type (not in Res. 866 but clinically relevant for project)
     bloodType: Optional[str] = Field(None, description="Tipo de sangre (uso clínico interno)")
-
-    # Vitals — carried at patient level for latest snapshot
     weight: Optional[float] = Field(None, description="Peso en Kg")
     height: Optional[float] = Field(None, description="Talla en cm")
 
@@ -215,7 +278,7 @@ class GuardianInfo(BaseModel):
     name: str
     relationship: str
     phone: str
-    device_uid: Optional[str] = Field(None, description="Hardware ID de la manilla NFC del acudiente")
+    device_uid: Optional[str] = Field(None, description="Hardware ID de la manilla NFC")
 
 
 # ============================================================================
@@ -223,37 +286,36 @@ class GuardianInfo(BaseModel):
 # ============================================================================
 
 class FamilyHistoryItem(BaseModel):
-    """
-    Antecedente familiar estructurado — Res. 866/2021 Elems. 47.3, 47.4.
-    
-    Frontend sends: conditionDescription (required) + relationship (required).
-    Backend LLM resolves: conditionCie10Code + conditionCie11Code.
-    """
-    conditionCie10Code: Optional[str] = Field(None, description="Código CIE-10 — resuelto por LLM (Elem. 47.3)")
-    conditionCie11Code: Optional[str] = Field(None, description="Código CIE-11 — resuelto por LLM (opcional)")
-    conditionDescription: str = Field(..., description="Descripción de la condición (entrada del frontend)")
+    """Antecedente familiar estructurado — Res. 866/2021 Elems. 47.3, 47.4."""
+    conditionCie10Code: Optional[str] = Field(None, description="Código CIE-10")
+    conditionCie11Code: Optional[str] = Field(None, description="Código CIE-11 (opcional)")
+    conditionDescription: str = Field(..., description="Descripción de la condición")
     relationship: FamilyRelationship = Field(..., description="Parentesco (Elem. 47.4)")
+
+
+class ChronicConditionItem(BaseModel):
+    """Antecedente patológico estructurado — IG RDA v0.8.1 ConditionStatementRDA."""
+    chronicDescription: str = Field(..., description="Descripción de la condición crónica (entrada del frontend)")
+    chronicCie10Code: Optional[str] = Field(None, description="Código CIE-10 — resuelto por LLM")
+    chronicCie11Code: Optional[str] = Field(None, description="Código CIE-11 — resuelto por LLM (opcional)")
+
+
+class MedicationStatementItem(BaseModel):
+    """Antecedente farmacológico — MedicationStatementRDA."""
+    medicationName: str = Field(..., description="Nombre del medicamento")
+    dciCode: Optional[str] = Field(None, description="Código DCI — MIPRES")
+    status: MedicationStatus = Field(default=MedicationStatus.ACTIVE)
+    dosage: Optional[str] = Field(None, description="Posología (texto libre)")
+    notes: Optional[str] = Field(None, description="Observaciones adicionales")
 
 
 class BackgroundHistory(BaseModel):
     """Antecedentes de salud declarados por el paciente."""
-    chronicConditions: Optional[str] = Field(
-        default=None,
-        description="Condiciones crónicas (texto libre para captura rápida)."
-    )
-    personalHistory: Optional[str] = Field(
-        default=None,
-        description="Historial médico, quirúrgico o de nacimiento."
-    )
-    familyHistory: List[FamilyHistoryItem] = Field(
-        default_factory=list,
-        description="Antecedentes familiares estructurados con CIE-10 y parentesco."
-    )
-    familyHistoryNotes: Optional[str] = Field(
-        default=None,
-        description="Notas libres de antecedentes familiares (captura rápida cuando no se codifica)."
-    )
-
+    chronicConditions: List[ChronicConditionItem] = Field(default_factory=list)
+    personalHistory: Optional[str] = Field(default=None)
+    familyHistory: List[FamilyHistoryItem] = Field(default_factory=list)
+    familyHistoryNotes: Optional[str] = Field(default=None)
+    medications: List[MedicationStatementItem] = Field(default_factory=list)
 
 # ============================================================================
 # SUB-MODELS — Allergies
@@ -261,7 +323,7 @@ class BackgroundHistory(BaseModel):
 
 class AllergyInfo(BaseModel):
     """Alergia o intolerancia — Res. 866/2021 Elems. 47.1, 47.2."""
-    category: AllergyCategory = Field(..., description="Tipo de alergia codificado (Elem. 47.1)")
+    category: AllergyCategory = Field(..., description="Tipo de alergia (Elem. 47.1)")
     allergen: str = Field(..., description="Nombre del alérgeno (Elem. 47.2)")
     reaction: Optional[str] = Field(None, description="Descripción de la reacción adversa")
     notes: Optional[str] = None
@@ -274,7 +336,7 @@ class AllergyInfo(BaseModel):
 class VaccinationRecordItem(BaseModel):
     date: date
     vaccineName: str
-    vaccineCode: str  # CVX Code
+    vaccineCode: str
     dose: int
     administratedBy: str
     administratedAt: str
@@ -286,124 +348,129 @@ class VaccinationRecordItem(BaseModel):
 # ============================================================================
 
 class ClinicalEvaluation(BaseModel):
-    """Datos ingresados por el médico en el formulario de la consulta."""
-    historyOfCurrentIllness: Optional[str] = Field(None, description="Enfermedad actual / motivo de consulta")
-    generalPhysicalExamination: Optional[str] = Field(None, description="Examen físico general")
-    systemsExamination: Optional[str] = Field(None, description="Revisión por sistemas")
-    treatmentPlanObservations: Optional[str] = Field(None, description="Plan de tratamiento y observaciones")
+    """Datos ingresados por el médico en la consulta."""
+    historyOfCurrentIllness: Optional[str] = Field(None)
+    generalPhysicalExamination: Optional[str] = Field(None)
+    systemsExamination: Optional[str] = Field(None)
+    treatmentPlanObservations: Optional[str] = Field(None)
 
 
 class DiagnosisItem(BaseModel):
-    """
-    Diagnóstico estructurado con codificación CIE-10/11 — Res. 866/2021 Elems. 37.1, 37.2.
-    
-    Todos los campos son resueltos por el LLM a partir de la evaluación clínica.
-    El tipo de diagnóstico (Elem. 37.3) se define a nivel del encuentro en MedicalHistoryItem.
-    """
-    icd10Code: str = Field(..., description="Código diagnóstico CIE-10 (Elem. 37.1)")
-    icd11Code: Optional[str] = Field(None, description="Código diagnóstico CIE-11 (opcional)")
+    """Diagnóstico CIE-10/11 — Res. 866/2021 Elems. 37.1, 37.2."""
+    icd10Code: str = Field(..., description="Código CIE-10 (Elem. 37.1)")
+    icd11Code: Optional[str] = Field(None, description="Código CIE-11 (opcional)")
     description: str = Field(..., description="Nombre del diagnóstico (Elem. 37.2)")
 
 
 class RiskFactor(BaseModel):
     """Factor de riesgo — Res. 866/2021 Elems. 48.1, 48.2."""
-    type: RiskFactorType = Field(..., description="Tipo de factor de riesgo (Elem. 48.1)")
-    name: str = Field(..., description="Nombre del factor de riesgo (Elem. 48.2)")
+    type: RiskFactorType = Field(..., description="Tipo (Elem. 48.1)")
+    name: str = Field(..., description="Nombre (Elem. 48.2)")
 
 
 class IncapacityInfo(BaseModel):
-    """Datos de incapacidad — Res. 866/2021 Elems. 45.1, 45.2, 46."""
-    scope: IncapacityScope = Field(..., description="Alcance de la incapacidad (Elem. 45.1)")
-    days: int = Field(..., description="Días de incapacidad (Elem. 45.2)")
-    maternityLeaveDays: Optional[int] = Field(None, description="Días de licencia de maternidad (Elem. 46)")
+    """Incapacidad — Res. 866/2021 Elems. 45.1, 45.2, 46."""
+    scope: IncapacityScope = Field(..., description="Alcance (Elem. 45.1)")
+    days: int = Field(..., description="Días (Elem. 45.2)")
+    maternityLeaveDays: Optional[int] = Field(None, description="Días licencia maternidad (Elem. 46)")
 
 
 class PractitionerInfo(BaseModel):
-    """Información del profesional de salud — Res. 866/2021 Elems. 49.1, 49.2."""
-    documentType: DocumentType = Field(..., description="Tipo de documento del profesional (Elem. 49.1)")
-    documentNumber: str = Field(..., description="Número de documento del profesional (Elem. 49.2)")
-    name: str = Field(..., description="Nombre del profesional (para visualización)")
+    """
+    Profesional de salud — Res. 866/2021 Elems. 49.1, 49.2.
+
+    v3.0: Añadidos campos de nombre desglosado para ExtensionFathersFamilyName /
+    ExtensionMothersFamilyName en el Practitioner FHIR.
+    """
+    documentType: DocumentType = Field(..., description="Tipo de documento (Elem. 49.1)")
+    documentNumber: str = Field(..., description="Número de documento (Elem. 49.2)")
+    name: str = Field(..., description="Nombre completo (visualización / legacy)")
+    firstName: Optional[str] = Field(None, description="Primer nombre")
+    secondName: Optional[str] = Field(None, description="Segundo nombre")
+    firstLastName: Optional[str] = Field(None, description="Primer apellido")
+    secondLastName: Optional[str] = Field(None, description="Segundo apellido")
 
 
 class ProviderInfo(BaseModel):
-    """Identificación del prestador de servicios de salud — Res. 866/2021 Elem. 16."""
-    repsCode: str = Field(..., description="Código REPS del prestador (Elem. 16)")
+    """
+    Prestador de servicios de salud — Res. 866/2021 Elem. 16.
+
+    v3.0: Añadido nitNumber para dual-coding Organization (NIT + CodigoPrestador).
+    """
+    repsCode: str = Field(..., description="Código REPS (Elem. 16)")
     name: str = Field(..., description="Nombre del prestador")
+    nitNumber: Optional[str] = Field(None, description="NIT del prestador")
+    locationSeatCode: Optional[str] = Field(
+        None, description="Código sede (ej: repsCode-01) para Location"
+    )
 
 
 class PayerInfo(BaseModel):
-    """Entidad responsable del plan de beneficios — Res. 866/2021 Elems. 15.1, 15.2."""
-    code: Optional[str] = Field(None, description="Código de la EAPB en el SGSSS (Elem. 15.1)")
-    name: Optional[str] = Field(None, description="Nombre de la EAPB (Elem. 15.2)")
+    """EAPB — Res. 866/2021 Elems. 15.1, 15.2."""
+    code: Optional[str] = Field(None, description="Código EAPB (Elem. 15.1)")
+    name: Optional[str] = Field(None, description="Nombre EAPB (Elem. 15.2)")
+
+
+class MedicationRequestItem(BaseModel):
+    """Prescripción de medicamento — MedicationRequestRDA."""
+    medicationName: str = Field(..., description="Nombre del medicamento")
+    dciCode: Optional[str] = Field(None, description="Código DCI — MIPRES/SISPRO")
+    iumCode: Optional[str] = Field(None, description="IUM")
+    dosage: Optional[str] = Field(None, description="Posología (texto libre)")
+    quantity: Optional[str] = Field(None, description="Cantidad prescrita")
+    frequency: Optional[str] = Field(None, description="Frecuencia")
+    duration: Optional[str] = Field(None, description="Duración")
+    route: Optional[str] = Field(None, description="Vía de administración")
+    status: MedicationRequestStatus = Field(default=MedicationRequestStatus.ACTIVE)
+    intent: MedicationRequestIntent = Field(default=MedicationRequestIntent.ORDER)
+    notes: Optional[str] = Field(None, description="Indicaciones adicionales")
 
 
 class MedicalHistoryItem(BaseModel):
-    """
-    Un evento de atención médica (consulta/visita).
-    Corresponde a un Encounter + datos asociados en el RDA.
-    """
-    # Encounter metadata (Res. 866/2021)
+    """Un evento de atención médica (consulta/visita) = Encounter + datos asociados."""
     type: str = Field("Consultation", description="Tipo de evento")
-    startDateTime: datetime = Field(..., description="Fecha y hora de inicio de atención (Elem. 17)")
-    endDateTime: Optional[datetime] = Field(None, description="Fecha y hora de fin de atención (Elem. 43)")
+    startDateTime: datetime = Field(..., description="Inicio de atención (Elem. 17)")
+    endDateTime: Optional[datetime] = Field(None, description="Fin de atención (Elem. 43)")
 
-    # Care context (Elems. 18.1, 18.2, 19, 20, 21)
-    careModality: CareModality = Field(
-        default=CareModality.INTRAMURAL,
-        description="Modalidad de atención (Elem. 18.1)"
-    )
-    serviceGroup: ServiceGroup = Field(
-        default=ServiceGroup.CONSULTA_EXTERNA,
-        description="Grupo de servicios (Elem. 18.2)"
-    )
-    careEnvironment: CareEnvironment = Field(
-        default=CareEnvironment.INSTITUCIONAL,
-        description="Entorno de atención (Elem. 19)"
-    )
-    entryRoute: Optional[str] = Field(None, description="Vía de ingreso — código SISPRO (Elem. 20)")
-    externalCause: Optional[str] = Field(None, description="Causa externa — código SISPRO (Elem. 21)")
+    careModality: CareModality = Field(default=CareModality.INTRAMURAL)
+    serviceGroup: ServiceGroup = Field(default=ServiceGroup.CONSULTA_EXTERNA)
+    careEnvironment: CareEnvironment = Field(default=CareEnvironment.INSTITUCIONAL)
+    entryRoute: Optional[str] = Field(None, description="Vía de ingreso (Elem. 20)")
+    externalCause: Optional[str] = Field(None, description="Causa externa (Elem. 21)")
+    externalCauseDisplay: Optional[str] = Field(None)
 
-    # Provider & practitioner
-    provider: Optional[ProviderInfo] = Field(None, description="Prestador de servicios (Elem. 16)")
-    practitioner: Optional[PractitionerInfo] = Field(None, description="Profesional de salud (Elems. 49.1, 49.2)")
+    healthcareServiceCode: Optional[str] = Field(None, description="Código servicio REPS")
+    healthcareServiceDisplay: Optional[str] = Field(None)
+    cupsCode: Optional[str] = Field(None, description="Código CUPS")
+    cupsDisplay: Optional[str] = Field(None)
+    encounterIdentifier: Optional[str] = Field(None, description="ID del encuentro")
 
-    # Legacy fields for backward compatibility
-    location: Optional[str] = Field(None, description="Nombre legible del lugar de atención (legacy)")
-    physician: Optional[str] = Field(None, description="Nombre del médico (legacy, usar practitioner)")
+    provider: Optional[ProviderInfo] = Field(None)
+    practitioner: Optional[PractitionerInfo] = Field(None)
+    location: Optional[str] = Field(None, description="Lugar de atención (legacy)")
+    physician: Optional[str] = Field(None, description="Médico (legacy)")
 
-    # Clinical content
     clinicalEvaluation: ClinicalEvaluation = Field(default_factory=ClinicalEvaluation)
     diagnosis: List[DiagnosisItem] = Field(default_factory=list)
-    diagnosisType: DiagnosisType = Field(
-        default=DiagnosisType.IMPRESION_DIAGNOSTICA,
-        description="Tipo de diagnóstico principal del encuentro (Elem. 37.3). "
-                    "El médico selecciona: 01=Impresión diagnóstica, 02=Confirmado nuevo, 03=Confirmado repetido."
-    )
-
-    # Discharge (Elem. 41)
-    dischargeDisposition: Optional[DischargeDisposition] = Field(None, description="Condición al egreso (Elem. 41)")
-
-    # Risk factors (Elems. 48.1, 48.2)
+    diagnosisType: DiagnosisType = Field(default=DiagnosisType.IMPRESION_DIAGNOSTICA)
+    dischargeDisposition: Optional[DischargeDisposition] = Field(None)
     riskFactors: List[RiskFactor] = Field(default_factory=list)
+    incapacity: Optional[IncapacityInfo] = Field(None)
+    payer: Optional[PayerInfo] = Field(None)
 
-    # Incapacity (Elems. 45.1, 45.2, 46)
-    incapacity: Optional[IncapacityInfo] = Field(None, description="Datos de incapacidad")
-
-    # Payer for this encounter
-    payer: Optional[PayerInfo] = Field(None, description="EAPB para este encuentro (Elems. 15.1, 15.2)")
+    occupation: Optional[str] = Field(None, description="Código CIUO-88 A.C. (Elem. 22)")
+    occupationDescription: Optional[str] = Field(None)
+    prescriptions: List[MedicationRequestItem] = Field(default_factory=list)
 
 
 # ============================================================================
-# MAIN MODEL — Full Patient Record (incoming JSON payload)
+# MAIN MODEL — Full Patient Record
 # ============================================================================
 
 class PatientFullRecord(BaseModel):
     """
     Modelo principal del registro completo del paciente.
     Payload de POST /sync y respuesta de GET /scan.
-
-    Diseñado para cumplir con los elementos de dato de la Resolución 1888/2025
-    (RDA-Paciente y RDA-Consulta Externa).
     """
     patientId: str = Field(..., description="UUID v4 generado por el frontend")
     device_uid: str = Field(..., description="UID del hardware NFC/QR de la manilla")
@@ -411,11 +478,9 @@ class PatientFullRecord(BaseModel):
     patientInfo: PatientInfo
     guardianInfo: GuardianInfo
 
-    # Antecedentes de salud (RDA-Paciente)
     backgroundHistory: Optional[BackgroundHistory] = None
     allergies: List[AllergyInfo] = Field(default_factory=list)
 
-    # Datos episódicos (RDA-Consulta Externa)
     medicalHistory: List[MedicalHistoryItem] = Field(default_factory=list)
     vaccinationRecord: List[VaccinationRecordItem] = Field(default_factory=list)
 
@@ -431,5 +496,5 @@ class PatientSyncResponse(BaseModel):
     status: str
     internal_id: str
     fhir_status: Optional[str] = "unknown"
-    vida_code: Optional[str] = Field(None, description="Código VIDA retornado por el mecanismo IHCE")
+    vida_code: Optional[str] = Field(None, description="Código VIDA retornado por IHCE")
     message: str

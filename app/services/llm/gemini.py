@@ -16,11 +16,14 @@ from app.schemas.patient import DiagnosisItem
 from app.services.llm.base import MedicalCodingService
 from app.services.llm.prompts import (
     SYSTEM_INSTRUCTION,
+    SYSTEM_INSTRUCTION_CHRONIC_CONDITION,
     SYSTEM_INSTRUCTION_FAMILY_HISTORY,
+    build_chronic_condition_prompt,
     build_clinical_prompt,
     build_family_history_prompt,
 )
 from app.services.llm.schemas import (
+    CHRONIC_CONDITION_RESPONSE_SCHEMA,
     DIAGNOSIS_RESPONSE_SCHEMA,
     FAMILY_HISTORY_RESPONSE_SCHEMA,
 )
@@ -138,4 +141,27 @@ class GeminiMedicalCodingService(MedicalCodingService):
                 "icd10Code": "Z84.8",
                 "icd11Code": None,
                 "description": f"{condition_description} (Fallo en codificación IA)",
+            }
+    
+    def code_chronic_condition(self, chronic_description: str) -> dict:
+        prompt = build_chronic_condition_prompt(chronic_description)
+        config = self._build_config(
+            SYSTEM_INSTRUCTION_CHRONIC_CONDITION, CHRONIC_CONDITION_RESPONSE_SCHEMA
+        )
+
+        try:
+            raw = self._call(prompt, config)
+            result = json.loads(raw)
+            logger.info(
+                f"Gemini coded chronic condition: "
+                f"'{chronic_description}' -> {result.get('icd10Code')}"
+            )
+            return result
+
+        except Exception as e:
+            logger.error(f"Error coding chronic condition with Gemini: {str(e)}")
+            return {
+                "icd10Code": "Z84.8",
+                "icd11Code": None,
+                "description": f"{chronic_description} (Fallo en codificación IA)",
             }

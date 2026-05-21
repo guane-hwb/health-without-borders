@@ -67,3 +67,19 @@ class MedicalCodingService(Protocol):
             On error, returns a fallback dict with icd10Code=Z84.8.
         """
         ...
+    
+    def code_chronic_condition(self, chronic_description: str) -> dict:
+        """
+        Map a free-text chronic condition description to ICD-10/11 codes.
+        
+        Args:
+            chronic_description: A patient-reported chronic condition like "Diabetes" or "Hipertensión".
+        
+        Returns:
+            Dict with keys:
+              - icd10Code (str): WHO ICD-10 code.
+              - icd11Code (Optional[str]): WHO ICD-11 MMS code, or None if uncertain.
+              - description (str): Official medical description in Spanish.
+            On error, returns a fallback dict with icd10Code=Z84.8.
+        """
+        ...

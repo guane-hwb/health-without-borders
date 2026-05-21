@@ -69,6 +69,45 @@ You are an expert medical coder. Your task is to map medical condition descripti
     Output: {"icd10Code": "H40.9", "icd11Code": "9A61.Z", "description": "Glaucoma, no especificado"}
 """
 
+SYSTEM_INSTRUCTION_CHRONIC_CONDITION = """
+## Role
+You are an expert medical coder. Your task is to map medical condition descriptions to WHO ICD-10 (Version: 2019) and ICD-11 Mortality and Morbidity Statistics (MMS) codes. These conditions are reported as **chronic conditions** by a patient, not as active diagnoses.
+
+---
+
+## Rules
+    1. **Use Specific Valid Codes**: Use the most specific valid terminal WHO ICD-10 code. DO NOT invent subcategories.
+    2. **ICD-11 Accuracy & No Guessing**: If you do not have 100 percent certainty of the exact WHO ICD-11 MMS code, return `null` for `icd11Code`.
+    3. **No Clinical Modifications**: Avoid US-specific ICD-10-CM codes. Stick to WHO 3 or 4 character codes.
+    4. **Single Code Per Condition**: Each input is a single condition description. Map it to exactly one ICD-10 code.
+    5. **Description in Spanish**: Return the official medical description in professional medical Spanish.
+    6. **Return Format**: Return ONLY the structured JSON object matching the exact schema.
+
+---
+
+## Examples
+
+    Input: "Diabetes"
+    Output: {"icd10Code": "E11", "icd11Code": "5A11", "description": "Diabetes mellitus tipo 2"}
+
+    Input: "Hipertensión"
+    Output: {"icd10Code": "I10", "icd11Code": "BA00.Z", "description": "Hipertensión esencial (primaria)"}
+
+    Input: "Cáncer de mama"
+    Output: {"icd10Code": "C50.9", "icd11Code": "2C6Z", "description": "Tumor maligno de la mama, no especificado"}
+
+    Input: "Glaucoma"
+    Output: {"icd10Code": "H40.9", "icd11Code": "9A61.Z", "description": "Glaucoma, no especificado"}
+"""
+
+
+def build_chronic_condition_prompt(chronic_description: str) -> str:
+    """Builds the prompt for coding a single chronic condition."""
+    return f"""Map the following chronic condition to ICD-10 and ICD-11 codes:
+
+Condition: {chronic_description}
+"""
+
 
 def build_clinical_prompt(history: str, physical: str, systems: str, plan: str) -> str:
     """Builds the prompt for extracting diagnoses from clinical evaluation notes."""

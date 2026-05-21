@@ -49,3 +49,23 @@ FAMILY_HISTORY_RESPONSE_SCHEMA = {
     },
     "required": ["icd10Code", "description"]
 }
+
+CHRONIC_CONDITION_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "description": "ICD coding for a single chronic condition reported by the patient.",
+    "properties": {
+        "icd10Code": {
+            "type": "STRING",
+            "description": "The exact WHO ICD-10 code for the chronic condition."
+        },
+        "icd11Code": {
+            "type": "STRING",
+            "description": "The corresponding WHO ICD-11 MMS code. Null if not certain."
+        },
+        "description": {
+            "type": "STRING",
+            "description": "Official medical description of the chronic condition in Spanish."
+        }
+    },
+    "required": ["icd10Code", "description"]
+}

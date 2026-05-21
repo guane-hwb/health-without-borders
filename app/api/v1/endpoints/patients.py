@@ -183,6 +183,19 @@ async def sync_patient(
                     if coded.get("description"):
                         fh_item.conditionDescription = coded["description"]
 
+        # --- LLM PROCESSING: Chronic conditions ICD coding ---
+        if patient_data.backgroundHistory and patient_data.backgroundHistory.chronicConditions:
+            for cc_item in patient_data.backgroundHistory.chronicConditions:
+                if cc_item.chronicDescription and not cc_item.chronicCie10Code:
+                    coded = await asyncio.to_thread(
+                        medical_llm_processor.code_chronic_condition,
+                        cc_item.chronicDescription
+                    )
+                    cc_item.chronicCie10Code = coded.get("icd10Code")
+                    cc_item.chronicCie11Code = coded.get("icd11Code")
+                    if coded.get("description"):
+                        cc_item.chronicDescription = coded["description"]
+
         # 1. Save to DB — returns (patient, previous_visit_count)
         logger.info(
             "Patient sync started actor_id=%s role=%s org_id=%s patient_ref=%s",
