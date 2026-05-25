@@ -101,10 +101,13 @@ def get_patient_by_device_uid_scan(
                 detail="Guardian bracelet scan required for minors."
             )
         
-        # Extract the stored guardian device UID from the patient's full record JSON
+        # Extract the stored guardian device UIDs from the patient's full record JSON
         stored_guardian_uid = patient_db.full_record_json.get("guardianInfo", {}).get("device_uid")
-        
-        if guardian_device_uid != stored_guardian_uid:
+        stored_guardian2_uid = patient_db.full_record_json.get("guardian2Info", {}).get("device_uid") if patient_db.full_record_json.get("guardian2Info") else None
+
+        # Accept either guardian's tag
+        valid_uids = {uid for uid in [stored_guardian_uid, stored_guardian2_uid] if uid}
+        if guardian_device_uid not in valid_uids:
             logger.warning(
                 "Guardian validation failed actor_id=%s org_id=%s patient_ref=%s",
                 current_user.id,

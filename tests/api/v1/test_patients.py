@@ -458,6 +458,95 @@ def test_scan_minor_wrong_guardian(client: TestClient):
     assert "Guardian tag mismatch" in response.json()["detail"]
 
 
+def test_scan_minor_accepts_guardian2_uid(client: TestClient):
+    """Scanning a minor's bracelet with guardian2's UID should succeed."""
+    payload_with_g2 = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "TEST-UNIT-G2-001",
+        "device_uid": "04:A2:G2:UID",
+        "guardian2Info": {
+            "name": "Carlos Pérez",
+            "relationship": "Padre",
+            "phone": "+573009876543",
+            "device_uid": "GUARDIAN2-UID-001",
+        },
+    }
+    _override_doctor()
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        client.post("/api/v1/patients/sync", json=payload_with_g2)
+
+    # Scan using guardian2's UID
+    response = client.get(
+        f"/api/v1/patients/scan/{payload_with_g2['device_uid']}",
+        params={"guardian_device_uid": "GUARDIAN2-UID-001"},
+    )
+    _clear_overrides()
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-G2-001"
+
+
+def test_sync_persists_guardian_consent_and_guardian2(client: TestClient):
+    """Guardian consent, document info, and guardian2 are persisted in full_record_json."""
+    payload = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "TEST-UNIT-CONSENT-001",
+        "device_uid": "04:A2:CONSENT:UID",
+        "guardianInfo": {
+            **MOCK_PATIENT_PAYLOAD["guardianInfo"],
+            "documentType": "CC",
+            "documentNumber": "52456789",
+            "consent": {
+                "accepted": True,
+                "acceptedAt": "2026-05-20T10:30:00",
+                "email": "guardian@example.com",
+                "signatureBase64": "iVBORw0KGgoAAAANSUhEUg==",
+            },
+        },
+        "guardian2Info": {
+            "name": "Pedro López",
+            "relationship": "Tío",
+            "phone": "+573005555555",
+            "device_uid": "GUARDIAN2-CONSENT-UID",
+            "documentType": "CE",
+            "documentNumber": "E-123456",
+        },
+    }
+
+    _override_doctor()
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload)
+    _clear_overrides()
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "success"
+
+def test_update_patient_persists_guardian2_name(client: TestClient):
+    """Updating an existing patient with guardian2Info covers the update branch."""
+    # First sync — create patient without guardian2
+    _sync_patient(client)
+
+    # Second sync — same patient, now with guardian2Info
+    payload_with_g2 = {
+        **MOCK_PATIENT_PAYLOAD,
+        "guardian2Info": {
+            "name": "Carlos Pérez",
+            "relationship": "Padre",
+            "phone": "+573009876543",
+            "device_uid": "GUARDIAN2-UID-UPDATE",
+        },
+    }
+    _override_doctor()
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload_with_g2)
+    _clear_overrides()
+
+    assert response.status_code == 201
+    
 # ============================================================================
 # SEARCH (STRICT LOOKUP) ENDPOINT TESTS
 # ============================================================================

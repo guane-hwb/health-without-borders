@@ -62,10 +62,12 @@ def find_patient_strict(
         | (func.lower(Patient.second_last_name) == last_name_lower)
     )
 
-    # Guardian verification — if provided, it must match
+    # Guardian verification — if provided, it must match either guardian
     if guardian_name:
+        guardian_lower = guardian_name.strip().lower()
         query = query.filter(
-            func.lower(Patient.guardian_name).contains(guardian_name.strip().lower())
+            (func.lower(Patient.guardian_name).contains(guardian_lower))
+            | (func.lower(Patient.guardian2_name).contains(guardian_lower))
         )
 
     results = query.limit(2).all()
@@ -138,6 +140,10 @@ def create_or_update_patient(
         existing_patient.guardian_name = patient_in.guardianInfo.name
         existing_patient.guardian_phone = patient_in.guardianInfo.phone
 
+        # Persist guardian2 name to relational column for search if present
+        if patient_in.guardian2Info and patient_in.guardian2Info.name:
+            existing_patient.guardian2_name = patient_in.guardian2Info.name
+
         # Save the JSON (new vaccines/guardian/address, but original immutable fields)
         existing_patient.full_record_json = new_record_dump
 
@@ -169,6 +175,8 @@ def create_or_update_patient(
             nationality_code=pi.nationalityCode,
             guardian_name=patient_in.guardianInfo.name,
             guardian_phone=patient_in.guardianInfo.phone,
+            guardian2_name=patient_in.guardian2Info.name if patient_in.guardian2Info else None,
+            guardian2_phone=patient_in.guardian2Info.phone if patient_in.guardian2Info else None,
             full_record_json=new_record_dump,
             synced_visit_count=0,
             rda_paciente_sent=False,

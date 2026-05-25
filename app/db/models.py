@@ -104,6 +104,8 @@ class Patient(Base):
     # --- Guardian ---
     guardian_name = Column(String)
     guardian_phone = Column(String)
+    guardian2_name = Column(String, nullable=True, comment="Nombre del segundo guardián (opcional)")
+    guardian2_phone = Column(String, nullable=True, comment="Teléfono del segundo guardián (opcional)")
     
     # --- Raw Full JSON Storage (authoritative clinical payload) ---
     full_record_json = Column(JSON) 
