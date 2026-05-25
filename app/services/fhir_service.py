@@ -455,14 +455,24 @@ def _build_patient_resource(patient: PatientFullRecord) -> Dict[str, Any]:
             "valueCoding": {"system": SYSTEM_GENDER_IDENTITY, "code": pi.genderIdentity.value},
         })
 
-    # --- Guardian contact ---
+    # --- Guardian contacts ---
+    contacts = []
     gi = patient.guardianInfo
     if gi and gi.name:
-        resource["contact"] = [{
+        contacts.append({
             "relationship": [{"text": gi.relationship}],
             "name": {"text": gi.name},
             "telecom": [{"system": "phone", "value": gi.phone}] if gi.phone else [],
-        }]
+        })
+    gi2 = patient.guardian2Info
+    if gi2 and gi2.name:
+        contacts.append({
+            "relationship": [{"text": gi2.relationship}],
+            "name": {"text": gi2.name},
+            "telecom": [{"system": "phone", "value": gi2.phone}] if gi2.phone else [],
+        })
+    if contacts:
+        resource["contact"] = contacts
 
     return resource
 

@@ -273,12 +273,28 @@ class PatientInfo(BaseModel):
     height: Optional[float] = Field(None, description="Talla en cm")
 
 
+class GuardianConsent(BaseModel):
+    """
+    Prueba de consentimiento informado del guardián — Ley 1581/2012 (Habeas Data).
+
+    Almacena la evidencia de que el guardián autorizó el tratamiento de datos
+    del menor. La firma se almacena como imagen PNG codificada en base64.
+    """
+    accepted: bool = Field(..., description="Guardián aceptó la política de privacidad")
+    acceptedAt: datetime = Field(..., description="Timestamp ISO 8601 del momento de aceptación")
+    email: Optional[str] = Field(None, description="Correo para envío del comprobante de consentimiento")
+    signatureBase64: Optional[str] = Field(None, description="Firma biométrica como imagen PNG en base64")
+
+
 class GuardianInfo(BaseModel):
     """Información del acudiente/tutor del menor."""
     name: str
     relationship: str
     phone: str
     device_uid: Optional[str] = Field(None, description="Hardware ID de la manilla NFC")
+    documentType: Optional[str] = Field(None, description="Tipo de documento del guardián")
+    documentNumber: Optional[str] = Field(None, description="Número de documento del guardián")
+    consent: Optional[GuardianConsent] = Field(None, description="Consentimiento informado — Ley 1581/2012")
 
 
 # ============================================================================
@@ -477,6 +493,7 @@ class PatientFullRecord(BaseModel):
 
     patientInfo: PatientInfo
     guardianInfo: GuardianInfo
+    guardian2Info: Optional[GuardianInfo] = Field(None, description="Segundo guardián/tutor (opcional)")
 
     backgroundHistory: Optional[BackgroundHistory] = None
     allergies: List[AllergyInfo] = Field(default_factory=list)
