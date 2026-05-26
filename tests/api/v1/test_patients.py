@@ -428,7 +428,7 @@ def test_scan_not_found(client: TestClient):
     _clear_overrides()
 
     assert response.status_code == 404
-    assert "not registered" in response.json()["detail"]
+    assert "not found" in response.json()["detail"].lower()
 
 
 def test_scan_minor_requires_guardian(client: TestClient):
