@@ -13,19 +13,18 @@ from app.schemas.patient import PatientFullRecord
 logger = logging.getLogger(__name__)
 
 
-def get_patient_by_device_uid(db: Session, device_uid: str, org_id: str) -> Optional[Patient]:
+def get_patient_by_device_uid(db: Session, device_uid: str) -> Optional[Patient]:
     """
-    Fetches a patient using a hardware tag, STRICTLY scoped to the user's organization.
+    Fetches a patient using a hardware tag.
+    Patients are global — any authenticated professional can access any patient.
     """
     return db.query(Patient).filter(
         Patient.device_uid == device_uid,
-        Patient.organization_id == org_id
     ).first()
 
 
 def find_patient_strict(
     db: Session,
-    org_id: str,
     document_number: str,
     birth_date: date,
     first_name: str,
@@ -49,7 +48,6 @@ def find_patient_strict(
     Returns None if zero or more than one patient matches (ambiguous = denied).
     """
     query = db.query(Patient).filter(
-        Patient.organization_id == org_id,
         func.lower(Patient.document_number) == document_number.strip().lower(),
         Patient.birth_date == birth_date,
         func.lower(Patient.first_name) == first_name.strip().lower(),
@@ -77,8 +75,7 @@ def find_patient_strict(
 
     if len(results) > 1:
         logger.warning(
-            "Ambiguous patient lookup org_id=%s doc=%s — %d matches, access denied",
-            org_id,
+            "Ambiguous patient lookup doc=%s — %d matches, access denied",
             document_number[:3] + "***",
             len(results),
         )
@@ -98,10 +95,9 @@ def create_or_update_patient(
         medicalHistory entries are new and need FHIR bundles generated.
     """
 
-    # 1. Check for existence by ID AND Organization (Multi-Tenant Security)
+    # 1. Check for existence by ID (patients are global)
     existing_patient = db.query(Patient).filter(
         Patient.id == patient_in.patientId,
-        Patient.organization_id == org_id
     ).first()
 
     # Serialize the full JSON once to ensure consistency

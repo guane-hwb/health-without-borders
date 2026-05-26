@@ -52,7 +52,7 @@ steps:
       - 'us-central1'
       - '--allow-unauthenticated'
       - '--update-secrets'
-      - 'DB_PASS=hwb-db-pass:latest,SECRET_KEY=hwb-secret-key:latest'
+      - 'DB_PASS=hwb-db-pass:latest,SECRET_KEY=hwb-secret-key:latest,NFC_MASTER_KEY=hwb-nfc-master-key:latest'
       # 1. Montar la conexión de la nueva instancia SQL
       - '--set-cloudsql-instances'
       - 'migrants-unicef:us-central1:hwb-db-cluster'

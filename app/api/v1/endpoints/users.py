@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.security import get_password_hash
+from app.core.config import settings
 from app.db.models import User, UserRole
 from app.db.session import get_db
 from app.schemas.user import UserCreate, UserResponse
@@ -127,4 +128,13 @@ def get_users_by_organization(
 
 @router.get("/me", response_model=UserResponse)
 def get_current_user_profile(current_user: User = Depends(get_current_user)):
-    return current_user
+    """Return the current user's profile, including the global NFC master key."""
+    return UserResponse(
+        id=current_user.id,
+        email=current_user.email,
+        full_name=current_user.full_name,
+        role=current_user.role,
+        is_active=current_user.is_active,
+        organization_id=current_user.organization_id,
+        nfc_encryption_key=settings.NFC_MASTER_KEY or None,
+    )

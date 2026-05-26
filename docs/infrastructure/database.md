@@ -122,11 +122,13 @@ Rows in critical tables (Users, Organizations) are never physically deleted. Thi
 
 | Endpoint | `superadmin` | `org_admin` | `doctor` | `nurse` |
 |---|---|---|---|---|
-| `GET /patients/scan/{device_uid}` | ❌ | ✅ | ✅ Own org | ✅ Own org |
+| `GET /patients/scan/{device_uid}` | ❌ | ✅ | ✅ Global | ✅ Global |
 | `POST /patients/sync` | ❌ | ❌ | ✅ Full record | ✅ Vaccines only¹ |
-| `GET /patients/search` | ❌ | ✅ | ✅ Own org | ✅ Own org |
+| `GET /patients/search` | ❌ | ✅ | ✅ Global | ✅ Global |
 
-> ¹ A `nurse` can call `POST /patients/sync` but the service layer blocks any attempt to add or modify `medicalHistory`. Only vaccine records can be appended.
+> Patients are global — any authenticated professional from any organization
+> can read and update any patient. The `organization_id` on the patient record
+> tracks who originally registered them (traceability), not access control.
 
 ### 4.4. Design Rationale
 

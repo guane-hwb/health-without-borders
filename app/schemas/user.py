@@ -33,6 +33,9 @@ class UserResponse(UserBase):
     """
     id: str               
     organization_id: str
+    nfc_encryption_key: Optional[str] = Field(
+        None, description="Hex AES-256 master key for NFC encryption"
+    )
 
     class Config:
         from_attributes = True
