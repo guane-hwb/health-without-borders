@@ -428,7 +428,7 @@ def test_scan_not_found(client: TestClient):
     _clear_overrides()
 
     assert response.status_code == 404
-    assert "not registered" in response.json()["detail"]
+    assert "not found" in response.json()["detail"].lower()
 
 
 def test_scan_minor_requires_guardian(client: TestClient):
@@ -784,3 +784,28 @@ def test_sync_skips_chronic_coding_when_code_already_present(client: TestClient)
  
     assert response.status_code == 201
     mock_code_chronic.assert_not_called()
+
+
+def test_scan_patient_from_different_org(client: TestClient):
+    """A doctor from Org B can scan a patient registered by Org A."""
+    # First, sync patient as Org A doctor
+    _sync_patient(client)
+
+    # Now, scan as a doctor from a DIFFERENT organization
+    class MockDoctorOrgB:
+        email = "doctor.b@another-ngo.org"
+        id = "user-org-b-001"
+        role = UserRole.doctor
+        organization_id = "org-different-456"  # Different from org-123
+
+    app.dependency_overrides[get_current_user] = lambda: MockDoctorOrgB()
+
+    response = client.get(
+        f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}",
+        params={"guardian_device_uid": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]},
+    )
+    _clear_overrides()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["patientId"] == "TEST-UNIT-001"

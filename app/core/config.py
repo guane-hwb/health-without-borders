@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200 # 30 days
     
+    # --- NFC ---
+    NFC_MASTER_KEY: str = ""  # Hex-encoded 32-byte AES-256 key for NFC payload encryption
+
     DEBUG: bool = False
     BACKEND_CORS_ORIGINS: str = ""
     RATE_LIMIT_LOGIN: str = "10/minute"

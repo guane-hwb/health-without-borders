@@ -58,7 +58,7 @@ def get_patient_by_device_uid_scan(
     - `403`: Caller is not `doctor` or `nurse`.
     - `403`: Patient is a minor and `guardian_device_uid` was not provided.
     - `403`: Patient is a minor and guardian tag does not match.
-    - `404`: No patient registered with that device UID in this organization.
+    - `404`: No patient registered with that device UID.
     """
 
     if current_user.role not in {UserRole.doctor, UserRole.nurse, UserRole.org_admin}:
@@ -75,7 +75,7 @@ def get_patient_by_device_uid_scan(
     )
     
     # Delegate database lookup to the service layer
-    patient_db = get_patient_by_device_uid(db, device_uid, current_user.organization_id)
+    patient_db = get_patient_by_device_uid(db, device_uid)
     
     if not patient_db:
         logger.warning(
@@ -85,7 +85,7 @@ def get_patient_by_device_uid_scan(
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Patient not found. This tag is not registered in your organization."
+            detail="Patient not found."
         )
     
     # Calculate patient's age to determine if guardian authentication is required
@@ -309,7 +309,6 @@ def search_patient(
     **Security:**
     - If the criteria match more than one patient (ambiguous), the endpoint 
       returns 404 — it will not expose either record.
-    - Results are strictly scoped to the caller's organization (multi-tenant).
 
     **Allowed roles:** `doctor`, `nurse`, `org_admin`.
 
@@ -335,7 +334,6 @@ def search_patient(
 
     patient = find_patient_strict(
         db=db,
-        org_id=current_user.organization_id,
         document_number=document_number,
         birth_date=birth_date,
         first_name=first_name,
