@@ -63,7 +63,10 @@ class TestCodeChronicConditionHappyPath:
         }
         gemini_service._call = MagicMock(return_value=json.dumps(expected))
 
-        result = gemini_service.code_chronic_condition("Diabetes mellitus tipo 2")
+        with patch("app.services.llm.gemini.terminology") as mock_term:
+            mock_term.validate_icd10.return_value = True
+            mock_term.validate_icd11.return_value = True
+            result = gemini_service.code_chronic_condition("Diabetes mellitus tipo 2")
 
         assert result["icd10Code"] == "E11"
         assert result["icd11Code"] == "5A11"
@@ -76,7 +79,10 @@ class TestCodeChronicConditionHappyPath:
             "description": "Hipertensión esencial (primaria)",
         }))
 
-        gemini_service.code_chronic_condition("Hipertensión")
+        with patch("app.services.llm.gemini.terminology") as mock_term:
+            mock_term.validate_icd10.return_value = True
+            mock_term.validate_icd11.return_value = True
+            gemini_service.code_chronic_condition("Hipertensión")
 
         gemini_service._call.assert_called_once()
         prompt_arg = gemini_service._call.call_args[0][0]
@@ -90,7 +96,10 @@ class TestCodeChronicConditionHappyPath:
             "description": "Asma, no especificada",
         }))
 
-        result = gemini_service.code_chronic_condition("Asma")
+        with patch("app.services.llm.gemini.terminology") as mock_term:
+            mock_term.validate_icd10.return_value = True
+            mock_term.validate_icd11.return_value = True
+            result = gemini_service.code_chronic_condition("Asma")
 
         assert result["icd10Code"] == "J45.9"
         assert result["icd11Code"] is None
@@ -98,23 +107,23 @@ class TestCodeChronicConditionHappyPath:
 
 class TestCodeChronicConditionErrorFallback:
     def test_json_parse_error_returns_fallback(self, gemini_service):
-        """If the model returns invalid JSON, a safe fallback dict is returned."""
+        """If the model returns invalid JSON, a safe fallback dict is returned (R69)."""
         gemini_service._call = MagicMock(return_value="NOT_VALID_JSON")
 
         result = gemini_service.code_chronic_condition("Glaucoma")
 
-        assert result["icd10Code"] == "Z84.8"
+        assert result["icd10Code"] == "R69"
         assert result["icd11Code"] is None
         assert "Glaucoma" in result["description"]
         assert "Fallo en codificación IA" in result["description"]
 
     def test_network_error_returns_fallback(self, gemini_service):
-        """If _call raises an exception, the fallback dict is returned."""
+        """If _call raises an exception, the fallback dict is returned (R69)."""
         gemini_service._call = MagicMock(side_effect=RuntimeError("Vertex AI down"))
 
         result = gemini_service.code_chronic_condition("Epilepsia")
 
-        assert result["icd10Code"] == "Z84.8"
+        assert result["icd10Code"] == "R69"
         assert result["icd11Code"] is None
         assert "Epilepsia" in result["description"]
 
@@ -128,3 +137,4 @@ class TestCodeChronicConditionErrorFallback:
             pytest.fail("code_chronic_condition raised an exception instead of returning fallback")
 
         assert isinstance(result, dict)
+        assert result["icd10Code"] == "R69"
