@@ -49,6 +49,8 @@ nav:
     - Setup Guide: development/setup.md
     - QA & PR Workflow: development/qa-plan.md
     - Remediation Program: development/remediation-program.md
+  - Deployment:                                          
+    - Pilot Readiness Checklist: deployment/pilot-readiness.md
   - Infrastructure and Security:
     - Database Schema: infrastructure/database.md
     - GCP Deployment: infrastructure/gcp-deploy.md
