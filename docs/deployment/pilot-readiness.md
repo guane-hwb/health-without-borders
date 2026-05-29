@@ -17,8 +17,7 @@ Before onboarding a pilot site, verify that all cloud infrastructure is operatio
 | Cloud Run service healthy | `GET /health-check` returns `200 OK` | [GCP Deployment](../infrastructure/gcp-deploy.md) |
 | Secret Manager configured | `hwb-db-pass` and `hwb-secret-key` exist and are bound to Cloud Run | [GCP Deployment § Security](../infrastructure/gcp-deploy.md#4-security-secret-manager-setup) |
 | CI/CD pipeline green | Latest Cloud Build on `develop` succeeded (lint + tests + deploy) | [QA & PR Workflow](../development/qa-plan.md) |
-| ICD-10 catalog loaded | `GET /api/v1/catalogs/cie10?code=A09` returns a valid entry | [Database Schema](../infrastructure/database.md) |
-| CVX catalog loaded | `GET /api/v1/catalogs/cvx?code=20` returns a valid entry | [Database Schema](../infrastructure/database.md) |
+| ICD-10/11 terminology loaded | Application startup logs show `"Terminology loaded: N ICD-10 codes, M ICD-11 codes"` | [AI & NLP Integration § Terminology](../architecture/ai-integration.md#5-terminology-validation) |
 
 ---
 
@@ -78,7 +77,7 @@ Before going live with real patients, validate the full pipeline with synthetic 
 4. Sync the patient to the backend.
 5. Verify in the backend logs or FHIR Store that:
    - Two FHIR bundles were generated (RDA-Paciente + RDA-Consulta).
-   - ICD-10/11 codes were assigned by the LLM.
+   - ICD-10/11 codes were assigned by the LLM and validated against the Vulcano catalog.
    - The bundles passed FHIR Store validation.
 
 ### 4.2. NFC round-trip test
@@ -113,7 +112,8 @@ The system generates FHIR R4 RDA bundles aligned with [IG RDA v0.8.1](https://vu
 | RDA-Paciente has 4 sections | Inspect bundle: chronic conditions, allergies, medications, family history. Empty sections have `emptyReason`. |
 | RDA-Consulta has 9 sections | Inspect bundle: payer, demographics, incapacity, diagnoses, allergies, risk factors, prescriptions, orders (emptyReason), documents (emptyReason). |
 | Bundle passes GCP FHIR Store | Sync a patient and confirm `fhir_status: "success"` in the response. |
-| ICD-10 codes are valid | Cross-check a few generated codes against the CIE-10 catalog (`GET /api/v1/catalogs/cie10?code=<CODE>`). |
+| ICD-10 codes are valid | Check application logs for `"ICD-10 code ... not found in Vulcano catalog"` warnings. Any such warning means the LLM generated an invalid code that was replaced with R69. Occasional R69 fallbacks are acceptable; frequent ones indicate a prompt or catalog issue. |
+| ICD-10 codes use no-dot format | Inspect a few generated codes in the bundle — they should be in the format `A099`, not `A09.9`. |
 | References resolve | No `#id` references remain in the stored bundle (the system rewrites them to `urn:uuid`). |
 
 For the full resource mapping, see [FHIR RDA Architecture § Resource Mapping](../architecture/fhir-rda.md#3-fhir-resource-mapping).
@@ -143,7 +143,8 @@ Once the pilot is live, monitor these operational metrics:
 | Sync latency (p95) | Cloud Run → Metrics → Request latencies | > 10s |
 | FHIR bundle failures | Application logs: `"Patient sync FHIR warning"` | Any occurrence |
 | Database connections | Cloud SQL → Metrics → Active connections | > 80% of max |
-| LLM coding failures | Application logs: `"Gemini"` + `"error"` or `"fallback"` | Any occurrence |
+| LLM coding failures | Application logs: `"Gemini"` + `"error"` | Any occurrence |
+| ICD validation fallbacks | Application logs: `"not found in Vulcano catalog"` | > 10% of syncs |
 
 For log access, see [GCP Deployment § Monitoring](../infrastructure/gcp-deploy.md#9-monitoring-and-maintenance).
 

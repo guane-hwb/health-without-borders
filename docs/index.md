@@ -11,7 +11,7 @@ Source code: [github.com/guane-hwb/health-without-borders](https://github.com/gu
 ## Key Features
 
 - **FHIR R4 Interoperability:** Generates RDA (Resumen Digital de Atención en Salud) bundles compliant with Colombia's Resolution 1888/2025 and the IHCE Implementation Guide.
-- **AI-Assisted Medical Coding:** Gemini LLM integration for automated ICD-10/11 code extraction from clinical notes and family history coding.
+- **AI-Assisted Medical Coding:** Gemini LLM integration for automated ICD-10/11 code extraction from clinical notes, family history, and chronic condition coding — with post-LLM validation against the Vulcano IHCE terminology catalogs.
 - **Offline-First:** Optimized sync endpoints for mobile devices with limited connectivity.
 - **Robust Security:** JWT authentication, RBAC with multi-tenancy, hardware 2FA for minors via NFC bracelets.
 - **Serverless Architecture:** Deployed on Google Cloud Run for automatic scalability.
@@ -22,15 +22,22 @@ Source code: [github.com/guane-hwb/health-without-borders](https://github.com/gu
 ## Documentation Index
 
 ### Architecture
+
 - [**FHIR RDA Architecture**](architecture/fhir-rda.md) — Bundle types, delta sync logic, resource mapping, and terminology systems.
-- [**AI & NLP Integration**](architecture/ai-integration.md) — Prompt engineering strategy for automated ICD-10/11 coding using Vertex AI.
+- [**AI & NLP Integration**](architecture/ai-integration.md) — Prompt engineering strategy for automated ICD-10/11 coding using Vertex AI, post-LLM terminology validation, and the vendor-neutral abstraction layer.
 
 ### Development
-- [**Local Setup Guide**](development/setup.md) — How to configure Docker and run the API locally.
+
+- [**Local Setup Guide**](development/setup.md) — How to configure Docker, load terminology catalogs, and run the API locally.
 - [**QA & PR Workflow**](development/qa-plan.md) — Quality assurance process and Pull Request standards.
 - [**Remediation Program**](development/remediation-program.md) — Security, quality, and compliance remediation tracking.
 
+### Deployment
+
+- [**Pilot Readiness Checklist**](deployment/pilot-readiness.md) — Prerequisites, validation steps, and go/no-go criteria for launching at a pilot site.
+
 ### Infrastructure & Security
+
 - [**Database Schema**](infrastructure/database.md) — Data modeling, JSONB usage, and table dictionary.
 - [**GCP Deployment Guide**](infrastructure/gcp-deploy.md) — Step-by-step instructions for deploying to Google Cloud Run.
 - [**FHIR Store Configuration**](infrastructure/healthcare-api.md) — GCP Healthcare API FHIR Store setup and IAM.
@@ -58,9 +65,9 @@ docker run --name hwb-db-local \
   -e POSTGRES_DB=hwb_local \
   -p 5432:5432 -d postgres:15
 
-# 5. Initialize schema and catalogs
+# 5. Initialize schema and terminology catalogs
 uv run python scripts/create_tables.py
-uv run python scripts/load_catalogs.py
+uv run python scripts/sync_terminology.py --local app/data/CodeSystem-ICD10CO.json app/data/CodeSystem-ICD11CO.json
 
 # 6. Run the server
 uv run uvicorn app.main:app --reload
