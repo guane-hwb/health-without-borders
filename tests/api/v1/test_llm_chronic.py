@@ -138,3 +138,17 @@ class TestCodeChronicConditionErrorFallback:
 
         assert isinstance(result, dict)
         assert result["icd10Code"] == "R69"
+
+class TestNoOpChronicCondition:
+    """Cover NoOpMedicalCodingService.code_chronic_condition."""
+
+    def test_noop_code_chronic_condition(self):
+        from app.services.llm.base import FALLBACK_ICD10_CODE
+        from app.services.llm.noop import NoOpMedicalCodingService
+
+        svc = NoOpMedicalCodingService()
+        result = svc.code_chronic_condition("Hipertensión")
+
+        assert result["icd10Code"] == FALLBACK_ICD10_CODE
+        assert result["icd11Code"] is None
+        assert "Hipertensión" in result["description"]

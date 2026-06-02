@@ -166,3 +166,44 @@ class TestGeminiErrorFallback:
             assert len(result) == 1
             assert result[0].icd10Code == "A09"
             mock_term.validate_icd10.assert_called_with("A09")
+
+class TestGeminiHappyPathValidation:
+    """Cover validation branches in happy paths."""
+
+    @pytest.fixture
+    def gemini_service(self):
+        with patch("app.services.llm.gemini.genai"):
+            svc = GeminiMedicalCodingService(
+                model_name="test-model", project_id="test"
+            )
+            return svc
+
+    def test_family_history_happy_path_with_validation(self, gemini_service):
+        """Covers code_family_history_item happy path + validation."""
+        gemini_service._call = MagicMock(return_value=json.dumps({
+            "icd10Code": "E11",
+            "icd11Code": "5A11",
+            "description": "Diabetes mellitus tipo 2",
+        }))
+        with patch("app.services.llm.gemini.terminology") as mock_term:
+            mock_term.validate_icd10.return_value = True
+            mock_term.validate_icd11.return_value = True
+            result = gemini_service.code_family_history_item("Diabetes")
+
+        assert result["icd10Code"] == "E11"
+        assert result["icd11Code"] == "5A11"
+
+    def test_dict_strips_invalid_icd11(self):
+        """Covers the ICD-11 stripping branch in _validate_and_fix_dict."""
+        with patch("app.services.llm.gemini.terminology") as mock_term:
+            mock_term.validate_icd10.return_value = True
+            mock_term.validate_icd11.return_value = False
+
+            result = _validate_and_fix_dict({
+                "icd10Code": "E11",
+                "icd11Code": "INVALID_11",
+                "description": "Diabetes",
+            })
+
+        assert result["icd10Code"] == "E11"
+        assert result["icd11Code"] is None

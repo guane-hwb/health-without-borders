@@ -164,3 +164,80 @@ class TestNoFilesLoaded:
         assert svc.validate_icd10("A099") is True   # Valid format
         assert svc.validate_icd10("ZZZZZ") is False  # Invalid format
         assert svc.icd10_count == 0
+
+class TestTerminologyEdgeCases:
+    """Cover error handling and display methods."""
+
+    def test_corrupted_json_file(self, tmp_path):
+        """Covers the except branch in _load_file for JSONDecodeError."""
+        bad_file = tmp_path / "icd10_codes.json"
+        bad_file.write_text("{corrupted json!!", encoding="utf-8")
+        good_file = tmp_path / "icd11_codes.json"
+        good_file.write_text("{}", encoding="utf-8")
+
+        svc = TerminologyService()
+        with (
+            patch("app.services.terminology.ICD10_FILE", bad_file),
+            patch("app.services.terminology.ICD11_FILE", good_file),
+        ):
+            svc.load()
+
+        assert svc.icd10_count == 0
+        assert svc.validate_icd10("A099") is True
+
+    def test_get_icd11_display(self, tmp_path):
+        """Covers get_icd11_display."""
+        icd10 = tmp_path / "icd10_codes.json"
+        icd10.write_text("{}", encoding="utf-8")
+        icd11 = tmp_path / "icd11_codes.json"
+        icd11.write_text('{"CA0Z":"Trastornos respiratorios"}', encoding="utf-8")
+
+        svc = TerminologyService()
+        with (
+            patch("app.services.terminology.ICD10_FILE", icd10),
+            patch("app.services.terminology.ICD11_FILE", icd11),
+        ):
+            svc.load()
+
+        assert svc.get_icd11_display("CA0Z") == "Trastornos respiratorios"
+        assert svc.get_icd11_display("NOPE") is None
+
+    def test_full_icd11_catalog_exact_match(self, tmp_path):
+        """Covers validate_icd11 exact match branch with full catalog."""
+        icd10 = tmp_path / "icd10_codes.json"
+        icd10.write_text("{}", encoding="utf-8")
+        icd11 = tmp_path / "icd11_codes.json"
+        codes = {f"1A{i:02d}": f"Disease {i}" for i in range(1500)}
+        icd11.write_text(json.dumps(codes), encoding="utf-8")
+
+        svc = TerminologyService()
+        with (
+            patch("app.services.terminology.ICD10_FILE", icd10),
+            patch("app.services.terminology.ICD11_FILE", icd11),
+        ):
+            svc.load()
+
+        assert svc.validate_icd11("1A00") is True
+        assert svc.validate_icd11("ZZZZ") is False
+        assert svc.validate_icd11(None) is True
+
+    def test_fragment_warning_logged(self, tmp_path):
+        """Covers the warning log when ICD-10 catalog is too small."""
+        icd10 = tmp_path / "icd10_codes.json"
+        icd10.write_text('{"A099":"Test"}', encoding="utf-8")
+        icd11 = tmp_path / "icd11_codes.json"
+        icd11.write_text("{}", encoding="utf-8")
+
+        svc = TerminologyService()
+        with (
+            patch("app.services.terminology.ICD10_FILE", icd10),
+            patch("app.services.terminology.ICD11_FILE", icd11),
+            patch("app.services.terminology.logger") as mock_logger,
+        ):
+            svc.load()
+
+        warning_calls = mock_logger.warning.call_args_list
+        assert any(
+            "only" in str(call.args[0]) and call.args[1] == 1
+            for call in warning_calls
+        )
