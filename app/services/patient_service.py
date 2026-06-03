@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.phi_sanitizer import mask_id, safe_patient_ref
 from app.db.models import Patient
 from app.schemas.patient import PatientFullRecord
+from app.services.record_merger import merge_patient_records
 
 # Setup Logger
 logger = logging.getLogger(__name__)
@@ -142,8 +143,11 @@ def create_or_update_patient(
         if patient_in.guardian2Info and patient_in.guardian2Info.name:
             existing_patient.guardian2_name = patient_in.guardian2Info.name
 
-        # Save the JSON (new vaccines/guardian/address, but original immutable fields)
-        existing_patient.full_record_json = new_record_dump
+        # RULE 4: MERGE CLINICAL LISTS BY UUID
+        # Prevents data loss when multiple devices sync different visits
+        # or vaccinations for the same patient.
+        merged_record = merge_patient_records(old_record_dump, new_record_dump)
+        existing_patient.full_record_json = merged_record
 
         # BRACELET REPLACEMENT (Update device_uid)
         if patient_in.device_uid and patient_in.device_uid != existing_patient.device_uid:
