@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.config import settings
+from app.core.phi_sanitizer import mask_id
 from app.core.rate_limit import limiter
 from app.db.models import User, UserRole
 from app.db.session import get_db
@@ -24,13 +25,6 @@ from app.services.patient_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-def _mask_identifier(value: Optional[str]) -> str:
-    if not value:
-        return "unknown"
-    if len(value) <= 6:
-        return "***"
-    return f"{value[:3]}***{value[-3:]}"
 
 @router.get("/scan/{device_uid}", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
 def get_patient_by_device_uid_scan(
@@ -71,7 +65,7 @@ def get_patient_by_device_uid_scan(
         "Patient scan request actor_id=%s org_id=%s device_ref=%s",
         current_user.id,
         current_user.organization_id,
-        _mask_identifier(device_uid),
+        mask_id(device_uid),
     )
     
     # Delegate database lookup to the service layer
@@ -81,7 +75,7 @@ def get_patient_by_device_uid_scan(
         logger.warning(
             "Patient scan not found org_id=%s device_ref=%s",
             current_user.organization_id,
-            _mask_identifier(device_uid),
+            mask_id(device_uid),
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -112,7 +106,7 @@ def get_patient_by_device_uid_scan(
                 "Guardian validation failed actor_id=%s org_id=%s patient_ref=%s",
                 current_user.id,
                 current_user.organization_id,
-                _mask_identifier(patient_db.id),
+                mask_id(patient_db.id),
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -205,7 +199,7 @@ async def sync_patient(
             current_user.id,
             current_user.role,
             current_user.organization_id,
-            _mask_identifier(patient_data.patientId),
+            mask_id(patient_data.patientId),
         )
         saved_patient, previous_visit_count = create_or_update_patient(
             db, patient_data, current_user.organization_id, current_user.role
@@ -229,7 +223,7 @@ async def sync_patient(
             if bundle_status != "success":
                 logger.warning(
                     "Patient sync FHIR warning patient_ref=%s bundle=%d status=%s",
-                    _mask_identifier(str(saved_patient.id)),
+                    mask_id(str(saved_patient.id)),
                     i,
                     bundle_status,
                 )
@@ -240,7 +234,7 @@ async def sync_patient(
                     fhir_status = "success"
                 logger.info(
                     "Patient sync FHIR success patient_ref=%s bundle=%d",
-                    _mask_identifier(str(saved_patient.id)), i
+                    mask_id(str(saved_patient.id)), i
                 )
 
         # 4. Update sync tracking ONLY if FHIR upload succeeded
@@ -250,7 +244,7 @@ async def sync_patient(
             db.commit()
             logger.info(
                 "Sync tracking updated patient_ref=%s visits=%d",
-                _mask_identifier(str(saved_patient.id)),
+                mask_id(str(saved_patient.id)),
                 saved_patient.synced_visit_count
             )
 
@@ -329,7 +323,7 @@ def search_patient(
         current_user.id,
         current_user.role,
         current_user.organization_id,
-        _mask_identifier(document_number),
+        mask_id(document_number),
     )
 
     patient = find_patient_strict(
