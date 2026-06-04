@@ -29,6 +29,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
+from app.core.phi_sanitizer import safe_patient_ref
 from app.schemas.patient import (
     AllergyCategory,
     BiologicalSex,
@@ -925,7 +926,7 @@ def build_rda_paciente(patient: PatientFullRecord) -> Dict[str, Any]:
     RDA-Paciente: Composition type LOINC 102089-0.
     Matches Postman "enviar-rda-paciente" field by field.
     """
-    logger.debug(f"Building RDA-Paciente for patient {patient.patientId}")
+    logger.debug("Building RDA-Paciente for patient %s", safe_patient_ref(patient.patientId))
 
     entries: List[Dict[str, Any]] = []
     now = datetime.utcnow().isoformat() + "Z"
@@ -1059,7 +1060,7 @@ def build_rda_consulta(patient: PatientFullRecord,
     RDA-Consulta: Composition type LOINC 51845-6.
     Matches Postman "enviar-rda-consulta-externa" field by field.
     """
-    logger.debug(f"Building RDA-Consulta for patient {patient.patientId}")
+    logger.debug("Building RDA-Consulta for patient %s", safe_patient_ref(patient.patientId))
 
     entries: List[Dict[str, Any]] = []
     now = datetime.utcnow().isoformat() + "Z"
@@ -1270,6 +1271,7 @@ def convert_to_fhir_rda(
     bundles = []
     total_visits = len(patient.medicalHistory)
     new_visit_count = total_visits - previous_visit_count
+    patient_ref = safe_patient_ref(patient.patientId)
 
     if not rda_paciente_already_sent or new_visit_count > 0:
         bundles.append(build_rda_paciente(patient))
@@ -1278,11 +1280,11 @@ def convert_to_fhir_rda(
         new_visits = patient.medicalHistory[previous_visit_count:]
         for visit in new_visits:
             bundles.append(build_rda_consulta(patient, visit))
-        logger.info(f"Delta: {new_visit_count} new visit(s) for patient {patient.patientId}")
+        logger.info("Delta: %d new visit(s) for patient %s", new_visit_count, patient_ref)
     elif not rda_paciente_already_sent:
-        logger.info(f"First sync for patient {patient.patientId}, no visits yet")
+        logger.info("First sync for patient %s, no visits yet", patient_ref)
     else:
-        logger.info(f"No new visits for patient {patient.patientId}, skipping RDA-Consulta")
+        logger.info("No new visits for patient %s, skipping RDA-Consulta", patient_ref)
 
-    logger.info(f"Generated {len(bundles)} RDA bundle(s) for patient {patient.patientId}")
+    logger.info("Generated %d RDA bundle(s) for patient %s", len(bundles), patient_ref)
     return bundles

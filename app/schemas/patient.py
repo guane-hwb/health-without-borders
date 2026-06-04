@@ -17,11 +17,12 @@ CHANGELOG v3.0 (Postman-verified full conformity):
   - All existing fields, enums, and models are preserved for backward compat.
 """
 
+import uuid as _uuid
 from datetime import date, datetime
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # ============================================================================
 # ENUMS — Resolution 866/2021 coded domains
@@ -350,6 +351,7 @@ class AllergyInfo(BaseModel):
 # ============================================================================
 
 class VaccinationRecordItem(BaseModel):
+    vaccinationId: Optional[str] = Field(None, description="UUID v4 del registro de vacunación")
     date: date
     vaccineName: str
     vaccineCode: str
@@ -357,6 +359,14 @@ class VaccinationRecordItem(BaseModel):
     administratedBy: str
     administratedAt: str
     status: str
+
+    @model_validator(mode='before')
+    @classmethod
+    def _ensure_vaccination_id(cls, data):
+        """Assign a UUID if the frontend didn't provide one."""
+        if isinstance(data, dict) and not data.get('vaccinationId'):
+            data['vaccinationId'] = str(_uuid.uuid4())
+        return data
 
 
 # ============================================================================
@@ -477,6 +487,14 @@ class MedicalHistoryItem(BaseModel):
     occupation: Optional[str] = Field(None, description="Código CIUO-88 A.C. (Elem. 22)")
     occupationDescription: Optional[str] = Field(None)
     prescriptions: List[MedicationRequestItem] = Field(default_factory=list)
+
+    @model_validator(mode='before')
+    @classmethod
+    def _ensure_encounter_id(cls, data):
+        """Assign a UUID if the frontend didn't provide one."""
+        if isinstance(data, dict) and not data.get('encounterIdentifier'):
+            data['encounterIdentifier'] = str(_uuid.uuid4())
+        return data
 
 
 # ============================================================================

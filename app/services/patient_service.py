@@ -6,8 +6,10 @@ from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.phi_sanitizer import mask_id, safe_patient_ref
 from app.db.models import Patient
 from app.schemas.patient import PatientFullRecord
+from app.services.record_merger import merge_patient_records
 
 # Setup Logger
 logger = logging.getLogger(__name__)
@@ -76,7 +78,7 @@ def find_patient_strict(
     if len(results) > 1:
         logger.warning(
             "Ambiguous patient lookup doc=%s — %d matches, access denied",
-            document_number[:3] + "***",
+            mask_id(document_number),
             len(results),
         )
 
@@ -88,7 +90,7 @@ def create_or_update_patient(
 ) -> tuple["Patient", int]:
     """
     Persists patient data into the local PostgreSQL database.
-    
+
     Returns:
         Tuple of (Patient instance, previous_visit_count).
         previous_visit_count is used by the caller to determine which 
@@ -104,7 +106,7 @@ def create_or_update_patient(
     new_record_dump = patient_in.model_dump(mode="json")
 
     if existing_patient:
-        logger.info(f"Updating existing patient: {existing_patient.id}")
+        logger.info("Updating existing patient: %s", safe_patient_ref(existing_patient.id))
         old_record_dump = existing_patient.full_record_json
         previous_visit_count = existing_patient.synced_visit_count
 
@@ -115,7 +117,8 @@ def create_or_update_patient(
 
             if new_history_len > old_history_len:
                 logger.warning(
-                    f"Nurse tried to add medical history to patient {existing_patient.id}"
+                    "Nurse tried to add medical history to patient %s",
+                    safe_patient_ref(existing_patient.id),
                 )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -140,12 +143,15 @@ def create_or_update_patient(
         if patient_in.guardian2Info and patient_in.guardian2Info.name:
             existing_patient.guardian2_name = patient_in.guardian2Info.name
 
-        # Save the JSON (new vaccines/guardian/address, but original immutable fields)
-        existing_patient.full_record_json = new_record_dump
+        # RULE 4: MERGE CLINICAL LISTS BY UUID
+        # Prevents data loss when multiple devices sync different visits
+        # or vaccinations for the same patient.
+        merged_record = merge_patient_records(old_record_dump, new_record_dump)
+        existing_patient.full_record_json = merged_record
 
         # BRACELET REPLACEMENT (Update device_uid)
         if patient_in.device_uid and patient_in.device_uid != existing_patient.device_uid:
-            logger.info(f"Device Tag updated for patient {existing_patient.id}")
+            logger.info("Device tag updated for patient %s", safe_patient_ref(existing_patient.id))
             existing_patient.device_uid = patient_in.device_uid
 
         db.commit()
@@ -153,7 +159,7 @@ def create_or_update_patient(
         return existing_patient, previous_visit_count
 
     else:
-        logger.info(f"Creating new patient record: {patient_in.patientId}")
+        logger.info("Creating new patient record: %s", safe_patient_ref(patient_in.patientId))
         pi = patient_in.patientInfo
 
         db_patient = Patient(

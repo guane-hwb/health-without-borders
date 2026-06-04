@@ -12,6 +12,7 @@ import google.auth
 import requests
 from google.auth.transport.requests import Request
 
+from app.core.phi_sanitizer import sanitize_error_body
 from app.services.fhir.base import FHIRBundleSendResult, FHIRStoreBackend
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ class GCPHealthcareBackend(FHIRStoreBackend):
             logger.warning("GCP Healthcare backend is not fully configured. Skipping upload.")
             return {"status": "skipped", "reason": "Missing GCP configuration"}
 
-        logger.info(f"Sending FHIR Bundle to GCP Store: {self.fhir_store_id}")
+        logger.info("Sending FHIR Bundle to GCP Store: %s", self.fhir_store_id)
 
         try:
             creds, _ = google.auth.default(scopes=self.SCOPES)
@@ -70,7 +71,7 @@ class GCPHealthcareBackend(FHIRStoreBackend):
                 "Content-Type": "application/fhir+json; charset=utf-8",
             }
 
-            logger.debug(f"POST {url}")
+            logger.debug("POST %s", url)
             response = requests.post(url, headers=headers, json=bundle)
             response.raise_for_status()
 
@@ -78,12 +79,13 @@ class GCPHealthcareBackend(FHIRStoreBackend):
             return {"status": "success", "response": response.json()}
 
         except requests.exceptions.RequestException as e:
-            error_msg = f"GCP Healthcare API error: {str(e)}"
+            error_msg = f"GCP Healthcare API error: {type(e).__name__}"
             if e.response is not None:
-                error_msg += f" | Body: {e.response.text}"
+                error_msg += f" status={e.response.status_code}"
+                error_msg += f" | Body: {sanitize_error_body(e.response.text)}"
             logger.error(error_msg)
             return {"status": "error", "error": error_msg}
 
         except Exception as e:
-            logger.critical(f"Unexpected error in GCP Healthcare backend: {str(e)}")
-            return {"status": "error", "error": str(e)}
+            logger.critical("Unexpected error in GCP Healthcare backend: %s", type(e).__name__)
+            return {"status": "error", "error": f"Unexpected: {type(e).__name__}"}
