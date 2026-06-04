@@ -84,10 +84,17 @@ def sanitize_error_body(body: Optional[str], max_length: int = 500) -> str:
 
     sanitized = body[:max_length]
 
-    # Strip quoted string values that might contain names or identifiers
-    # inside FHIR resource fragments (e.g., "family": "Pérez Rodríguez")
+    # Strip values that might contain names or identifiers inside FHIR
+    # resource fragments.  Covers both scalar strings and JSON arrays:
+    #   "family": "Pérez Rodríguez"      → "family": "[REDACTED]"
+    #   "given": ["Juan Carlos"]          → "given": "[REDACTED]"
     sanitized = re.sub(
         r'"(family|given|text|display|value|name)":\s*"[^"]{4,}"',
+        r'"\1": "[REDACTED]"',
+        sanitized,
+    )
+    sanitized = re.sub(
+        r'"(family|given|text|display|value|name)":\s*\[[^\]]{4,}\]',
         r'"\1": "[REDACTED]"',
         sanitized,
     )

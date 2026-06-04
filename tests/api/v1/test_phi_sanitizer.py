@@ -160,3 +160,11 @@ class TestSanitizeErrorBody:
         body = '{"name": "Hospital Erasmo Meoz de Cúcuta"}'
         result = sanitize_error_body(body)
         assert "Erasmo" not in result
+
+    def test_redacts_array_values(self):
+        """FHIR fields like 'given' are arrays — must also be redacted."""
+        body = '{"given": ["Juan Carlos", "María"]}'
+        result = sanitize_error_body(body)
+        assert "Juan Carlos" not in result
+        assert "María" not in result
+        assert "[REDACTED]" in result
