@@ -39,12 +39,13 @@ This table manages access credentials and roles. Users are strictly bound to an 
 
 ### 2.3. Patient Demographics (`patients`)
 
-Stores the core identity data of migrant children. Data is strictly scoped by `organization_id`. Relational columns mirror the most-queried RDA elements (Resolution 866/2021) so the database can filter without scanning JSON.
+Stores the core identity data of migrant children. Relational columns mirror the most-queried RDA elements (Resolution 866/2021) so the database can filter without scanning JSON. The `organization_id` tracks which organization originally registered the patient (traceability), but patient records are globally accessible by any authenticated professional.
 
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
-| `id` | Varchar | PK | Unique ID (generated UUID v4 from frontend). |
-| `organization_id`| Varchar | FK, Not Null | Ensures patients are only visible to their registering NGO. |
+| `id` | Varchar | PK, UUID v4 | Server-generated unique identifier. The authoritative patient ID. |
+| `frontend_patient_id` | Varchar | Not Null, Index | Frontend-generated UUID sent during first sync. Used for sync correlation. |
+| `organization_id`| Varchar | FK, Not Null | Organization that originally registered this patient. |
 | `device_uid` | Varchar | Unique, Not Null, Index | Hardware ID (NFC Bracelet/Tag) for physical 2FA. |
 | `document_type` | Varchar(5) | Index | Identity document type — CC, CE, TI, RC, PT, PE, etc. (Res. 866 Elem. 2.1). |
 | `document_number`| Varchar | Index | Identity document number (Res. 866 Elem. 2.2). |
@@ -57,13 +58,31 @@ Stores the core identity data of migrant children. Data is strictly scoped by `o
 | `nationality_code`| Varchar(3) | Index | ISO 3166-1 country code (Res. 866 Elems. 1.1, 1.2). Critical for migrant population filtering. |
 | `guardian_name` | Varchar | Nullable | Name of the legal guardian or companion. |
 | `guardian_phone` | Varchar | Nullable | Contact number for the guardian. |
+| `guardian2_name` | Varchar | Nullable | Name of the second guardian (optional). |
+| `guardian2_phone` | Varchar | Nullable | Contact phone of the second guardian (optional). |
 | `full_record_json`| JSON | Nullable | Authoritative source for the complete patient payload (clinical evaluations, diagnoses, allergies, vaccinations, family history). |
-| `synced_visit_count`| Integer | Default: 0 | Number of `medicalHistory` entries already sent to the FHIR Store. Used for delta sync logic. |
+| `synced_encounter_ids`| JSON | Default: [] | List of `encounterIdentifier` UUIDs already sent to the FHIR Store. Used for encounter-based delta sync. |
+| `background_data_hash`| Varchar(64) | Nullable | SHA-256 hash of background data fields (demographics, guardians, allergies, chronic conditions). Used to detect changes for RDA-Paciente regeneration. |
 | `rda_paciente_sent`| Boolean | Default: false | Whether the RDA-Paciente bundle has been sent to the FHIR Store at least once. |
 | `created_at` | DateTime | Default: now() | Audit metadata — record creation timestamp. |
 | `updated_at` | DateTime | Default: now(), onupdate | Audit metadata — last modification timestamp. |
 
-### 2.4. Standard Clinical Catalogs
+**Constraints:**
+
+- `UNIQUE(frontend_patient_id, organization_id)` — Two organizations can independently register the same frontend-generated ID without collision.
+- `UNIQUE(device_uid)` — A hardware bracelet can only be linked to one patient globally.
+
+### 2.4. Token Revocation (`revoked_tokens`)
+
+Stores the JTI (JWT ID) of tokens that have been explicitly revoked via logout or refresh token rotation. Checked on every authenticated request. Entries whose `expires_at` has passed can be safely deleted (the token would be invalid anyway).
+
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `jti` | Varchar | PK | JWT ID claim from the revoked token. |
+| `revoked_at` | DateTime | Default: now() | When the token was revoked. |
+| `expires_at` | DateTime | Not Null | Original token expiry — safe to delete this row after this time. |
+
+### 2.5. Standard Clinical Catalogs
 
 #### Vaccines Catalog (`catalog_vaccines`)
 Based on the **CVX** (Code for Vaccine Administered) standard.
@@ -81,8 +100,8 @@ Based on the **CVX** (Code for Vaccine Administered) standard.
 
 ## 3. Architecture & Design Decisions
 
-### 3.1. Strict Multi-Tenancy
-The database enforces tenant isolation at the schema level. Every `Patient` and `User` must belong to an `Organization`. Queries at the service layer automatically inject the `organization_id` of the requesting user, making it structurally impossible for a doctor in NGO "A" to query or modify a patient from NGO "B".
+### 3.1. Multi-Tenancy & Global Patient Access
+Every `User` must belong to an `Organization`. Patient records track the `organization_id` of the registering organization for traceability. However, patients are **globally accessible** by any authenticated professional — this is by design for humanitarian settings where a child registered by NGO "A" in Cúcuta may later be seen by NGO "B" in Bogotá. The `frontend_patient_id` + `organization_id` composite unique constraint prevents cross-org data overwrites during sync, while the server-generated `id` (PK) ensures no frontend-generated ID collisions.
 
 ### 3.2. Hybrid Relational-Document Model (JSON)
 Migrant populations often have unstructured or transient data.
@@ -91,14 +110,14 @@ Migrant populations often have unstructured or transient data.
 * **FHIR Source:** The JSON is the source of truth used to build FHIR R4 RDA bundles for interoperability.
 
 ### 3.3. Delta Sync Tracking
-Two columns (`synced_visit_count`, `rda_paciente_sent`) track which data has already been sent to the FHIR Store. This prevents duplicate bundle transmissions and enables automatic retry: if GCP fails, the tracking is not updated, so the next sync retries the failed bundles.
+Three columns track sync state: `synced_encounter_ids` (JSON list of encounter UUIDs already sent), `rda_paciente_sent` (boolean), and `background_data_hash` (SHA-256). Visits are identified by their `encounterIdentifier` UUID rather than list index, preventing duplicates when records are merged from multiple devices. The background hash detects changes in demographics, allergies, and chronic conditions to avoid unnecessary RDA-Paciente retransmission. Tracking is updated **only after successful FHIR Store upload** — if GCP fails, the next sync retries automatically.
 
 ### 3.4. Soft Deletion (`is_active`)
 Rows in critical tables (Users, Organizations) are never physically deleted. This preserves historical integrity for future audits.
 
 ### 3.5. Indexing Strategy
-* **Search Optimization:** B-Tree indexes on `first_name`, `last_name`, `document_number`, and `nationality_code` for fast patient lookups.
-* **Data Integrity:** Unique constraints on `users.email`, `patients.id`, and `patients.device_uid` to prevent duplicates during network sync anomalies.
+* **Search Optimization:** B-Tree indexes on `first_name`, `last_name`, `document_number`, and `nationality_code` for fast patient lookups. Composite index on `(organization_id, frontend_patient_id)` for sync lookups.
+* **Data Integrity:** Unique constraints on `users.email`, `patients.device_uid`, and composite `(frontend_patient_id, organization_id)` to prevent duplicates during network sync anomalies.
 
 ---
 

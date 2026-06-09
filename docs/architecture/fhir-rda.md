@@ -18,15 +18,16 @@ The system generates two types of FHIR R4 Bundles, both of type `document`:
 
 ## 2. Delta Sync Logic
 
-The system tracks which bundles have already been sent to the FHIR Store using two database columns on the `patients` table:
+The system tracks which bundles have already been sent to the FHIR Store using three database columns on the `patients` table:
 
-- `synced_visit_count` (Integer): Number of `medicalHistory` entries already sent.
-- `rda_paciente_sent` (Boolean): Whether the RDA-Paciente bundle has been sent.
+- `synced_encounter_ids` (JSON list): `encounterIdentifier` UUIDs of visits already transmitted.
+- `rda_paciente_sent` (Boolean): Whether the RDA-Paciente bundle has been sent at least once.
+- `background_data_hash` (SHA-256): Hash of background data fields (demographics, guardians, allergies, chronic conditions, medications).
 
 On each `/sync` call:
 
-1. **RDA-Paciente** is regenerated only if it hasn't been sent yet, or if there are new visits (which may imply updated background data).
-2. **RDA-Consulta** bundles are generated only for visits at index `>= synced_visit_count`.
+1. **RDA-Paciente** is regenerated only if it has never been sent, or if the `background_data_hash` changed since the last sync (indicating updated demographics, allergies, or chronic conditions).
+2. **RDA-Consulta** bundles are generated only for visits whose `encounterIdentifier` UUID is **not** in the `synced_encounter_ids` list. This encounter-based delta is robust against record merges from multiple devices — unlike index-based slicing, the order of entries in `medicalHistory` does not matter.
 3. Tracking columns are updated **only after successful GCP upload** — if GCP fails, the next sync retries automatically.
 
 ---
