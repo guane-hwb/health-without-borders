@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("/scan/{device_uid}", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
-def get_patient_by_device_uid_scan(
+async def get_patient_by_device_uid_scan(
     device_uid: str, 
     guardian_device_uid: Optional[str] = Query(None, description="Scanned ID from guardian's bracelet"),
     db: Session = Depends(get_db),
@@ -68,8 +68,8 @@ def get_patient_by_device_uid_scan(
         mask_id(device_uid),
     )
     
-    # Delegate database lookup to the service layer
-    patient_db = get_patient_by_device_uid(db, device_uid)
+    # H5: Wrap synchronous DB call in to_thread to avoid blocking the event loop
+    patient_db = await asyncio.to_thread(get_patient_by_device_uid, db, device_uid)
     
     if not patient_db:
         logger.warning(
@@ -131,10 +131,11 @@ async def sync_patient(
     2. If any `familyHistory` item lacks ICD codes, the LLM resolves them.
     3. The record is persisted or updated in PostgreSQL.
     4. Only NEW FHIR RDA Bundles are generated (delta logic):
-       - RDA-Paciente: on first sync or when background data changes.
-       - RDA-Consulta: only for visits not previously sent.
+       - RDA-Paciente: on first sync or when background data changes (H1).
+       - RDA-Consulta: only for visits not previously sent, identified by
+         encounterIdentifier UUID (H7).
     5. Bundles are transmitted to the Google Cloud Healthcare API.
-    6. Sync tracking counters are updated in the database.
+    6. Sync tracking is updated in the database.
 
     **Nurse restriction:** A `nurse` may call this endpoint to append vaccination records,
     but cannot add new entries to `medicalHistory`. Attempts to do so will return `403`.
@@ -193,7 +194,7 @@ async def sync_patient(
                     if coded.get("description"):
                         cc_item.chronicDescription = coded["description"]
 
-        # 1. Save to DB — returns (patient, previous_visit_count)
+        # 1. Save to DB (H5: wrapped in to_thread to avoid blocking the event loop)
         logger.info(
             "Patient sync started actor_id=%s role=%s org_id=%s patient_ref=%s",
             current_user.id,
@@ -201,17 +202,26 @@ async def sync_patient(
             current_user.organization_id,
             mask_id(patient_data.patientId),
         )
-        saved_patient, previous_visit_count = create_or_update_patient(
-            db, patient_data, current_user.organization_id, current_user.role
+        saved_patient, synced_encounter_ids, old_bg_hash, rda_paciente_sent = (
+            await asyncio.to_thread(
+                create_or_update_patient,
+                db, patient_data, current_user.organization_id, current_user.role,
+            )
         )
         
-        # 2. FHIR RDA Conversion — DELTA: only new bundles
-        fhir_bundles = convert_to_fhir_rda(
-            patient_data,
-            previous_visit_count=previous_visit_count,
-            rda_paciente_already_sent=saved_patient.rda_paciente_sent,
+        # H1: Determine if background data changed by comparing hashes
+        background_data_changed = (
+            rda_paciente_sent and old_bg_hash != saved_patient.background_data_hash
         )
-        logger.debug(f"Generated {len(fhir_bundles)} FHIR RDA Bundle(s) (delta)")
+
+        # 2. FHIR RDA Conversion — DELTA by encounter UUID (H7) + background hash (H1)
+        fhir_bundles, new_encounter_ids = convert_to_fhir_rda(
+            patient_data,
+            synced_encounter_ids=synced_encounter_ids,
+            rda_paciente_already_sent=rda_paciente_sent,
+            background_data_changed=background_data_changed,
+        )
+        logger.debug("Generated %d FHIR RDA Bundle(s) (delta)", len(fhir_bundles))
 
         # 3. Send each Bundle to the configured FHIR Store
         fhir_status = "success" if not fhir_bundles else "unknown"
@@ -239,13 +249,15 @@ async def sync_patient(
 
         # 4. Update sync tracking ONLY if FHIR upload succeeded
         if all_success and fhir_bundles:
-            saved_patient.synced_visit_count = len(patient_data.medicalHistory)
+            # H7: Append new encounter IDs to the synced set
+            updated_ids = list(set(synced_encounter_ids + new_encounter_ids))
+            saved_patient.synced_encounter_ids = updated_ids
             saved_patient.rda_paciente_sent = True
-            db.commit()
+            await asyncio.to_thread(db.commit)
             logger.info(
-                "Sync tracking updated patient_ref=%s visits=%d",
+                "Sync tracking updated patient_ref=%s encounters=%d",
                 mask_id(str(saved_patient.id)),
-                saved_patient.synced_visit_count
+                len(updated_ids),
             )
 
         return PatientSyncResponse(
@@ -273,7 +285,7 @@ async def sync_patient(
 
 @router.get("/search", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
 @limiter.limit(settings.RATE_LIMIT_PATIENT_SEARCH)
-def search_patient(
+async def search_patient(
     request: Request,
     document_number: str = Query(..., min_length=3, description="Número de documento de identidad del paciente (Res. 866 Elem. 2.2)"),
     birth_date: date = Query(..., description="Fecha de nacimiento del paciente (YYYY-MM-DD)"),
@@ -326,7 +338,9 @@ def search_patient(
         mask_id(document_number),
     )
 
-    patient = find_patient_strict(
+    # H5: Wrap synchronous DB call in to_thread
+    patient = await asyncio.to_thread(
+        find_patient_strict,
         db=db,
         document_number=document_number,
         birth_date=birth_date,

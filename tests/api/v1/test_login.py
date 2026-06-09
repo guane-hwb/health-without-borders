@@ -1,14 +1,11 @@
 """
-Tests for the authentication endpoint: POST /api/v1/login/access-token
+Tests for the authentication endpoints.
 
 Covers:
-- Successful login returns a valid JWT
-- Wrong password returns 401
-- Non-existent user returns 401
-- Inactive user returns 400
-- Accessing a protected endpoint with a valid token returns 200
-- Accessing a protected endpoint without a token returns 401
-- Accessing a protected endpoint with a malformed token returns 401
+- POST /api/v1/login/access-token (login)
+- POST /api/v1/login/refresh (H4: token rotation)
+- POST /api/v1/logout (H4: token revocation)
+- JWT protection on protected endpoints
 """
 from fastapi.testclient import TestClient
 
@@ -43,31 +40,38 @@ def _create_user(db, org_id: str, email: str, password: str, is_active: bool = T
     return user
 
 
+def _login(client, email="doctor@hwb.org", password="SecurePass123"):
+    """Helper: log in and return the full response JSON."""
+    return client.post(
+        "/api/v1/login/access-token",
+        data={"username": email, "password": password},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests: POST /api/v1/login/access-token
 # ---------------------------------------------------------------------------
 
 class TestLoginSuccess:
-    def test_returns_access_token_and_bearer_type(self, client: TestClient, db_session):
-        """A valid email/password pair returns a JWT with token_type 'bearer'."""
+    def test_returns_token_pair(self, client: TestClient, db_session):
+        """H4: A valid login returns access_token + refresh_token + expires_in."""
         org = _create_org(db_session)
         _create_user(db_session, org.id, "doctor@hwb.org", "SecurePass123")
 
-        response = client.post(
-            "/api/v1/login/access-token",
-            data={"username": "doctor@hwb.org", "password": "SecurePass123"},
-        )
+        response = _login(client)
 
         assert response.status_code == 200
         data = response.json()
         assert "access_token" in data
+        assert "refresh_token" in data
         assert data["token_type"] == "bearer"
-        assert len(data["access_token"]) > 20  # non-empty JWT
+        assert data["expires_in"] > 0
+        assert len(data["access_token"]) > 20
+        assert len(data["refresh_token"]) > 20
 
 
 class TestLoginFailures:
     def test_wrong_password_returns_401(self, client: TestClient, db_session):
-        """A correct email but wrong password must return 401, not 403 or 400."""
         org = _create_org(db_session)
         _create_user(db_session, org.id, "doctor@hwb.org", "CorrectPassword")
 
@@ -80,7 +84,6 @@ class TestLoginFailures:
         assert "Incorrect email or password" in response.json()["detail"]
 
     def test_nonexistent_user_returns_401(self, client: TestClient, db_session):
-        """An email that does not exist in the DB must return 401."""
         response = client.post(
             "/api/v1/login/access-token",
             data={"username": "ghost@hwb.org", "password": "AnyPassword"},
@@ -90,7 +93,6 @@ class TestLoginFailures:
         assert "Incorrect email or password" in response.json()["detail"]
 
     def test_inactive_user_returns_400(self, client: TestClient, db_session):
-        """A valid password for a deactivated account must return 400."""
         org = _create_org(db_session)
         _create_user(db_session, org.id, "inactive@hwb.org", "ValidPass123", is_active=False)
 
@@ -103,16 +105,10 @@ class TestLoginFailures:
         assert "Inactive user" in response.json()["detail"]
 
     def test_empty_credentials_returns_422(self, client: TestClient, db_session):
-        """Missing form fields must return 422 Unprocessable Entity (FastAPI validation)."""
         response = client.post("/api/v1/login/access-token", data={})
-
         assert response.status_code == 422
 
     def test_wrong_password_does_not_leak_user_existence(self, client: TestClient, db_session):
-        """
-        The error message for wrong password and non-existent user must be identical
-        to prevent user enumeration attacks.
-        """
         org = _create_org(db_session)
         _create_user(db_session, org.id, "real@hwb.org", "CorrectPassword")
 
@@ -129,17 +125,134 @@ class TestLoginFailures:
 
 
 # ---------------------------------------------------------------------------
+# H4: Tests for token refresh rotation
+# ---------------------------------------------------------------------------
+
+class TestTokenRefresh:
+    def _setup_and_login(self, client, db_session):
+        org = _create_org(db_session)
+        _create_user(db_session, org.id, "doctor@hwb.org", "SecurePass123")
+        resp = _login(client)
+        return resp.json()
+
+    def test_refresh_returns_new_token_pair(self, client: TestClient, db_session):
+        """H4: A valid refresh token exchanges for a new access + refresh pair."""
+        tokens = self._setup_and_login(client, db_session)
+
+        response = client.post(
+            "/api/v1/login/refresh",
+            json={"refresh_token": tokens["refresh_token"]},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "access_token" in data
+        assert "refresh_token" in data
+        # New tokens must be different from the originals (rotation)
+        assert data["access_token"] != tokens["access_token"]
+        assert data["refresh_token"] != tokens["refresh_token"]
+
+    def test_refresh_revokes_old_token(self, client: TestClient, db_session):
+        """H4: After refresh, the old refresh token cannot be reused."""
+        tokens = self._setup_and_login(client, db_session)
+        old_refresh = tokens["refresh_token"]
+
+        # First refresh succeeds
+        client.post("/api/v1/login/refresh", json={"refresh_token": old_refresh})
+
+        # Second attempt with same token fails (revoked)
+        response = client.post(
+            "/api/v1/login/refresh",
+            json={"refresh_token": old_refresh},
+        )
+        assert response.status_code == 401
+
+    def test_refresh_rejects_access_token(self, client: TestClient, db_session):
+        """H4: An access token cannot be used as a refresh token."""
+        tokens = self._setup_and_login(client, db_session)
+
+        response = client.post(
+            "/api/v1/login/refresh",
+            json={"refresh_token": tokens["access_token"]},  # wrong token type
+        )
+        assert response.status_code == 401
+
+    def test_refresh_rejects_garbage(self, client: TestClient, db_session):
+        """H4: Random strings are rejected."""
+        response = client.post(
+            "/api/v1/login/refresh",
+            json={"refresh_token": "not.a.jwt"},
+        )
+        assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# H4: Tests for logout / token revocation
+# ---------------------------------------------------------------------------
+
+class TestLogout:
+    def _setup_and_login(self, client, db_session):
+        org = _create_org(db_session)
+        # Use org_admin role because /api/v1/users/ requires org_admin or superadmin
+        user = User(
+            id="user-logout-test",
+            organization_id=org.id,
+            full_name="Admin Logout Test",
+            email="admin-logout@hwb.org",
+            hashed_password=get_password_hash("SecurePass123"),
+            role=UserRole.org_admin,
+            is_active=True,
+        )
+        db_session.add(user)
+        db_session.commit()
+        resp = _login(client, email="admin-logout@hwb.org", password="SecurePass123")
+        return resp.json()
+
+    def test_logout_revokes_access_token(self, client: TestClient, db_session):
+        """H4: After logout, the access token is rejected on subsequent requests."""
+        tokens = self._setup_and_login(client, db_session)
+        access_token = tokens["access_token"]
+
+        # Access works before logout
+        response = client.get(
+            "/api/v1/users/",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert response.status_code == 200
+
+        # Logout
+        response = client.post(
+            "/api/v1/logout",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert response.status_code == 204
+
+        # Access token is now revoked
+        response = client.get(
+            "/api/v1/users/",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert response.status_code == 401
+        assert "revoked" in response.json()["detail"].lower()
+
+    def test_logout_is_idempotent(self, client: TestClient, db_session):
+        """H4: Logging out twice with the same token returns 204 both times."""
+        tokens = self._setup_and_login(client, db_session)
+
+        for _ in range(2):
+            response = client.post(
+                "/api/v1/logout",
+                headers={"Authorization": f"Bearer {tokens['access_token']}"},
+            )
+            assert response.status_code == 204
+
+
+# ---------------------------------------------------------------------------
 # Tests: Protected endpoint behaviour with JWT
 # ---------------------------------------------------------------------------
 
 class TestJWTProtection:
-    """
-    Uses GET /api/v1/users/ as the representative protected endpoint.
-    These tests validate that the JWT middleware works correctly end-to-end.
-    """
-
     def _get_token(self, client: TestClient, db_session, role: UserRole = UserRole.org_admin) -> str:
-        """Helper: create a user, log in, and return the raw access token string."""
         org = _create_org(db_session)
         user = User(
             id="user-jwt-test",
@@ -160,7 +273,6 @@ class TestJWTProtection:
         return response.json()["access_token"]
 
     def test_valid_token_grants_access(self, client: TestClient, db_session):
-        """A valid JWT in the Authorization header allows access to protected routes."""
         token = self._get_token(client, db_session)
 
         response = client.get(
@@ -171,40 +283,28 @@ class TestJWTProtection:
         assert response.status_code == 200
 
     def test_missing_token_returns_401(self, client: TestClient, db_session):
-        """Accessing a protected route without Authorization header returns 401."""
         response = client.get("/api/v1/users/")
-
         assert response.status_code == 401
 
     def test_malformed_token_returns_401(self, client: TestClient, db_session):
-        """A token that is not a valid JWT returns 401."""
         response = client.get(
             "/api/v1/users/",
             headers={"Authorization": "Bearer this.is.not.a.valid.jwt"},
         )
-
         assert response.status_code == 401
 
     def test_wrong_scheme_returns_401(self, client: TestClient, db_session):
-        """Using 'Basic' instead of 'Bearer' as the auth scheme returns 401."""
         token = self._get_token(client, db_session)
 
         response = client.get(
             "/api/v1/users/",
             headers={"Authorization": f"Basic {token}"},
         )
-
         assert response.status_code == 401
 
     def test_tampered_token_returns_401(self, client: TestClient, db_session):
-        """
-        A JWT whose signature has been replaced with a fake one must be rejected.
-        We keep the original header and payload but swap the signature entirely,
-        simulating an attacker who forged a token without knowing the SECRET_KEY.
-        """
         token = self._get_token(client, db_session)
         header, payload, _ = token.rsplit(".", 2)
-        # Replace signature with a completely different base64url string
         fake_signature = "aW52YWxpZHNpZ25hdHVyZWZvcnRlc3Rpbmcx"
         tampered_token = f"{header}.{payload}.{fake_signature}"
 
@@ -212,5 +312,16 @@ class TestJWTProtection:
             "/api/v1/users/",
             headers={"Authorization": f"Bearer {tampered_token}"},
         )
+        assert response.status_code == 401
 
+    def test_refresh_token_rejected_on_protected_endpoint(self, client: TestClient, db_session):
+        """H4: A refresh token cannot be used to access protected API endpoints."""
+        org = _create_org(db_session)
+        _create_user(db_session, org.id, "doctor@hwb.org", "SecurePass123")
+        tokens = _login(client).json()
+
+        response = client.get(
+            "/api/v1/users/",
+            headers={"Authorization": f"Bearer {tokens['refresh_token']}"},
+        )
         assert response.status_code == 401

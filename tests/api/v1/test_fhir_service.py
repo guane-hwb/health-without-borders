@@ -830,39 +830,67 @@ class TestBuildRdaConsulta:
 class TestConvertToFhirRda:
     def test_first_sync_no_visits_generates_one_bundle(self):
         patient = _make_patient(with_visit=False)
-        bundles = convert_to_fhir_rda(patient, previous_visit_count=0,
-                                       rda_paciente_already_sent=False)
+        bundles, new_ids = convert_to_fhir_rda(
+            patient,
+            synced_encounter_ids=[],
+            rda_paciente_already_sent=False,
+        )
         assert len(bundles) == 1
         comp = bundles[0]["entry"][0]["resource"]
         assert comp["type"]["coding"][0]["code"] == "102089-0"  # RDA-Paciente
+        assert new_ids == []
 
     def test_first_sync_one_visit_generates_two_bundles(self):
         patient = _make_patient(with_visit=True)
-        bundles = convert_to_fhir_rda(patient, previous_visit_count=0,
-                                       rda_paciente_already_sent=False)
+        bundles, new_ids = convert_to_fhir_rda(
+            patient,
+            synced_encounter_ids=[],
+            rda_paciente_already_sent=False,
+        )
         assert len(bundles) == 2
+        assert len(new_ids) == 1
 
     def test_no_new_visits_already_sent_generates_zero_bundles(self):
         patient = _make_patient(with_visit=True)
-        bundles = convert_to_fhir_rda(patient, previous_visit_count=1,
-                                       rda_paciente_already_sent=True)
+        # H7: The single visit's encounterIdentifier is now in the synced set
+        enc_id = patient.medicalHistory[0].encounterIdentifier
+        bundles, new_ids = convert_to_fhir_rda(
+            patient,
+            synced_encounter_ids=[enc_id],
+            rda_paciente_already_sent=True,
+        )
         assert len(bundles) == 0
+        assert new_ids == []
 
-    def test_new_visit_added_generates_two_bundles(self):
-        """Second sync with 1 new visit: RDA-Paciente refresh + 1 RDA-Consulta."""
+    def test_new_visit_added_generates_one_consulta(self):
+        """H7: Second sync with 1 new visit and unchanged background → only 1 RDA-Consulta."""
         visit1 = _make_visit()
         visit2 = _make_visit()
         visit2.startDateTime = datetime(2026, 4, 10, 9, 0, 0)
         patient = _make_patient(visit_override=None)
         patient.medicalHistory = [visit1, visit2]
 
-        bundles = convert_to_fhir_rda(patient, previous_visit_count=1,
-                                       rda_paciente_already_sent=True)
-        assert len(bundles) == 2
+        # Only visit1's encounter ID has been synced
+        bundles, new_ids = convert_to_fhir_rda(
+            patient,
+            synced_encounter_ids=[visit1.encounterIdentifier],
+            rda_paciente_already_sent=True,
+            background_data_changed=False,
+        )
+        # H1+H7: background unchanged → no RDA-Paciente; 1 new visit → 1 RDA-Consulta
+        assert len(bundles) == 1
+        assert len(new_ids) == 1
+        assert new_ids[0] == visit2.encounterIdentifier
 
-    def test_rda_paciente_regenerated_even_if_previously_sent_when_new_visits(self):
+    def test_background_change_regenerates_rda_paciente(self):
+        """H1: Changed background triggers RDA-Paciente even without new visits."""
         patient = _make_patient(with_visit=True)
-        bundles = convert_to_fhir_rda(patient, previous_visit_count=0,
-                                       rda_paciente_already_sent=True)
-        # 1 new visit → still generates RDA-Paciente + RDA-Consulta
-        assert len(bundles) == 2
+        enc_id = patient.medicalHistory[0].encounterIdentifier
+        bundles, new_ids = convert_to_fhir_rda(
+            patient,
+            synced_encounter_ids=[enc_id],
+            rda_paciente_already_sent=True,
+            background_data_changed=True,  # H1: background data hash changed
+        )
+        assert len(bundles) == 1  # Only RDA-Paciente (no new visits)
+        assert new_ids == []

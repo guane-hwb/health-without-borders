@@ -27,13 +27,7 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 def db_session() -> Generator[Session, None, None]:
     """
     Fixture that creates a fresh database session for each test function.
-    
-    Strategy:
-    1. Create all tables in the in-memory SQLite database.
-    2. Yield the session to the test.
-    3. Drop all tables after the test finishes to ensure a clean state.
     """
-    # Create tables
     Base.metadata.create_all(bind=engine)
     
     db = TestingSessionLocal()
@@ -41,16 +35,13 @@ def db_session() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
-        # Drop tables to cleanup
         Base.metadata.drop_all(bind=engine)
 
 @pytest.fixture(scope="function")
 def client(db_session: Session) -> Generator[TestClient, None, None]:
     """
-    Fixture that returns a FastAPI TestClient with the database dependency overridden.
-    
-    This ensures that when the API calls `get_db`, it receives our 
-    test database session instead of the production PostgreSQL session.
+    Fixture that returns a FastAPI TestClient with the database dependency
+    overridden and rate limiter reset for test isolation.
     """
     def override_get_db():
         try:
@@ -58,8 +49,14 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
         finally:
             db_session.close()
 
-    # Override the dependency
     app.dependency_overrides[get_db] = override_get_db
-    
+
+    # Reset rate limiter storage between tests to prevent cross-test 429s
+    from app.core.rate_limit import limiter
+    try:
+        limiter.reset()
+    except Exception:
+        pass  # In-memory storage may not support reset — it's recreated anyway
+
     with TestClient(app) as c:
         yield c

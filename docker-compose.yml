@@ -14,6 +14,16 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   backend:
     build: .
     ports:
@@ -25,9 +35,13 @@ services:
       FIRST_SUPERUSER_PASSWORD: Admin123!
       DEBUG: "true"
       BACKEND_CORS_ORIGINS: ""
-      ACCESS_TOKEN_EXPIRE_MINUTES: "43200"
+      ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+      REFRESH_TOKEN_EXPIRE_MINUTES: "10080"
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   init:
@@ -37,7 +51,6 @@ services:
       - |
         python scripts/create_tables.py &&
         python scripts/create_generic_user.py &&
-        python scripts/load_catalogs.py &&
         echo "Database initialized successfully"
     environment:
       DATABASE_URL: postgresql://postgres:password@db:5432/hwb_local
