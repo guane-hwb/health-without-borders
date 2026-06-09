@@ -43,7 +43,11 @@ The application requires specific environment variables to connect to the local 
     # Security (Insecure keys for local development ONLY)
     SECRET_KEY=dev_secret_key_change_in_production
     ALGORITHM=HS256
-    ACCESS_TOKEN_EXPIRE_MINUTES=1440 # 24 hours
+    ACCESS_TOKEN_EXPIRE_MINUTES=60          # 1 hour (production default)
+    REFRESH_TOKEN_EXPIRE_MINUTES=10080      # 7 days (optional — this is the default)
+
+    # Redis (optional for local dev — falls back to in-memory rate limiting)
+    # REDIS_URL=redis://localhost:6379/0
 
     # Vertex AI / LLM Configuration
     GCP_PROJECT_ID=migrants-unicef
@@ -53,6 +57,11 @@ The application requires specific environment variables to connect to the local 
     PROJECT_NAME="HWB Local Dev"
     DEBUG=True
     ```
+
+    !!! note "Token expiration for local development"
+        If you find the 60-minute access token too short for long testing sessions,
+        you can temporarily set `ACCESS_TOKEN_EXPIRE_MINUTES=1440` (24 hours) in your
+        local `.env`. **Do not use this value in production.**
 
 ---
 

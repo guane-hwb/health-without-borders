@@ -48,7 +48,8 @@ class Settings(BaseSettings):
     # --- SECURITY ---
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200 # 30 days
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour (H4: was 30 days)
+    REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days
     
     # --- NFC ---
     NFC_MASTER_KEY: str = ""  # Hex-encoded 32-byte AES-256 key for NFC payload encryption
@@ -57,6 +58,10 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: str = ""
     RATE_LIMIT_LOGIN: str = "10/minute"
     RATE_LIMIT_PATIENT_SEARCH: str = "30/minute"
+
+    # --- REDIS (for rate limiting and token revocation) ---
+    # Optional: falls back to in-memory storage when not set (local dev)
+    REDIS_URL: Optional[str] = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

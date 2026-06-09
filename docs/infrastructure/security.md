@@ -6,12 +6,23 @@ This document outlines the security measures, cryptographic standards, and acces
 
 ## 1. Authentication (AuthN)
 
-Authentication uses the OAuth2 Password Flow with stateless JSON Web Tokens (JWT).
+Authentication uses the OAuth2 Password Flow with JSON Web Tokens (JWT). The system implements a **short-lived access token + long-lived refresh token** pattern with JTI-based revocation.
 
 - **Signing Algorithm:** HS256 (HMAC with SHA-256) using a high-entropy `SECRET_KEY` injected at runtime.
-- **Payload:** Contains only `sub` (user email) and `exp` (expiration). No PHI or PII in the token.
-- **Token Lifespan:** 30-day expiration (`ACCESS_TOKEN_EXPIRE_MINUTES = 43200`) to support health units with intermittent connectivity.
+- **Access Token:** Short-lived (default 60 minutes, configurable via `ACCESS_TOKEN_EXPIRE_MINUTES`). Used for every API call. Contains `sub` (user email), `exp` (expiration), `jti` (unique JWT ID for revocation), and `type` (`"access"`). No PHI or PII in the token.
+- **Refresh Token:** Longer-lived (default 7 days, configurable via `REFRESH_TOKEN_EXPIRE_MINUTES`). Used **only** to obtain a new token pair via `POST /login/refresh`. Contains the same claims with `type` set to `"refresh"`. The old refresh token is revoked on each rotation to prevent reuse.
+- **Token Revocation:** Tokens can be explicitly revoked via `POST /logout`. The `jti` claim is stored in the `revoked_tokens` database table and checked on every authenticated request. Revoked entries can be cleaned up after their original expiry passes.
 - **Password Storage:** Bcrypt iterative hashing. Plaintext passwords are never stored.
+
+### 1.1. Token Flow
+
+```
+1. POST /login/access-token  →  { access_token, refresh_token, expires_in }
+2. Use access_token in Authorization: Bearer header for all API calls
+3. When access_token expires (401) → POST /login/refresh { refresh_token }
+   → Returns new { access_token, refresh_token } (old refresh is revoked)
+4. POST /logout  →  Revokes current access_token (204 No Content)
+```
 
 ---
 
@@ -65,6 +76,14 @@ FHIR RDA bundles sent to the Google Cloud Healthcare API are protected by:
 ### 4.2. Secret Management
 - Sensitive configurations injected at runtime via Google Secret Manager.
 - No secrets committed to the Git repository.
+
+### 4.3. Rate Limiting
+
+API endpoints that are vulnerable to brute-force attacks (`/login/access-token`, `/patients/search`) enforce per-client request limits using [SlowAPI](https://github.com/laurents/slowapi).
+
+- **Backend Storage:** Redis (shared across all Cloud Run instances). Configured via the `REDIS_URL` environment variable. Falls back to in-memory storage for local development when `REDIS_URL` is not set.
+- **Client IP Detection:** Extracted from the `X-Forwarded-For` header set by Cloud Run's load balancer, ensuring rate limits apply per real client rather than per proxy.
+- **Default Limits:** `10/minute` for login, `30/minute` for patient search. Configurable via `RATE_LIMIT_LOGIN` and `RATE_LIMIT_PATIENT_SEARCH` environment variables.
 
 ---
 

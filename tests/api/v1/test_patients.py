@@ -71,14 +71,12 @@ MOCK_PATIENT_PAYLOAD = {
         "personalHistory": None,
         "familyHistory": [
             {
-                # conditionCie10Code is Optional — omitted here intentionally
-                # so the LLM coding path is exercised in sync tests
-                "conditionDescription": "Diabetes mellitus tipo 2",  # required field
+                "conditionDescription": "Diabetes mellitus tipo 2",
                 "relationship": "04",   # FamilyRelationship.ABUELOS
             }
         ],
         "familyHistoryNotes": "Abuelo paterno con diabetes.",
-        "medications": [],              # v3.0: new required list field
+        "medications": [],
     },
     "allergies": [
         {
@@ -90,6 +88,72 @@ MOCK_PATIENT_PAYLOAD = {
     ],
     "medicalHistory": [],
     "vaccinationRecord": [],
+}
+
+# H7: Visits now include explicit encounterIdentifier for deterministic delta testing
+VISIT_1 = {
+    "type": "Consultation",
+    "encounterIdentifier": "enc-visit-001",  # H7: explicit UUID
+    "startDateTime": "2026-01-15T09:00:00",
+    "endDateTime": "2026-01-15T09:45:00",
+    "careModality": "01",
+    "serviceGroup": "01",
+    "careEnvironment": "05",
+    "provider": {
+        "repsCode": "540015400101",
+        "name": "Hospital Erasmo Meoz",
+        "nitNumber": "890500600",
+        "locationSeatCode": "540015400101-01",
+    },
+    "practitioner": {
+        "documentType": "CC",
+        "documentNumber": "88001234",
+        "name": "GOMEZ, ANDREA",
+        "firstName": "Andrea",
+        "secondName": None,
+        "firstLastName": "Gomez",
+        "secondLastName": None,
+    },
+    "location": "HOSPITAL_ERASMO_MEOZ",
+    "physician": "GOMEZ, ANDREA",
+    "clinicalEvaluation": {
+        "historyOfCurrentIllness": "Fiebre de 3 días de evolución, tos seca.",
+        "generalPhysicalExamination": "T: 38.5°C, FC: 110. Faringe eritematosa.",
+        "systemsExamination": "Respiratorio: murmullo vesicular conservado.",
+        "treatmentPlanObservations": "Acetaminofén 15mg/kg cada 6h. Control en 48h.",
+    },
+    "diagnosis": [
+        {
+            "icd10Code": "J06.9",
+            "icd11Code": None,
+            "description": "Infección aguda de las vías respiratorias superiores",
+        }
+    ],
+    "diagnosisType": "01",
+    "riskFactors": [],
+    "incapacity": None,
+    "payer": None,
+}
+
+VISIT_2 = {
+    **VISIT_1,
+    "encounterIdentifier": "enc-visit-002",  # H7: different UUID
+    "startDateTime": "2026-04-10T09:00:00",
+    "endDateTime": None,
+    "clinicalEvaluation": {
+        "historyOfCurrentIllness": "Control post-infección respiratoria.",
+        "generalPhysicalExamination": None,
+        "systemsExamination": None,
+        "treatmentPlanObservations": None,
+    },
+    "diagnosis": [
+        {
+            "icd10Code": "Z09",
+            "icd11Code": None,
+            "description": "Examen de seguimiento",
+        }
+    ],
+    "diagnosisType": "02",
 }
 
 # Payload with a medical visit
@@ -104,50 +168,7 @@ MOCK_PATIENT_WITH_VISIT = {
             "documentNumber": "VZ-1111111",
         },
     },
-    "medicalHistory": [
-        {
-            "type": "Consultation",
-            "startDateTime": "2026-01-15T09:00:00",
-            "endDateTime": "2026-01-15T09:45:00",
-            "careModality": "01",
-            "serviceGroup": "01",
-            "careEnvironment": "05",
-            "provider": {
-                "repsCode": "540015400101",
-                "name": "Hospital Erasmo Meoz",
-                "nitNumber": "890500600",               # v3.0: required for dual NIT coding
-                "locationSeatCode": "540015400101-01",  # v3.0: sede identifier
-            },
-            "practitioner": {
-                "documentType": "CC",
-                "documentNumber": "88001234",
-                "name": "GOMEZ, ANDREA",
-                "firstName": "Andrea",       # v3.0: desglose para ExtensionFathersFamilyName
-                "secondName": None,
-                "firstLastName": "Gomez",
-                "secondLastName": None,
-            },
-            "location": "HOSPITAL_ERASMO_MEOZ",
-            "physician": "GOMEZ, ANDREA",
-            "clinicalEvaluation": {
-                "historyOfCurrentIllness": "Fiebre de 3 días de evolución, tos seca.",
-                "generalPhysicalExamination": "T: 38.5°C, FC: 110. Faringe eritematosa.",
-                "systemsExamination": "Respiratorio: murmullo vesicular conservado.",
-                "treatmentPlanObservations": "Acetaminofén 15mg/kg cada 6h. Control en 48h.",
-            },
-            "diagnosis": [
-                {
-                    "icd10Code": "J06.9",
-                    "icd11Code": None,
-                    "description": "Infección aguda de las vías respiratorias superiores",
-                }
-            ],
-            "diagnosisType": "01",
-            "riskFactors": [],
-            "incapacity": None,
-            "payer": None,
-        }
-    ],
+    "medicalHistory": [VISIT_1],
 }
 
 
@@ -184,7 +205,8 @@ def test_sync_patient_success(client: TestClient):
     assert response.status_code == 201
     data = response.json()
     assert data["status"] == "success"
-    assert data["internal_id"] == "TEST-UNIT-001"
+    # H3: internal_id is now server-generated — just check it's a non-empty string
+    assert len(data["internal_id"]) > 0
     assert data["fhir_status"] == "success"
 
 
@@ -211,6 +233,7 @@ def test_sync_nurse_cannot_add_medical_history(client: TestClient):
         "medicalHistory": [
             {
                 "type": "Consultation",
+                "encounterIdentifier": "enc-nurse-attempt-001",
                 "startDateTime": "2026-02-01T10:00:00",
                 "endDateTime": None,
                 "careModality": "01",
@@ -261,7 +284,11 @@ def test_sync_stores_rda_columns_in_db(client: TestClient, db_session):
     _sync_patient(client)
     _clear_overrides()
 
-    patient = db_session.query(Patient).filter(Patient.id == "TEST-UNIT-001").first()
+    # H3: Lookup by frontend_patient_id + organization_id
+    patient = db_session.query(Patient).filter(
+        Patient.frontend_patient_id == "TEST-UNIT-001",
+        Patient.organization_id == "org-123",
+    ).first()
     assert patient is not None
     assert patient.document_type == "PT"
     assert patient.document_number == "VZ-9876543"
@@ -270,15 +297,21 @@ def test_sync_stores_rda_columns_in_db(client: TestClient, db_session):
     assert patient.last_name == "Rodríguez"
     assert patient.second_last_name == "Pérez"
     assert patient.first_name == "Santiago"
-    # Sync tracking: no visits, but RDA-Paciente was sent
-    assert patient.synced_visit_count == 0
+    # H3: Server-generated PK is different from the frontend ID
+    assert patient.id != "TEST-UNIT-001"
+    assert len(patient.id) > 0
+    # H7: Synced encounters is a list, not a count
+    assert patient.synced_encounter_ids == []
+    # H1: Background hash is computed
+    assert patient.background_data_hash is not None
+    assert len(patient.background_data_hash) == 64  # SHA-256 hex digest
     assert patient.rda_paciente_sent is True
 
 
 def test_sync_delta_only_sends_new_bundles(client: TestClient, db_session):
     """
-    Second sync with 1 new visit should only generate 2 bundles
-    (1 RDA-Paciente + 1 RDA-Consulta for the new visit), not re-send old visits.
+    H7: Second sync with 1 new visit should only generate bundles for the
+    NEW encounter (identified by encounterIdentifier UUID), not re-send old ones.
     """
     from app.db.models import Patient
 
@@ -289,56 +322,17 @@ def test_sync_delta_only_sends_new_bundles(client: TestClient, db_session):
         client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
         first_call_count = mock_gcp.call_count
 
-    # Verify DB tracking after first sync
-    patient = db_session.query(Patient).filter(Patient.id == "TEST-UNIT-002").first()
-    assert patient.synced_visit_count == 1
+    # H7: Verify synced_encounter_ids contains the encounter UUID
+    patient = db_session.query(Patient).filter(
+        Patient.frontend_patient_id == "TEST-UNIT-002",
+    ).first()
+    assert "enc-visit-001" in patient.synced_encounter_ids
     assert patient.rda_paciente_sent is True
 
     # Second sync: same patient, now with 2 visits (1 old + 1 new)
     payload_two_visits = {
         **MOCK_PATIENT_WITH_VISIT,
-        "medicalHistory": MOCK_PATIENT_WITH_VISIT["medicalHistory"] + [
-            {
-                "type": "Consultation",
-                "startDateTime": "2026-04-10T09:00:00",
-                "endDateTime": None,
-                "careModality": "01",
-                "serviceGroup": "01",
-                "careEnvironment": "05",
-                "provider": {
-                    "repsCode": "540015400101",
-                    "name": "Hospital Erasmo Meoz",
-                    "nitNumber": "890500600",
-                    "locationSeatCode": "540015400101-01",
-                },
-                "practitioner": {
-                    "documentType": "CC",
-                    "documentNumber": "88001234",
-                    "name": "GOMEZ, ANDREA",
-                    "firstName": "Andrea",
-                    "secondName": None,
-                    "firstLastName": "Gomez",
-                    "secondLastName": None,
-                },
-                "clinicalEvaluation": {
-                    "historyOfCurrentIllness": "Control post-infección respiratoria.",
-                    "generalPhysicalExamination": None,
-                    "systemsExamination": None,
-                    "treatmentPlanObservations": None,
-                },
-                "diagnosis": [
-                    {
-                        "icd10Code": "Z09",
-                        "icd11Code": None,
-                        "description": "Examen de seguimiento",
-                    }
-                ],
-                "diagnosisType": "02",
-                "riskFactors": [],
-                "incapacity": None,
-                "payer": None,
-            }
-        ],
+        "medicalHistory": [VISIT_1, VISIT_2],
     }
     with patch.object(fhir_backend, "send_bundle") as mock_gcp2:
         mock_gcp2.return_value = {"status": "success", "google_response": {}}
@@ -349,11 +343,16 @@ def test_sync_delta_only_sends_new_bundles(client: TestClient, db_session):
 
     assert response.status_code == 201
     assert first_call_count == 2   # RDA-Paciente + 1 RDA-Consulta
-    assert second_call_count == 2  # RDA-Paciente (refreshed) + 1 NEW RDA-Consulta only
+    # H7+H1: Only 1 new RDA-Consulta (background unchanged → no RDA-Paciente)
+    assert second_call_count == 1
 
-    # Verify DB tracking updated — re-query to get fresh data from DB
-    patient = db_session.query(Patient).filter(Patient.id == "TEST-UNIT-002").first()
-    assert patient.synced_visit_count == 2
+    # Verify both encounters are now tracked
+    db_session.expire_all()
+    patient = db_session.query(Patient).filter(
+        Patient.frontend_patient_id == "TEST-UNIT-002",
+    ).first()
+    assert "enc-visit-001" in patient.synced_encounter_ids
+    assert "enc-visit-002" in patient.synced_encounter_ids
 
 
 def test_sync_no_new_visits_skips_all_bundles(client: TestClient):
@@ -365,7 +364,7 @@ def test_sync_no_new_visits_skips_all_bundles(client: TestClient):
         mock_gcp.return_value = {"status": "success", "google_response": {}}
         client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
 
-    # Second sync with SAME data (no new visits)
+    # Second sync with SAME data (no new visits, no background change)
     with patch.object(fhir_backend, "send_bundle") as mock_gcp2:
         mock_gcp2.return_value = {"status": "success", "google_response": {}}
         response = client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
@@ -374,7 +373,7 @@ def test_sync_no_new_visits_skips_all_bundles(client: TestClient):
     _clear_overrides()
 
     assert response.status_code == 201
-    # No new visits + RDA-Paciente already sent → 0 bundles (nothing to do)
+    # H1+H7: No new visits + background unchanged → 0 bundles
     assert resync_call_count == 0
 
 
@@ -392,10 +391,102 @@ def test_sync_gcp_failure_does_not_update_tracking(client: TestClient, db_sessio
     assert response.status_code == 201
     assert response.json()["fhir_status"] == "error"
 
-    # Tracking should NOT have been updated
-    patient = db_session.query(Patient).filter(Patient.id == "TEST-UNIT-002").first()
-    assert patient.synced_visit_count == 0
+    # H7: Tracking should NOT have been updated
+    patient = db_session.query(Patient).filter(
+        Patient.frontend_patient_id == "TEST-UNIT-002",
+    ).first()
+    assert patient.synced_encounter_ids == []
     assert patient.rda_paciente_sent is False
+
+
+# ============================================================================
+# H1: BACKGROUND DATA HASH TESTS
+# ============================================================================
+
+
+def test_h1_background_change_triggers_rda_paciente(client: TestClient, db_session):
+    """
+    H1: When background data changes (e.g., new allergy added), the
+    RDA-Paciente bundle should be regenerated even if there are no new visits.
+    """
+    # First sync: patient with 1 visit
+    _override_doctor()
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
+
+    # Second sync: same visits, but a NEW allergy was added
+    payload_new_allergy = {
+        **MOCK_PATIENT_WITH_VISIT,
+        "allergies": MOCK_PATIENT_WITH_VISIT["allergies"] + [
+            {
+                "category": "02",  # AllergyCategory.ALIMENTO
+                "allergen": "Maní",
+                "reaction": "Angioedema",
+                "notes": "Reacción severa",
+            }
+        ],
+    }
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp2:
+        mock_gcp2.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload_new_allergy)
+        bundle_count = mock_gcp2.call_count
+
+    _clear_overrides()
+
+    assert response.status_code == 201
+    # H1: Background changed → RDA-Paciente regenerated, no new visits → just 1 bundle
+    assert bundle_count == 1
+
+
+# ============================================================================
+# H3: ORG-SCOPED PATIENT TESTS
+# ============================================================================
+
+
+def test_h3_same_frontend_id_different_orgs(client: TestClient, db_session):
+    """
+    H3: Two organizations can independently register a patient with the
+    same frontend-generated patientId.
+    """
+    from app.db.models import Patient
+
+    # Sync as Org A
+    _sync_patient(client)
+    _clear_overrides()
+
+    # Sync the SAME patientId but as Org B
+    class MockDoctorOrgB:
+        email = "doctor.b@ngo-b.org"
+        id = "user-org-b-001"
+        role = UserRole.doctor
+        organization_id = "org-456"
+
+    app.dependency_overrides[get_current_user] = lambda: MockDoctorOrgB()
+    payload_org_b = {
+        **MOCK_PATIENT_PAYLOAD,
+        "device_uid": "04:A2:ORGB:UID",  # different device
+    }
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload_org_b)
+    _clear_overrides()
+
+    assert response.status_code == 201
+
+    # Both should exist as separate records
+    org_a = db_session.query(Patient).filter(
+        Patient.frontend_patient_id == "TEST-UNIT-001",
+        Patient.organization_id == "org-123",
+    ).first()
+    org_b = db_session.query(Patient).filter(
+        Patient.frontend_patient_id == "TEST-UNIT-001",
+        Patient.organization_id == "org-456",
+    ).first()
+    assert org_a is not None
+    assert org_b is not None
+    # H3: They have different server-generated IDs
+    assert org_a.id != org_b.id
 
 
 # ============================================================================
@@ -708,8 +799,6 @@ def test_search_missing_mandatory_params_returns_422(client: TestClient):
 def test_sync_llm_codes_chronic_conditions(client: TestClient):
     """
     When a chronic condition lacks ICD codes, the LLM codes it.
-    The endpoint must call medical_llm_processor.code_chronic_condition
-    and persist the coded values on the item.
     """
     payload_with_chronic = {
         **MOCK_PATIENT_PAYLOAD,
@@ -719,7 +808,6 @@ def test_sync_llm_codes_chronic_conditions(client: TestClient):
             **MOCK_PATIENT_PAYLOAD["backgroundHistory"],
             "chronicConditions": [
                 {
-                    # No ICD codes yet — triggers LLM coding
                     "chronicDescription": "Diabetes mellitus tipo 2",
                     "chronicCie10Code": None,
                     "chronicCie11Code": None,
@@ -763,7 +851,7 @@ def test_sync_skips_chronic_coding_when_code_already_present(client: TestClient)
             "chronicConditions": [
                 {
                     "chronicDescription": "Diabetes mellitus tipo 2",
-                    "chronicCie10Code": "E11",   # already coded — skip LLM
+                    "chronicCie10Code": "E11",
                     "chronicCie11Code": "5A11",
                 }
             ],
@@ -787,7 +875,7 @@ def test_sync_skips_chronic_coding_when_code_already_present(client: TestClient)
 
 
 def test_scan_patient_from_different_org(client: TestClient):
-    """A doctor from Org B can scan a patient registered by Org A."""
+    """A doctor from Org B can scan a patient registered by Org A (via device_uid)."""
     # First, sync patient as Org A doctor
     _sync_patient(client)
 
@@ -809,3 +897,48 @@ def test_scan_patient_from_different_org(client: TestClient):
     assert response.status_code == 200
     data = response.json()
     assert data["patientId"] == "TEST-UNIT-001"
+
+# ============================================================================
+# COVERAGE: Patient.__repr__ (models.py)
+# ============================================================================
+
+
+def test_patient_repr(client: TestClient, db_session):
+    """Exercise Patient.__repr__ to cover the repr line in models.py."""
+    from app.db.models import Patient
+
+    _sync_patient(client)
+    _clear_overrides()
+
+    patient = db_session.query(Patient).first()
+    text = repr(patient)
+    assert "Patient" in text
+    assert patient.frontend_patient_id in text
+
+
+# ============================================================================
+# COVERAGE: _get_real_client_ip (rate_limit.py)
+# ============================================================================
+
+
+def test_rate_limit_extracts_forwarded_ip():
+    """When X-Forwarded-For is present, the leftmost IP is returned."""
+    from unittest.mock import MagicMock
+
+    from app.core.rate_limit import _get_real_client_ip
+
+    request = MagicMock()
+    request.headers = {"x-forwarded-for": "181.52.100.1, 10.0.0.1, 10.0.0.2"}
+    assert _get_real_client_ip(request) == "181.52.100.1"
+
+
+def test_rate_limit_redis_branch():
+    """When REDIS_URL is set, the limiter uses Redis storage."""
+    from unittest.mock import patch
+
+    from app.core.rate_limit import _build_limiter
+
+    with patch("app.core.rate_limit.settings") as mock_settings:
+        mock_settings.REDIS_URL = "redis://fake:6379/0"
+        limiter = _build_limiter()
+        assert limiter is not None

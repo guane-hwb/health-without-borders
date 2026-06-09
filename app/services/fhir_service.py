@@ -1254,37 +1254,69 @@ def build_rda_consulta(patient: PatientFullRecord,
 
 def convert_to_fhir_rda(
     patient: PatientFullRecord,
-    previous_visit_count: int = 0,
+    synced_encounter_ids: list[str] | None = None,
     rda_paciente_already_sent: bool = False,
-) -> List[Dict[str, Any]]:
+    background_data_changed: bool = False,
+) -> tuple[list[dict[str, Any]], list[str]]:
     """
     Generates only the FHIR RDA bundles that need to be sent.
 
-    Delta logic:
-      - RDA-Paciente: generated only if not previously sent, or if background
-        data changed (new allergies, family history, conditions).
-      - RDA-Consulta: generated only for NEW visits (index >= previous_visit_count).
+    H1 + H7 delta logic:
+      - RDA-Paciente: generated only if not previously sent, or if
+        background data changed (detected via hash comparison by the caller).
+      - RDA-Consulta: generated only for visits whose encounterIdentifier
+        is NOT in the set of already-synced encounter IDs.
+
+    Args:
+        patient: The full patient record.
+        synced_encounter_ids: Set of encounter UUIDs already sent to FHIR.
+        rda_paciente_already_sent: Whether RDA-Paciente was sent at least once.
+        background_data_changed: Whether the background data hash changed (H1).
 
     Returns:
-        List of FHIR Bundles to send. May be empty if nothing changed.
+        Tuple of (list of FHIR bundles, list of NEW encounter IDs that were bundled).
+        The caller uses the new encounter IDs to update the sync tracking.
     """
-    bundles = []
-    total_visits = len(patient.medicalHistory)
-    new_visit_count = total_visits - previous_visit_count
+    bundles: list[dict[str, Any]] = []
+    synced_set = set(synced_encounter_ids or [])
     patient_ref = safe_patient_ref(patient.patientId)
 
-    if not rda_paciente_already_sent or new_visit_count > 0:
-        bundles.append(build_rda_paciente(patient))
+    # H7: Identify new visits by encounter UUID, not by list index
+    new_visits: list[MedicalHistoryItem] = []
+    new_encounter_ids: list[str] = []
+    for visit in patient.medicalHistory:
+        enc_id = visit.encounterIdentifier
+        if enc_id and enc_id not in synced_set:
+            new_visits.append(visit)
+            new_encounter_ids.append(enc_id)
 
-    if new_visit_count > 0:
-        new_visits = patient.medicalHistory[previous_visit_count:]
-        for visit in new_visits:
-            bundles.append(build_rda_consulta(patient, visit))
-        logger.info("Delta: %d new visit(s) for patient %s", new_visit_count, patient_ref)
+    # H1: Re-send RDA-Paciente only when background data changed or never sent
+    needs_rda_paciente = (
+        not rda_paciente_already_sent
+        or background_data_changed
+    )
+
+    if needs_rda_paciente:
+        bundles.append(build_rda_paciente(patient))
+        if background_data_changed and rda_paciente_already_sent:
+            logger.info(
+                "Background data changed for patient %s — regenerating RDA-Paciente",
+                patient_ref,
+            )
+
+    # Generate RDA-Consulta for each genuinely new visit
+    for visit in new_visits:
+        bundles.append(build_rda_consulta(patient, visit))
+
+    if new_visits:
+        logger.info(
+            "Delta: %d new visit(s) for patient %s (by encounterIdentifier)",
+            len(new_visits), patient_ref,
+        )
     elif not rda_paciente_already_sent:
         logger.info("First sync for patient %s, no visits yet", patient_ref)
-    else:
-        logger.info("No new visits for patient %s, skipping RDA-Consulta", patient_ref)
+    elif not needs_rda_paciente:
+        logger.info("No changes for patient %s, skipping all bundles", patient_ref)
 
     logger.info("Generated %d RDA bundle(s) for patient %s", len(bundles), patient_ref)
-    return bundles
+    return bundles, new_encounter_ids
