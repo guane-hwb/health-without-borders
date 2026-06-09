@@ -10,7 +10,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     String,
-    Text,
     UniqueConstraint,
 )
 from sqlalchemy import Enum as SAEnum
