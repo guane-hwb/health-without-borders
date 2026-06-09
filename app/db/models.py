@@ -189,18 +189,3 @@ class RevokedToken(Base):
         DateTime(timezone=True), nullable=False,
         comment="Original token expiry — safe to delete row after this time"
     )
-
-
-class DiagnosisCIE10(Base):
-    __tablename__ = "catalog_cie10"
-
-    code = Column(String(10), primary_key=True, index=True)
-    description = Column(Text, nullable=False)
-    is_common = Column(Boolean, default=False)
-
-class VaccineCVX(Base):
-    __tablename__ = "catalog_vaccines"
-
-    code = Column(String(10), primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    is_active = Column(Boolean, default=True)
