@@ -185,6 +185,21 @@ class TestTokenRefresh:
         )
         assert response.status_code == 401
 
+    def test_refresh_rejects_inactive_user(self, client: TestClient, db_session):
+        """Refresh is rejected if the user was deactivated after login."""
+        tokens = self._setup_and_login(client, db_session)
+
+        # Deactivate the user after they logged in
+        user = db_session.query(User).filter(User.email == "doctor@hwb.org").first()
+        user.is_active = False
+        db_session.commit()
+
+        response = client.post(
+            "/api/v1/login/refresh",
+            json={"refresh_token": tokens["refresh_token"]},
+        )
+        assert response.status_code == 401
+
 
 # ---------------------------------------------------------------------------
 # H4: Tests for logout / token revocation
@@ -245,6 +260,45 @@ class TestLogout:
                 headers={"Authorization": f"Bearer {tokens['access_token']}"},
             )
             assert response.status_code == 204
+
+    def test_logout_without_bearer_prefix(self, client: TestClient, db_session):
+        """Logout without 'Bearer ' prefix returns 401."""
+        response = client.post(
+            "/api/v1/logout",
+            headers={"Authorization": "Token some-random-value"},
+        )
+        assert response.status_code == 401
+        assert "Missing Bearer token" in response.json()["detail"]
+
+    def test_logout_with_invalid_token(self, client: TestClient, db_session):
+        """Logout with a malformed JWT returns 401."""
+        response = client.post(
+            "/api/v1/logout",
+            headers={"Authorization": "Bearer not.a.valid.jwt"},
+        )
+        assert response.status_code == 401
+        assert "Invalid token" in response.json()["detail"]
+
+    def test_logout_with_token_missing_jti(self, client: TestClient, db_session):
+        """Logout with a valid JWT that has no jti claim returns 401."""
+        from datetime import datetime, timedelta, timezone
+
+        from jose import jwt
+
+        from app.core.config import settings
+
+        # Craft a valid JWT without the jti claim
+        token = jwt.encode(
+            {"sub": "test@hwb.org", "exp": datetime.now(timezone.utc) + timedelta(hours=1)},
+            settings.SECRET_KEY,
+            algorithm=settings.ALGORITHM,
+        )
+        response = client.post(
+            "/api/v1/logout",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 401
+        assert "Token missing JTI claim" in response.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

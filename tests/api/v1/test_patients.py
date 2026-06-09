@@ -897,3 +897,48 @@ def test_scan_patient_from_different_org(client: TestClient):
     assert response.status_code == 200
     data = response.json()
     assert data["patientId"] == "TEST-UNIT-001"
+
+# ============================================================================
+# COVERAGE: Patient.__repr__ (models.py)
+# ============================================================================
+
+
+def test_patient_repr(client: TestClient, db_session):
+    """Exercise Patient.__repr__ to cover the repr line in models.py."""
+    from app.db.models import Patient
+
+    _sync_patient(client)
+    _clear_overrides()
+
+    patient = db_session.query(Patient).first()
+    text = repr(patient)
+    assert "Patient" in text
+    assert patient.frontend_patient_id in text
+
+
+# ============================================================================
+# COVERAGE: _get_real_client_ip (rate_limit.py)
+# ============================================================================
+
+
+def test_rate_limit_extracts_forwarded_ip():
+    """When X-Forwarded-For is present, the leftmost IP is returned."""
+    from unittest.mock import MagicMock
+
+    from app.core.rate_limit import _get_real_client_ip
+
+    request = MagicMock()
+    request.headers = {"x-forwarded-for": "181.52.100.1, 10.0.0.1, 10.0.0.2"}
+    assert _get_real_client_ip(request) == "181.52.100.1"
+
+
+def test_rate_limit_redis_branch():
+    """When REDIS_URL is set, the limiter uses Redis storage."""
+    from unittest.mock import patch
+
+    from app.core.rate_limit import _build_limiter
+
+    with patch("app.core.rate_limit.settings") as mock_settings:
+        mock_settings.REDIS_URL = "redis://fake:6379/0"
+        limiter = _build_limiter()
+        assert limiter is not None
