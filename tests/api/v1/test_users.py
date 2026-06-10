@@ -37,8 +37,6 @@ def test_create_user_org_admin_success(client: TestClient):
     }
     response = client.post("/api/v1/users/", json=payload)
 
-    app.dependency_overrides.clear()
-    
     assert response.status_code == 201
     assert response.json()["email"] == "doctor@clinic.org"
 
@@ -62,8 +60,6 @@ def test_create_user_org_admin_forbidden_role(client: TestClient):
     }
     response = client.post("/api/v1/users/", json=payload)
 
-    app.dependency_overrides.clear()
-    
     assert response.status_code == 403
     assert "can only create 'doctor' or 'nurse'" in response.json()["detail"]
 
@@ -86,8 +82,6 @@ def test_create_user_doctor_forbidden(client: TestClient):
     }
     response = client.post("/api/v1/users/", json=payload)
 
-    app.dependency_overrides.clear()
-    
     assert response.status_code == 403
     assert "Not enough privileges" in response.json()["detail"]
 
@@ -106,8 +100,6 @@ def test_get_me_returns_current_user_profile(client: TestClient):
     app.dependency_overrides[get_current_user] = lambda: MockDoctor()
 
     response = client.get("/api/v1/users/me")
-
-    app.dependency_overrides.clear()
 
     assert response.status_code == 200
     data = response.json()
@@ -136,5 +128,3 @@ def test_get_me_works_for_all_roles(client: TestClient):
 
         assert response.status_code == 200, f"Expected 200 for role {role}, got {response.status_code}"
         assert response.json()["email"] == f"{role}@clinic.org"
-
-    app.dependency_overrides.clear()

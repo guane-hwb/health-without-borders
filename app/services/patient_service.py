@@ -4,7 +4,6 @@ import logging
 from datetime import date
 from typing import Optional
 
-from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -129,8 +128,30 @@ def find_patient_strict(
 # Create / Update
 # ---------------------------------------------------------------------------
 
+def get_existing_history_count(
+    db: Session, frontend_patient_id: str, org_id: str
+) -> Optional[int]:
+    """
+    Return the number of medicalHistory entries already stored for a patient
+    (scoped to the organization), or None if the patient does not exist yet.
+
+    This is a lightweight lookup used to enforce role-based restrictions
+    before any expensive processing (e.g. LLM diagnosis extraction) runs.
+    """
+    existing = (
+        db.query(Patient)
+        .filter(
+            Patient.frontend_patient_id == frontend_patient_id,
+            Patient.organization_id == org_id,
+        )
+        .first()
+    )
+    if not existing:
+        return None
+    return len((existing.full_record_json or {}).get("medicalHistory", []) or [])
+
 def create_or_update_patient(
-    db: Session, patient_in: PatientFullRecord, org_id: str, current_role: str
+    db: Session, patient_in: PatientFullRecord, org_id: str
 ) -> tuple["Patient", list[str], str, bool]:
     """
     Persists patient data into the local PostgreSQL database.
@@ -164,22 +185,7 @@ def create_or_update_patient(
         old_bg_hash = existing_patient.background_data_hash or ""
         rda_paciente_sent = existing_patient.rda_paciente_sent
 
-        # RULE 1: NURSES CANNOT ADD MEDICAL HISTORY
-        if current_role == "nurse":
-            old_history_len = len(old_record_dump.get("medicalHistory", []))
-            new_history_len = len(new_record_dump.get("medicalHistory", []))
-
-            if new_history_len > old_history_len:
-                logger.warning(
-                    "Nurse tried to add medical history to patient %s",
-                    safe_patient_ref(existing_patient.id),
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access Denied: Nurses can only add vaccines, not medical history.",
-                )
-
-        # RULE 2: PROTECT IMMUTABLE FIELDS (Name, DOB, document, sex)
+        # RULE 1: PROTECT IMMUTABLE FIELDS (Name, DOB, document, sex)
         new_record_dump["patientInfo"]["firstName"] = old_record_dump["patientInfo"]["firstName"]
         new_record_dump["patientInfo"]["firstLastName"] = old_record_dump["patientInfo"]["firstLastName"]
         new_record_dump["patientInfo"]["secondLastName"] = old_record_dump["patientInfo"].get("secondLastName")
@@ -189,7 +195,7 @@ def create_or_update_patient(
         new_record_dump["patientInfo"]["bloodType"] = old_record_dump["patientInfo"].get("bloodType")
         new_record_dump["patientInfo"]["identification"] = old_record_dump["patientInfo"]["identification"]
 
-        # RULE 3: UPDATE ONLY ALLOWED FIELDS (guardian, address, vaccines)
+        # RULE 2: UPDATE ONLY ALLOWED FIELDS (guardian, address, vaccines)
         existing_patient.guardian_name = patient_in.guardianInfo.name
         existing_patient.guardian_phone = patient_in.guardianInfo.phone
 
@@ -197,7 +203,7 @@ def create_or_update_patient(
         if patient_in.guardian2Info and patient_in.guardian2Info.name:
             existing_patient.guardian2_name = patient_in.guardian2Info.name
 
-        # RULE 4: MERGE CLINICAL LISTS BY UUID (C2 fix)
+        # RULE 3: MERGE CLINICAL LISTS BY UUID
         # Prevents data loss when multiple devices sync different visits
         # or vaccinations for the same patient.
         merged_record = merge_patient_records(old_record_dump, new_record_dump)

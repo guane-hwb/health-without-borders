@@ -30,8 +30,6 @@ def test_create_organization_superadmin_success(client: TestClient):
     payload = {"name": "UNICEF Pilot", "is_active": True}
     response = client.post("/api/v1/organizations/", json=payload)
 
-    app.dependency_overrides.clear()
-    
     assert response.status_code == 201
     assert response.json()["name"] == "UNICEF Pilot"
     mock_db.add.assert_called_once()
@@ -54,7 +52,5 @@ def test_create_organization_forbidden(client: TestClient):
     payload = {"name": "Rogue Org", "is_active": True}
     response = client.post("/api/v1/organizations/", json=payload)
 
-    app.dependency_overrides.clear()
-    
     assert response.status_code == 403
     assert "Only global SuperAdmins" in response.json()["detail"]

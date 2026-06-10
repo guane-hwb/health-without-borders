@@ -23,6 +23,17 @@ engine = create_engine(
 
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+
+@pytest.fixture(autouse=True)
+def reset_dependency_overrides() -> Generator[None, None, None]:
+    """
+    Guarantee that FastAPI dependency overrides set by any test are removed
+    once the test finishes, even if it fails mid-way. Runs for every test, so
+    individual tests no longer need manual cleanup that can be skipped on error.
+    """
+    yield
+    app.dependency_overrides.clear()
+
 @pytest.fixture(scope="function")
 def db_session() -> Generator[Session, None, None]:
     """

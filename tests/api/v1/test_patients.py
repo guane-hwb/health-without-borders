@@ -277,6 +277,60 @@ def test_sync_nurse_cannot_add_medical_history(client: TestClient):
     assert "Nurses can only add vaccines" in response.json()["detail"]
 
 
+def test_sync_nurse_history_rejected_before_llm(client: TestClient):
+    """A nurse adding history is rejected before any LLM call is made."""
+    _sync_patient(client)
+    _clear_overrides()
+
+    _override_nurse()
+    payload_with_visit = {
+        **MOCK_PATIENT_PAYLOAD,
+        "medicalHistory": [
+            {
+                "type": "Consultation",
+                "encounterIdentifier": "enc-nurse-attempt-002",
+                "startDateTime": "2026-02-01T10:00:00",
+                "endDateTime": None,
+                "careModality": "01",
+                "serviceGroup": "01",
+                "careEnvironment": "05",
+                "provider": {
+                    "repsCode": "540015400101",
+                    "name": "Hospital Erasmo Meoz",
+                    "nitNumber": "890500600",
+                    "locationSeatCode": "540015400101-01",
+                },
+                "practitioner": {
+                    "documentType": "CC",
+                    "documentNumber": "88001234",
+                    "name": "GOMEZ, ANDREA",
+                    "firstName": "Andrea",
+                    "secondName": None,
+                    "firstLastName": "Gomez",
+                    "secondLastName": None,
+                },
+                "clinicalEvaluation": {
+                    "historyOfCurrentIllness": "Fiebre",
+                    "generalPhysicalExamination": None,
+                    "systemsExamination": None,
+                    "treatmentPlanObservations": None,
+                },
+                "diagnosis": [],
+                "diagnosisType": "01",
+                "riskFactors": [],
+                "incapacity": None,
+                "payer": None,
+            }
+        ],
+    }
+    with patch("app.api.v1.endpoints.patients.medical_llm_processor") as mock_llm:
+        response = client.post("/api/v1/patients/sync", json=payload_with_visit)
+
+    _clear_overrides()
+    assert response.status_code == 403
+    mock_llm.extract_diagnoses.assert_not_called()
+
+
 def test_sync_stores_rda_columns_in_db(client: TestClient, db_session):
     """New RDA columns and sync tracking columns are persisted correctly."""
     from app.db.models import Patient
@@ -500,7 +554,7 @@ def test_scan_success(client: TestClient):
 
     response = client.get(
         f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}",
-        params={"guardian_device_uid": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]},
+        headers={"X-Guardian-Device-UID": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]},
     )
     _clear_overrides()
 
@@ -541,7 +595,7 @@ def test_scan_minor_wrong_guardian(client: TestClient):
 
     response = client.get(
         f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}",
-        params={"guardian_device_uid": "WRONG-GUARDIAN-UID"},
+        headers={"X-Guardian-Device-UID": "WRONG-GUARDIAN-UID"},
     )
     _clear_overrides()
 
@@ -570,7 +624,7 @@ def test_scan_minor_accepts_guardian2_uid(client: TestClient):
     # Scan using guardian2's UID
     response = client.get(
         f"/api/v1/patients/scan/{payload_with_g2['device_uid']}",
-        params={"guardian_device_uid": "GUARDIAN2-UID-001"},
+        headers={"X-Guardian-Device-UID": "GUARDIAN2-UID-001"},
     )
     _clear_overrides()
 
@@ -890,7 +944,7 @@ def test_scan_patient_from_different_org(client: TestClient):
 
     response = client.get(
         f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}",
-        params={"guardian_device_uid": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]},
+        headers={"X-Guardian-Device-UID": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]},
     )
     _clear_overrides()
 
