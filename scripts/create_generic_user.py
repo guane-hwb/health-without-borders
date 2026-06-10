@@ -37,15 +37,12 @@ def create_superadmin():
             db.refresh(master_org)
             logger.info(f"Root Organization created with ID: {master_org.id}")
 
-        # Check if the superadmin user already exists, if so, update password and role
+        # If the superadmin user already exists, do nothing. Re-running the
+        # seed must never reset an existing account's password or re-elevate
+        # its role — that would silently undo any later administrative change.
         user = db.query(User).filter(User.email == email).first()
         if user:
-            logger.info(f"User {email} already exists.")
-            user.hashed_password = get_password_hash(password)
-            user.role = "superadmin"
-            user.organization_id = master_org.id
-            db.commit()
-            logger.info(f"Password and roles updated for existing user: {email}")
+            logger.info(f"User {email} already exists — leaving it untouched.")
             return
 
         # Create the superadmin user

@@ -30,9 +30,9 @@ services:
       - "8000:8080"
     environment:
       DATABASE_URL: postgresql://postgres:password@db:5432/hwb_local
-      SECRET_KEY: local_dev_secret_key_do_not_use_in_production
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in the environment}
       FIRST_SUPERUSER_EMAIL: admin@hwb.org
-      FIRST_SUPERUSER_PASSWORD: Admin123!
+      FIRST_SUPERUSER_PASSWORD: ${FIRST_SUPERUSER_PASSWORD:?FIRST_SUPERUSER_PASSWORD must be set in the environment}
       DEBUG: "true"
       BACKEND_CORS_ORIGINS: ""
       ACCESS_TOKEN_EXPIRE_MINUTES: "60"
@@ -54,9 +54,9 @@ services:
         echo "Database initialized successfully"
     environment:
       DATABASE_URL: postgresql://postgres:password@db:5432/hwb_local
-      SECRET_KEY: local_dev_secret_key_do_not_use_in_production
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in the environment}
       FIRST_SUPERUSER_EMAIL: admin@hwb.org
-      FIRST_SUPERUSER_PASSWORD: Admin123!
+      FIRST_SUPERUSER_PASSWORD: ${FIRST_SUPERUSER_PASSWORD:?FIRST_SUPERUSER_PASSWORD must be set in the environment}
     depends_on:
       db:
         condition: service_healthy

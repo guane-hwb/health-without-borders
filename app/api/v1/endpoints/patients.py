@@ -3,7 +3,7 @@ import logging
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -19,6 +19,7 @@ from app.services.llm import medical_llm_processor
 from app.services.patient_service import (
     create_or_update_patient,
     find_patient_strict,
+    get_existing_history_count,
     get_patient_by_device_uid,
 )
 
@@ -29,7 +30,7 @@ router = APIRouter()
 @router.get("/scan/{device_uid}", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
 async def get_patient_by_device_uid_scan(
     device_uid: str, 
-    guardian_device_uid: Optional[str] = Query(None, description="Scanned ID from guardian's bracelet"),
+    guardian_device_uid: Optional[str] = Header(None, alias="X-Guardian-Device-UID", description="Scanned ID from guardian's bracelet"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -37,20 +38,21 @@ async def get_patient_by_device_uid_scan(
     Retrieve a patient's full medical record by scanning their NFC tag or barcode.
 
     **Guardian 2FA for minors:**
-    If the patient is under 18 years old, the `guardian_device_uid` query parameter
+    If the patient is under 18 years old, the `X-Guardian-Device-UID` header
     becomes mandatory. The scanned guardian tag must match the one registered in the
-    patient's record. Access is denied if they do not match.
+    patient's record. Access is denied if they do not match. The value travels in a
+    header (not the URL) so it does not leak into access logs, proxies, or browser history.
 
     **Parameters:**
     - `device_uid` (path): The hardware identifier scanned from the patient's bracelet.
-    - `guardian_device_uid` (query, conditional): Required only if patient is a minor.
+    - `X-Guardian-Device-UID` (header, conditional): Required only if patient is a minor.
 
     **Allowed roles:** `doctor`, `nurse`.
 
     **Responses:**
     - `200`: Full patient record returned.
     - `403`: Caller is not `doctor` or `nurse`.
-    - `403`: Patient is a minor and `guardian_device_uid` was not provided.
+    - `403`: Patient is a minor and the `X-Guardian-Device-UID` header was not provided.
     - `403`: Patient is a minor and guardian tag does not match.
     - `404`: No patient registered with that device UID.
     """
@@ -155,6 +157,31 @@ async def sync_patient(
         )
     
     try:
+        # A nurse may append vaccines but must not add new medical-history
+        # entries. Enforce this BEFORE any LLM processing so an unauthorized
+        # request never triggers diagnosis extraction.
+        if current_user.role == UserRole.nurse:
+            existing_history_count = await asyncio.to_thread(
+                get_existing_history_count,
+                db,
+                patient_data.patientId,
+                current_user.organization_id,
+            )
+            if (
+                existing_history_count is not None
+                and len(patient_data.medicalHistory) > existing_history_count
+            ):
+                logger.warning(
+                    "Nurse attempted to add medical history actor_id=%s org_id=%s patient_ref=%s",
+                    current_user.id,
+                    current_user.organization_id,
+                    mask_id(patient_data.patientId),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access Denied: Nurses can only add vaccines, not medical history.",
+                )
+
         # --- LLM PROCESSING: Only for visits that don't have diagnoses yet ---
         for visit in patient_data.medicalHistory:
             if not visit.diagnosis:
@@ -205,7 +232,7 @@ async def sync_patient(
         saved_patient, synced_encounter_ids, old_bg_hash, rda_paciente_sent = (
             await asyncio.to_thread(
                 create_or_update_patient,
-                db, patient_data, current_user.organization_id, current_user.role,
+                db, patient_data, current_user.organization_id,
             )
         )
         

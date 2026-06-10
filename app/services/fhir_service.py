@@ -26,7 +26,7 @@ KEY CHANGES v2.0 → v3.0 (all verified against Postman):
 
 import logging
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.phi_sanitizer import safe_patient_ref
@@ -155,7 +155,7 @@ PROFILE_LOCATION = f"{EXT_BASE}/CareDeliveryLocationRDA"
 
 def _fhir_datetime(dt_obj) -> str:
     if not dt_obj:
-        return datetime.utcnow().isoformat() + "Z"
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     if isinstance(dt_obj, datetime):
         s = dt_obj.isoformat()
         return s + "Z" if not s.endswith("Z") and "+" not in s else s
@@ -929,7 +929,7 @@ def build_rda_paciente(patient: PatientFullRecord) -> Dict[str, Any]:
     logger.debug("Building RDA-Paciente for patient %s", safe_patient_ref(patient.patientId))
 
     entries: List[Dict[str, Any]] = []
-    now = datetime.utcnow().isoformat() + "Z"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     pat_id = _patient_id(patient)
 
     # Patient resource
@@ -1063,7 +1063,7 @@ def build_rda_consulta(patient: PatientFullRecord,
     logger.debug("Building RDA-Consulta for patient %s", safe_patient_ref(patient.patientId))
 
     entries: List[Dict[str, Any]] = []
-    now = datetime.utcnow().isoformat() + "Z"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     pat_id = _patient_id(patient)
 
     # 1. Patient
