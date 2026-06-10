@@ -331,6 +331,21 @@ def test_sync_nurse_history_rejected_before_llm(client: TestClient):
     mock_llm.extract_diagnoses.assert_not_called()
 
 
+def test_sync_nurse_can_create_new_patient(client: TestClient):
+    """A nurse may create a brand-new patient.
+
+    The history restriction only applies when a record already exists, so on a
+    first sync there is no prior history to guard against.
+    """
+    _override_nurse()
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=MOCK_PATIENT_PAYLOAD)
+
+    _clear_overrides()
+    assert response.status_code == 201
+
+
 def test_sync_stores_rda_columns_in_db(client: TestClient, db_session):
     """New RDA columns and sync tracking columns are persisted correctly."""
     from app.db.models import Patient
