@@ -32,9 +32,13 @@ def compute_background_hash(record: dict) -> str:
     Fields included:
       - patientInfo (demographics, identification)
       - guardianInfo / guardian2Info
-      - backgroundHistory (chronic conditions, family history, surgical, etc.)
+      - backgroundHistory (chronic conditions, family history, medications, etc.)
       - allergies
-      - medications (MedicationStatement items)
+
+    NOTE: medications are part of backgroundHistory.medications, so they are
+    already covered by the "backgroundHistory" field below. (A previous version
+    referenced a non-existent top-level "medications" key, which always resolved
+    to None and added nothing to the hash.)
     """
     background_fields = {
         "patientInfo": record.get("patientInfo"),
@@ -42,7 +46,6 @@ def compute_background_hash(record: dict) -> str:
         "guardian2Info": record.get("guardian2Info"),
         "backgroundHistory": record.get("backgroundHistory"),
         "allergies": record.get("allergies"),
-        "medications": record.get("medications"),
     }
     # Deterministic serialization — sort keys so field order doesn't
     # cause false positives.
