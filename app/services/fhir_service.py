@@ -1267,6 +1267,19 @@ def convert_to_fhir_rda(
       - RDA-Consulta: generated only for visits whose encounterIdentifier
         is NOT in the set of already-synced encounter IDs.
 
+    NOTE on vaccines (vaccinationRecord):
+      Immunizations are intentionally NOT emitted in any RDA bundle. Per the
+      MinSalud/Vulcano IG (https://vulcano.ihcecol.gov.co/), the patient
+      document (CompositionPatientStatementRDA) has four closed sections —
+      pharmacological, allergic, pathological and family antecedents — and the
+      encounter documents do not carry Immunization either. The ImmunizationRDA
+      profile is consumed via the dedicated query operation against the national
+      PAI registry (OperationDefinition-ConsultarInmunizacion), not pushed by a
+      provider inside an RDA document. Vaccines therefore live only in
+      full_record_json (and on the NFC tag) for HWB's offline use case. A future
+      MinSalud integration would QUERY PAI for immunization history rather than
+      submit it here.
+
     Args:
         patient: The full patient record.
         synced_encounter_ids: Set of encounter UUIDs already sent to FHIR.
