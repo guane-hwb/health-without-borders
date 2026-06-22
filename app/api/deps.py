@@ -20,7 +20,7 @@ def get_current_user(
     """
     Dependency that validates the JWT Token sent in the Authorization header.
     
-    H4 enhancements:
+    Token validation rules:
       - Verifies token type is "access" (rejects refresh tokens).
       - Checks the JTI against the revocation list.
     """
@@ -39,14 +39,14 @@ def get_current_user(
         if email is None:
             raise credentials_exception
 
-        # H4: Only access tokens are valid for API endpoints
+        # Only access tokens are valid for API endpoints
         if token_type != "access":
             raise credentials_exception
 
     except JWTError:
         raise credentials_exception
 
-    # H4: Check token revocation
+    # Check token revocation
     if jti:
         revoked = db.query(RevokedToken).filter(
             RevokedToken.jti == jti

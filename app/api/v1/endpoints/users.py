@@ -37,11 +37,11 @@ def create_user(
     - `403`: Caller is a `doctor` or `nurse`.
     - `403`: `org_admin` attempted to create an `org_admin` or `superadmin`.
     """
-    logger.info(f"User {current_user.email} (Role: {current_user.role}) is attempting to create a new user.")
+    logger.info(f"User creation attempt by actor_id={current_user.id} (Role: {current_user.role}).")
 
     # 1. Authorization Check (Only Admins allowed)
     if current_user.role not in {UserRole.superadmin, UserRole.org_admin}:
-        logger.warning(f"Unauthorized creation attempt by {current_user.email}")
+        logger.warning(f"Unauthorized user creation attempt by actor_id={current_user.id}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough privileges to create users."
@@ -89,7 +89,7 @@ def create_user(
     db.commit()
     db.refresh(db_user)
     
-    logger.info(f"User {db_user.email} created successfully in Org {target_org_id}.")
+    logger.info(f"User user_id={db_user.id} created successfully in Org {target_org_id}.")
     
     return db_user
 

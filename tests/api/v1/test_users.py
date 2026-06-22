@@ -13,6 +13,7 @@ def test_create_user_org_admin_success(client: TestClient):
     """Test that an org_admin can create a doctor in their own organization."""
     
     class MockOrgAdmin:
+        id = "mock-org-admin"
         email = "admin@clinic.org"
         role = UserRole.org_admin
         organization_id = "org-123"
@@ -45,6 +46,7 @@ def test_create_user_org_admin_forbidden_role(client: TestClient):
     """Test that an org_admin CANNOT create another admin (privilege escalation)."""
     
     class MockOrgAdmin:
+        id = "mock-org-admin"
         email = "admin@clinic.org"
         role = UserRole.org_admin
         organization_id = "org-123"
@@ -67,6 +69,7 @@ def test_create_user_doctor_forbidden(client: TestClient):
     """Test that a doctor does NOT have access to user creation."""
     
     class MockDoctor:
+        id = "mock-doctor"
         email = "doctor@clinic.org"
         role = UserRole.doctor
         organization_id = "org-123"

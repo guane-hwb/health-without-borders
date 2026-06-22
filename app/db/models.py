@@ -75,19 +75,19 @@ class Patient(Base):
     can filter without scanning JSON. The full_record_json column remains the 
     authoritative source for the complete patient payload.
 
-    H3: Server-generated PK. The frontend-generated ID is kept for correlation
+    Server-generated PK. The frontend-generated ID is kept for correlation
     but the server controls the ID space with a per-org uniqueness constraint.
     """
     __tablename__ = "patients"
 
-    # 1. SERVER-GENERATED PRIMARY KEY (H3)
+    # 1. SERVER-GENERATED PRIMARY KEY
     id = Column(
         String, primary_key=True, index=True,
         default=lambda: str(uuid.uuid4()),
         comment="Server-generated UUID4 — the authoritative patient ID"
     )
 
-    # Frontend-generated ID kept for sync correlation (H3)
+    # Frontend-generated ID kept for sync correlation
     # Unique per organization so two orgs can independently register
     # the same frontend-generated ID without collision.
     frontend_patient_id = Column(
@@ -129,13 +129,13 @@ class Patient(Base):
     full_record_json = Column(JSON) 
     
     # --- FHIR Sync Tracking ---
-    # H7: Track synced encounters by UUID instead of count
+    # Track synced encounters by UUID instead of count
     synced_encounter_ids = Column(
         JSON, default=list, nullable=False, server_default="[]",
         comment="List of encounterIdentifier UUIDs already sent to FHIR Store"
     )
 
-    # H1: Background data hash for RDA-Paciente delta detection
+    # Background data hash for RDA-Paciente delta detection
     background_data_hash = Column(
         String(64), nullable=True,
         comment="SHA-256 hash of background data fields (patientInfo, guardianInfo, allergies, etc.)"
@@ -153,7 +153,7 @@ class Patient(Base):
     # Relationships
     organization = relationship("Organization", back_populates="patients")
 
-    # H3: Composite unique constraint — one frontend_patient_id per org
+    # Composite unique constraint — one frontend_patient_id per org
     __table_args__ = (
         UniqueConstraint(
             "frontend_patient_id", "organization_id",
@@ -168,7 +168,7 @@ class Patient(Base):
 
 class RevokedToken(Base):
     """
-    H4: Token revocation list.
+    Token revocation list.
     Stores the JTI (JWT ID) of tokens that have been explicitly revoked
     (e.g., via logout). Checked on every authenticated request.
 

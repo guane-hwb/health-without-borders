@@ -533,3 +533,31 @@ class PatientSyncResponse(BaseModel):
     fhir_status: Optional[str] = "unknown"
     vida_code: Optional[str] = Field(None, description="Código VIDA retornado por IHCE")
     message: str
+
+
+# ============================================================================
+# API REQUESTS
+# ============================================================================
+
+class PatientSearchRequest(BaseModel):
+    """
+    Body for the strict patient lookup endpoint.
+
+    Identity criteria travel in the request body (not the query string) so that
+    the patient's document number, names and birth date never appear in access
+    logs, proxy logs or browser history.
+    """
+    document_number: str = Field(
+        ..., min_length=3,
+        description="Número de documento de identidad del paciente (Res. 866 Elem. 2.2)",
+    )
+    birth_date: date = Field(..., description="Fecha de nacimiento del paciente (YYYY-MM-DD)")
+    first_name: str = Field(..., min_length=2, description="Primer nombre del paciente")
+    last_name: str = Field(
+        ..., min_length=2,
+        description="Primer o segundo apellido del paciente",
+    )
+    guardian_name: Optional[str] = Field(
+        None, min_length=3,
+        description="Nombre completo del acudiente (refuerza la verificación si el paciente tiene guardián)",
+    )

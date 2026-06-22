@@ -722,7 +722,7 @@ def test_search_exact_match_returns_patient(client: TestClient):
         "first_name": "Santiago",
         "last_name": "Rodríguez",
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 200
@@ -741,7 +741,7 @@ def test_search_by_second_last_name(client: TestClient):
         "first_name": "Santiago",
         "last_name": "Pérez",  # second last name
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 200
@@ -758,7 +758,7 @@ def test_search_case_insensitive(client: TestClient):
         "first_name": "santiago",           # lowercase
         "last_name": "rodríguez",           # lowercase
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 200
@@ -776,7 +776,7 @@ def test_search_with_guardian_name(client: TestClient):
         "last_name": "Rodríguez",
         "guardian_name": "María",  # partial match
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 200
@@ -793,7 +793,7 @@ def test_search_wrong_document_returns_404(client: TestClient):
         "first_name": "Santiago",
         "last_name": "Rodríguez",
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 404
@@ -810,7 +810,7 @@ def test_search_wrong_name_returns_404(client: TestClient):
         "first_name": "Carlos",  # wrong name
         "last_name": "Rodríguez",
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 404
@@ -826,7 +826,7 @@ def test_search_wrong_dob_returns_404(client: TestClient):
         "first_name": "Santiago",
         "last_name": "Rodríguez",
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 404
@@ -843,7 +843,7 @@ def test_search_wrong_guardian_returns_404(client: TestClient):
         "last_name": "Rodríguez",
         "guardian_name": "Pedro González",  # wrong guardian
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 404
@@ -859,7 +859,7 @@ def test_search_missing_mandatory_params_returns_422(client: TestClient):
         "first_name": "Santiago",
         "last_name": "Rodríguez",
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 422
@@ -990,15 +990,56 @@ def test_patient_repr(client: TestClient, db_session):
 # ============================================================================
 
 
-def test_rate_limit_extracts_forwarded_ip():
-    """When X-Forwarded-For is present, the leftmost IP is returned."""
+def test_rate_limit_uses_trusted_proxy_ip():
+    """The IP appended by the trusted proxy is used, not the spoofable leftmost."""
     from unittest.mock import MagicMock
 
     from app.core.rate_limit import _get_real_client_ip
 
     request = MagicMock()
-    request.headers = {"x-forwarded-for": "181.52.100.1, 10.0.0.1, 10.0.0.2"}
-    assert _get_real_client_ip(request) == "181.52.100.1"
+    # Attacker prepends a fake IP; the single trusted proxy appends the real one.
+    request.headers = {"x-forwarded-for": "1.2.3.4, 200.115.50.10"}
+    # Default TRUSTED_PROXY_HOPS = 1 -> rightmost (trusted) entry, not "1.2.3.4".
+    assert _get_real_client_ip(request) == "200.115.50.10"
+
+
+def test_rate_limit_respects_trusted_proxy_hops():
+    """With N trusted hops, the client IP is the N-th entry counted from the right."""
+    from unittest.mock import MagicMock
+
+    from app.core import rate_limit
+
+    request = MagicMock()
+    request.headers = {"x-forwarded-for": "1.2.3.4, 200.115.50.10, 10.0.0.1"}
+    original = rate_limit.settings.TRUSTED_PROXY_HOPS
+    try:
+        rate_limit.settings.TRUSTED_PROXY_HOPS = 2
+        assert rate_limit._get_real_client_ip(request) == "200.115.50.10"
+    finally:
+        rate_limit.settings.TRUSTED_PROXY_HOPS = original
+
+
+def test_rate_limit_short_chain_falls_back_to_first():
+    """If the chain is shorter than the configured hops, fall back to the first entry."""
+    from unittest.mock import MagicMock
+
+    from app.core.rate_limit import _get_real_client_ip
+
+    request = MagicMock()
+    request.headers = {"x-forwarded-for": "200.115.50.10"}
+    assert _get_real_client_ip(request) == "200.115.50.10"
+
+
+def test_rate_limit_no_forwarded_uses_peer():
+    """Without X-Forwarded-For, the direct peer address is used."""
+    from unittest.mock import MagicMock
+
+    from app.core.rate_limit import _get_real_client_ip
+
+    request = MagicMock()
+    request.headers = {}
+    request.client.host = "203.0.113.5"
+    assert _get_real_client_ip(request) == "203.0.113.5"
 
 
 def test_rate_limit_redis_branch():

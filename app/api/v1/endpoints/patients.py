@@ -3,7 +3,7 @@ import logging
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -12,7 +12,11 @@ from app.core.phi_sanitizer import mask_id
 from app.core.rate_limit import limiter
 from app.db.models import User, UserRole
 from app.db.session import get_db
-from app.schemas.patient import PatientFullRecord, PatientSyncResponse
+from app.schemas.patient import (
+    PatientFullRecord,
+    PatientSearchRequest,
+    PatientSyncResponse,
+)
 from app.services.fhir import fhir_backend
 from app.services.fhir_service import convert_to_fhir_rda
 from app.services.llm import medical_llm_processor
@@ -70,7 +74,7 @@ async def get_patient_by_device_uid_scan(
         mask_id(device_uid),
     )
     
-    # H5: Wrap synchronous DB call in to_thread to avoid blocking the event loop
+    # Wrap synchronous DB call in to_thread to avoid blocking the event loop
     patient_db = await asyncio.to_thread(get_patient_by_device_uid, db, device_uid)
     
     if not patient_db:
@@ -133,9 +137,9 @@ async def sync_patient(
     2. If any `familyHistory` item lacks ICD codes, the LLM resolves them.
     3. The record is persisted or updated in PostgreSQL.
     4. Only NEW FHIR RDA Bundles are generated (delta logic):
-       - RDA-Paciente: on first sync or when background data changes (H1).
+       - RDA-Paciente: on first sync or when background data changes.
        - RDA-Consulta: only for visits not previously sent, identified by
-         encounterIdentifier UUID (H7).
+         encounterIdentifier UUID.
     5. Bundles are transmitted to the Google Cloud Healthcare API.
     6. Sync tracking is updated in the database.
 
@@ -221,7 +225,7 @@ async def sync_patient(
                     if coded.get("description"):
                         cc_item.chronicDescription = coded["description"]
 
-        # 1. Save to DB (H5: wrapped in to_thread to avoid blocking the event loop)
+        # 1. Save to DB (wrapped in to_thread to avoid blocking the event loop)
         logger.info(
             "Patient sync started actor_id=%s role=%s org_id=%s patient_ref=%s",
             current_user.id,
@@ -236,12 +240,12 @@ async def sync_patient(
             )
         )
         
-        # H1: Determine if background data changed by comparing hashes
+        # Determine if background data changed by comparing hashes
         background_data_changed = (
             rda_paciente_sent and old_bg_hash != saved_patient.background_data_hash
         )
 
-        # 2. FHIR RDA Conversion — DELTA by encounter UUID (H7) + background hash (H1)
+        # 2. FHIR RDA Conversion — DELTA by encounter UUID + background hash
         fhir_bundles, new_encounter_ids = convert_to_fhir_rda(
             patient_data,
             synced_encounter_ids=synced_encounter_ids,
@@ -276,7 +280,7 @@ async def sync_patient(
 
         # 4. Update sync tracking ONLY if FHIR upload succeeded
         if all_success and fhir_bundles:
-            # H7: Append new encounter IDs to the synced set
+            # Append new encounter IDs to the synced set
             updated_ids = list(set(synced_encounter_ids + new_encounter_ids))
             saved_patient.synced_encounter_ids = updated_ids
             saved_patient.rda_paciente_sent = True
@@ -310,15 +314,11 @@ async def sync_patient(
             detail="Internal Server Error processing patient data."
         )
 
-@router.get("/search", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
+@router.post("/search", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
 @limiter.limit(settings.RATE_LIMIT_PATIENT_SEARCH)
 async def search_patient(
     request: Request,
-    document_number: str = Query(..., min_length=3, description="Número de documento de identidad del paciente (Res. 866 Elem. 2.2)"),
-    birth_date: date = Query(..., description="Fecha de nacimiento del paciente (YYYY-MM-DD)"),
-    first_name: str = Query(..., min_length=2, description="Primer nombre del paciente"),
-    last_name: str = Query(..., min_length=2, description="Primer o segundo apellido del paciente"),
-    guardian_name: Optional[str] = Query(None, min_length=3, description="Nombre completo del acudiente (obligatorio si el paciente tiene guardián registrado)"),
+    criteria: PatientSearchRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -329,15 +329,17 @@ async def search_patient(
     in compliance with Ley 1581 de 2012 (Habeas Data) and Ley 1751 de 2015.
     It will **never** return a list of patients.
 
-    **All four parameters are mandatory:**
+    Identity criteria are sent in the **request body** (not the query string) so
+    that the document number, names and birth date never leak into access logs,
+    proxies or browser history.
+
+    **Body fields (`PatientSearchRequest`):**
     - `document_number`: Exact match against the patient's identity document.
     - `birth_date`: Exact match (YYYY-MM-DD).
     - `first_name`: Exact match (case-insensitive).
     - `last_name`: Exact match against first OR second last name (case-insensitive).
-
-    **Conditional parameter:**
-    - `guardian_name`: If the patient has a registered guardian, providing this 
-      adds an extra layer of verification. Partial match is allowed.
+    - `guardian_name` (optional): If the patient has a registered guardian,
+      providing this adds an extra layer of verification. Partial match is allowed.
 
     **Security:**
     - If the criteria match more than one patient (ambiguous), the endpoint 
@@ -349,7 +351,7 @@ async def search_patient(
     - `200`: Patient record found and returned.
     - `403`: Caller is not authorized.
     - `404`: No patient found matching the provided criteria.
-    - `422`: Missing or malformed mandatory parameters.
+    - `422`: Missing or malformed body fields.
     """
     if current_user.role not in {UserRole.doctor, UserRole.nurse, UserRole.org_admin}:
         raise HTTPException(
@@ -362,18 +364,18 @@ async def search_patient(
         current_user.id,
         current_user.role,
         current_user.organization_id,
-        mask_id(document_number),
+        mask_id(criteria.document_number),
     )
 
-    # H5: Wrap synchronous DB call in to_thread
+    # Wrap synchronous DB call in to_thread to avoid blocking the event loop
     patient = await asyncio.to_thread(
         find_patient_strict,
         db=db,
-        document_number=document_number,
-        birth_date=birth_date,
-        first_name=first_name,
-        last_name=last_name,
-        guardian_name=guardian_name,
+        document_number=criteria.document_number,
+        birth_date=criteria.birth_date,
+        first_name=criteria.first_name,
+        last_name=criteria.last_name,
+        guardian_name=criteria.guardian_name,
     )
 
     if not patient:

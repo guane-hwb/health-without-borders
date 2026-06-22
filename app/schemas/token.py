@@ -11,7 +11,7 @@ class Token(BaseModel):
 
 class TokenPair(BaseModel):
     """
-    H4: Full token pair — short-lived access token + long-lived refresh token.
+    Full token pair — short-lived access token + long-lived refresh token.
     """
     access_token: str
     refresh_token: str
@@ -22,6 +22,17 @@ class TokenPair(BaseModel):
 class RefreshRequest(BaseModel):
     """Body for the /login/refresh endpoint."""
     refresh_token: str
+
+
+class LogoutRequest(BaseModel):
+    """
+    Optional body for the /logout endpoint.
+
+    When the client sends its refresh token here, the server revokes it
+    alongside the access token so the session is fully terminated and the
+    refresh token can no longer mint new access tokens.
+    """
+    refresh_token: Optional[str] = None
 
 
 class TokenPayload(BaseModel):

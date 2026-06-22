@@ -551,6 +551,14 @@ class TestBuildCondition:
         assert r["resourceType"] == "Condition"
         assert r["code"]["coding"][0]["code"] == "J06.9"
 
+    def test_verification_status_has_system(self):
+        diag = DiagnosisItem(icd10Code="J06.9", description="Infección respiratoria")
+        r = _build_condition(diag, "PT-VZ-001", "Condition-0")
+        assert (
+            r["verificationStatus"]["coding"][0]["system"]
+            == "http://terminology.hl7.org/CodeSystem/condition-ver-status"
+        )
+
     def test_includes_icd11_when_present(self):
         diag = DiagnosisItem(icd10Code="J06.9", icd11Code="CA0Z", description="Infección")
         r = _build_condition(diag, "PT-VZ-001", "Condition-0")
@@ -572,6 +580,14 @@ class TestBuildConditionStatement:
         r = _build_condition_statement(cond, "PT-VZ-001", "Condition-0")
         assert r["code"]["text"] == "Condición desconocida"
 
+    def test_verification_status_has_system(self):
+        cond = ChronicConditionItem(chronicDescription="Diabetes", chronicCie10Code="E11")
+        r = _build_condition_statement(cond, "PT-VZ-001", "Condition-0")
+        assert (
+            r["verificationStatus"]["coding"][0]["system"]
+            == "http://terminology.hl7.org/CodeSystem/condition-ver-status"
+        )
+
 
 class TestBuildAllergyStatement:
     def test_basic_structure(self):
@@ -582,6 +598,18 @@ class TestBuildAllergyStatement:
         assert r["code"]["text"] == "Penicilina"
         assert "reaction" in r
         assert "note" in r
+
+    def test_status_codings_have_systems(self):
+        allergy = AllergyInfo(category=AllergyCategory.MEDICAMENTO, allergen="Penicilina")
+        r = _build_allergy_statement(allergy, "PT-VZ-001", "Allergy-0")
+        assert (
+            r["clinicalStatus"]["coding"][0]["system"]
+            == "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical"
+        )
+        assert (
+            r["verificationStatus"]["coding"][0]["system"]
+            == "http://terminology.hl7.org/CodeSystem/allergyintolerance-verification"
+        )
 
     def test_encounter_allergy_adds_encounter_ref(self):
         allergy = AllergyInfo(category=AllergyCategory.ALIMENTO, allergen="Maní")

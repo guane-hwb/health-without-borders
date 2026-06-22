@@ -31,7 +31,7 @@ def create_organization(
     - `403`: Caller is not a `superadmin`.
     """
     if current_user.role != UserRole.superadmin:
-        logger.warning(f"Unauthorized organization creation attempt by {current_user.email}")
+        logger.warning(f"Unauthorized organization creation attempt by actor_id={current_user.id}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only global SuperAdmins can create new organizations."
@@ -54,7 +54,7 @@ def create_organization(
     db.commit()
     db.refresh(new_org)
     
-    logger.info(f"✅ SuperAdmin {current_user.email} created new Organization: {new_org.name} (ID: {new_org.id})")
+    logger.info(f"✅ SuperAdmin actor_id={current_user.id} created new Organization: {new_org.name} (ID: {new_org.id})")
     
     return new_org
 
