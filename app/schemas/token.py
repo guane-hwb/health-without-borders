@@ -17,6 +17,10 @@ class TokenPair(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int  # Access token TTL in seconds
+    # Organization-wide AES-256 master key (hex) used to encrypt/decrypt NFC
+    # payloads offline. Delivered at login so the device can write and read
+    # wristband data without a second round-trip.
+    nfc_encryption_key: Optional[str] = None
 
 
 class RefreshRequest(BaseModel):

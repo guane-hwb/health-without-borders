@@ -93,6 +93,7 @@ def login_access_token(
         refresh_token=refresh_token,
         token_type="bearer",
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        nfc_encryption_key=settings.NFC_MASTER_KEY or None,
     )
 
 
