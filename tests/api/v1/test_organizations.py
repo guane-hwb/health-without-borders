@@ -12,6 +12,7 @@ def test_create_organization_superadmin_success(client: TestClient):
     """Test that a superadmin CAN create organizations."""
     
     class MockSuperAdmin:
+        id = "mock-superadmin"
         email = "boss@global.org"
         role = "superadmin"
         
@@ -41,6 +42,7 @@ def test_create_organization_forbidden(client: TestClient):
     
     # Mock Auth (Org Admin)
     class MockOrgAdmin:
+        id = "mock-org-admin"
         email = "admin@unicef.org"
         role = "org_admin"
         

@@ -96,6 +96,7 @@ SYSTEM_UNITS = "http://unitsofmeasure.org"
 SYSTEM_CONDITION_CLINICAL = "http://terminology.hl7.org/CodeSystem/condition-clinical"
 SYSTEM_CONDITION_VER_STATUS = "http://terminology.hl7.org/CodeSystem/condition-ver-status"
 SYSTEM_ALLERGY_CLINICAL = "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical"
+SYSTEM_ALLERGY_VER_STATUS = "http://terminology.hl7.org/CodeSystem/allergyintolerance-verification"
 SYSTEM_ACT_CODE = "http://terminology.hl7.org/CodeSystem/v3-ActCode"
 SYSTEM_HL7_ID_TYPE = "http://terminology.hl7.org/CodeSystem/v2-0203"
 SYSTEM_PARTICIPATION = "http://terminology.hl7.org/CodeSystem/v3-ParticipationType"
@@ -693,7 +694,8 @@ def _build_condition(diag, patient_id: str, cond_id: str) -> Dict[str, Any]:
         "meta": {"profile": [PROFILE_CONDITION]},
         "clinicalStatus": {"coding": [{"code": "active", "system": SYSTEM_CONDITION_CLINICAL,
                                         "display": "Active"}]},
-        "verificationStatus": {"coding": [{"code": "confirmed", "display": "Confirmed"}]},
+        "verificationStatus": {"coding": [{"system": SYSTEM_CONDITION_VER_STATUS,
+                                            "code": "confirmed", "display": "Confirmed"}]},
         "category": [{"coding": [{"system": SYSTEM_CONDITION_CATEGORY,
                                    "code": "encounter-diagnosis",
                                    "display": "Encounter Diagnosis"}]}],
@@ -710,7 +712,8 @@ def _build_condition_statement(cond: ChronicConditionItem, patient_id: str,
         "meta": {"profile": [PROFILE_CONDITION_STMT]},
         "clinicalStatus": {"coding": [{"code": "active", "system": SYSTEM_CONDITION_CLINICAL,
                                         "display": "Active"}]},
-        "verificationStatus": {"coding": [{"code": "unconfirmed", "display": "Unconfirmed"}]},
+        "verificationStatus": {"coding": [{"system": SYSTEM_CONDITION_VER_STATUS,
+                                            "code": "unconfirmed", "display": "Unconfirmed"}]},
         "category": [{"coding": [{"system": SYSTEM_CONDITION_CATEGORY,
                                    "code": "encounter-diagnosis",
                                    "display": "Encounter Diagnosis"}]}],
@@ -732,8 +735,10 @@ def _build_allergy_statement(allergy, patient_id: str, a_id: str) -> Dict[str, A
         "resourceType": "AllergyIntolerance",
         "id": a_id,
         "meta": {"profile": [PROFILE_ALLERGY_STMT]},
-        "clinicalStatus": {"coding": [{"code": "active", "display": "Active"}]},
-        "verificationStatus": {"coding": [{"code": "unconfirmed", "display": "Unconfirmed"}]},
+        "clinicalStatus": {"coding": [{"system": SYSTEM_ALLERGY_CLINICAL,
+                                        "code": "active", "display": "Active"}]},
+        "verificationStatus": {"coding": [{"system": SYSTEM_ALLERGY_VER_STATUS,
+                                            "code": "unconfirmed", "display": "Unconfirmed"}]},
         "code": {
             "coding": [{"system": SYSTEM_ALLERGY_CAT, "code": allergy.category.value,
                         "display": _allergy_category_display(allergy.category)}],
@@ -1284,7 +1289,7 @@ def convert_to_fhir_rda(
         patient: The full patient record.
         synced_encounter_ids: Set of encounter UUIDs already sent to FHIR.
         rda_paciente_already_sent: Whether RDA-Paciente was sent at least once.
-        background_data_changed: Whether the background data hash changed (H1).
+        background_data_changed: Whether the background data hash changed.
 
     Returns:
         Tuple of (list of FHIR bundles, list of NEW encounter IDs that were bundled).
@@ -1294,7 +1299,7 @@ def convert_to_fhir_rda(
     synced_set = set(synced_encounter_ids or [])
     patient_ref = safe_patient_ref(patient.patientId)
 
-    # H7: Identify new visits by encounter UUID, not by list index
+    # Identify new visits by encounter UUID, not by list index
     new_visits: list[MedicalHistoryItem] = []
     new_encounter_ids: list[str] = []
     for visit in patient.medicalHistory:
@@ -1303,7 +1308,7 @@ def convert_to_fhir_rda(
             new_visits.append(visit)
             new_encounter_ids.append(enc_id)
 
-    # H1: Re-send RDA-Paciente only when background data changed or never sent
+    # Re-send RDA-Paciente only when background data changed or never sent
     needs_rda_paciente = (
         not rda_paciente_already_sent
         or background_data_changed

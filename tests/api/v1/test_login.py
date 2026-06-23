@@ -10,7 +10,7 @@ Covers:
 from fastapi.testclient import TestClient
 
 from app.core.security import get_password_hash
-from app.db.models import Organization, User, UserRole
+from app.db.models import Organization, RevokedToken, User, UserRole
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -249,6 +249,79 @@ class TestLogout:
         )
         assert response.status_code == 401
         assert "revoked" in response.json()["detail"].lower()
+
+    def test_logout_revokes_refresh_token(self, client: TestClient, db_session):
+        """Sending the refresh token in the logout body revokes it too."""
+        tokens = self._setup_and_login(client, db_session)
+        access_token = tokens["access_token"]
+        refresh_token = tokens["refresh_token"]
+
+        response = client.post(
+            "/api/v1/logout",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"refresh_token": refresh_token},
+        )
+        assert response.status_code == 204
+
+        # The refresh token can no longer mint new access tokens
+        response = client.post(
+            "/api/v1/login/refresh",
+            json={"refresh_token": refresh_token},
+        )
+        assert response.status_code == 401
+
+    def test_logout_without_refresh_keeps_it_valid(self, client: TestClient, db_session):
+        """Logout without a body revokes only the access token; refresh still works."""
+        tokens = self._setup_and_login(client, db_session)
+
+        response = client.post(
+            "/api/v1/logout",
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+        assert response.status_code == 204
+
+        response = client.post(
+            "/api/v1/login/refresh",
+            json={"refresh_token": tokens["refresh_token"]},
+        )
+        assert response.status_code == 200
+
+    def test_logout_ignores_invalid_refresh_token(self, client: TestClient, db_session):
+        """A malformed refresh token in the body must not break logout."""
+        tokens = self._setup_and_login(client, db_session)
+
+        response = client.post(
+            "/api/v1/logout",
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+            json={"refresh_token": "not.a.valid.jwt"},
+        )
+        assert response.status_code == 204
+
+    def test_logout_purges_expired_revoked_tokens(self, client: TestClient, db_session):
+        """Logout removes revocation rows whose tokens have already expired."""
+        from datetime import datetime, timedelta, timezone
+
+        db_session.add(RevokedToken(
+            jti="expired-jti",
+            expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+        ))
+        db_session.add(RevokedToken(
+            jti="future-jti",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        ))
+        db_session.commit()
+
+        tokens = self._setup_and_login(client, db_session)
+        response = client.post(
+            "/api/v1/logout",
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+        assert response.status_code == 204
+
+        db_session.expire_all()
+        remaining = {t.jti for t in db_session.query(RevokedToken).all()}
+        assert "expired-jti" not in remaining  # purged
+        assert "future-jti" in remaining       # kept
 
     def test_logout_is_idempotent(self, client: TestClient, db_session):
         """H4: Logging out twice with the same token returns 204 both times."""

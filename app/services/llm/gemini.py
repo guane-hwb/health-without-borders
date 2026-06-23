@@ -5,7 +5,7 @@ Key features:
     the Vulcano IHCE terminology catalog before being accepted.
   - Honest fallback: on LLM error, returns R69 ("unknown morbidity")
     instead of fabricating a false diagnosis like Z00.0.
-  - PHI sanitization: clinical text is NOT logged (C3 remediation).
+  - PHI sanitization: clinical text is NOT logged.
 """
 
 import json

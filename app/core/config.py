@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # --- SECURITY ---
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour (H4: was 30 days)
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days
     
     # --- NFC ---
@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: str = ""
     RATE_LIMIT_LOGIN: str = "10/minute"
     RATE_LIMIT_PATIENT_SEARCH: str = "30/minute"
+    # Number of trusted reverse proxies that append to X-Forwarded-For.
+    # The client IP is read from the entry these proxies added, never from
+    # the client-controlled leftmost value. Set to match the deployment
+    # (1 = single trusted front proxy, e.g. Cloud Run / a load balancer).
+    TRUSTED_PROXY_HOPS: int = 1
 
     # --- REDIS (for rate limiting and token revocation) ---
     # Optional: falls back to in-memory storage when not set (local dev)
