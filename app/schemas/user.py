@@ -27,6 +27,10 @@ class UserCreate(UserBase):
     password: str = Field(..., min_length=8, description="Temporary password")
     organization_id: Optional[str] = Field(None, description="Required only if superadmin is creating an org_admin")
 
+class UserUpdate(BaseModel):
+    """Payload to toggle a user's active state (soft deactivate)."""
+    is_active: bool = Field(..., description="New active state for the user")
+
 class UserResponse(UserBase):
     """
     Schema for returning user data (hides the password).
