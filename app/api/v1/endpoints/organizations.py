@@ -240,17 +240,21 @@ def delete_organization(
     """
     Permanently delete an organization (hard delete).
 
-    Only permitted when the organization is EMPTY (no users and no patients),
-    to avoid orphaning accounts or, worse, destroying clinical history. For any
-    non-empty organization, deactivate it instead (see PATCH).
+    Permitted only when the organization has NO patients, because clinical
+    records are irreversible and must never be destroyed by an account-management
+    action. Its user accounts (admins and staff), which are recreable, are
+    removed in the SAME transaction so that an organization provisioned with an
+    initial admin can still be torn down. For any organization that has patients,
+    deactivate it instead (see PATCH).
 
     - **Allowed roles:** `superadmin` only.
-    - **Guards:** cannot delete your own organization; cannot delete a non-empty one.
+    - **Guards:** cannot delete your own organization; cannot delete one that
+      still has patients.
     - **Responses:**
-    - `204`: Organization deleted.
+    - `204`: Organization (and its users) deleted.
     - `403`: Caller is not a `superadmin`, or is deleting their own organization.
     - `404`: Organization not found.
-    - `409`: Organization still has users and/or patients.
+    - `409`: Organization still has patients.
     """
     if current_user.role != UserRole.superadmin:
         raise HTTPException(
@@ -271,27 +275,41 @@ def delete_organization(
             detail="You cannot delete your own organization.",
         )
 
-    user_count = (
-        db.query(func.count(User.id)).filter(User.organization_id == org.id).scalar()
-    ) or 0
     patient_count = (
         db.query(func.count(Patient.id)).filter(Patient.organization_id == org.id).scalar()
     ) or 0
 
-    if user_count > 0 or patient_count > 0:
+    if patient_count > 0:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                f"Organization is not empty ({user_count} user(s), "
-                f"{patient_count} patient(s)). Deactivate it or remove its "
-                f"members before deleting."
+                f"Organization has {patient_count} patient(s). Clinical records "
+                f"cannot be deleted — deactivate the organization instead."
             ),
         )
 
-    db.delete(org)
-    db.commit()
+    try:
+        # Cascade: remove the organization's user accounts first (they FK to the
+        # organization), then the organization itself — one atomic transaction.
+        deleted_users = (
+            db.query(User)
+            .filter(User.organization_id == org.id)
+            .delete(synchronize_session=False)
+        )
+        db.delete(org)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Failed to delete Organization %s actor_id=%s", org_id, current_user.id
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete the organization.",
+        )
+
     logger.info(
-        "SuperAdmin actor_id=%s hard-deleted empty Organization %s",
-        current_user.id, org_id,
+        "SuperAdmin actor_id=%s hard-deleted Organization %s (cascaded %s user(s))",
+        current_user.id, org_id, deleted_users,
     )
     return None

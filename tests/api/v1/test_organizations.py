@@ -62,7 +62,7 @@ def test_create_organization_forbidden(client: TestClient):
 # ===========================================================================
 
 from app.core.security import get_password_hash  # noqa: E402
-from app.db.models import Organization, User, UserRole  # noqa: E402
+from app.db.models import Organization, Patient, User, UserRole  # noqa: E402
 
 
 def _seed_superadmin(db):
@@ -168,19 +168,17 @@ def test_delete_empty_organization(client, db_session):
     assert db_session.query(Organization).filter(Organization.id == org.id).first() is None
 
 
-def test_delete_nonempty_organization_conflict(client, db_session):
+def test_delete_organization_with_patients_conflict(client, db_session):
+    """An organization with any patients is protected (409), never deleted."""
     sa = _seed_superadmin(db_session)
     org = Organization(name="Busy Org", is_active=True)
     db_session.add(org)
     db_session.flush()
     db_session.add(
-        User(
-            email="member@busy.org",
-            full_name="Some Member",
-            hashed_password=get_password_hash("password123"),
-            role=UserRole.doctor,
-            is_active=True,
+        Patient(
+            frontend_patient_id="fp-1",
             organization_id=org.id,
+            device_uid="dev-uid-busy-1",
         )
     )
     db_session.commit()
@@ -190,6 +188,45 @@ def test_delete_nonempty_organization_conflict(client, db_session):
     resp = client.delete(f"/api/v1/organizations/{org.id}")
     assert resp.status_code == 409, resp.text
     assert db_session.query(Organization).filter(Organization.id == org.id).first() is not None
+
+
+def test_delete_organization_cascades_users(client, db_session):
+    """With no patients, deleting an org also removes its users (admin + staff)."""
+    sa = _seed_superadmin(db_session)
+    org = Organization(name="Provisioned Org", is_active=True)
+    db_session.add(org)
+    db_session.flush()
+    db_session.add_all(
+        [
+            User(
+                email="admin@prov.org",
+                full_name="Org Admin",
+                hashed_password=get_password_hash("password123"),
+                role=UserRole.org_admin,
+                is_active=True,
+                organization_id=org.id,
+            ),
+            User(
+                email="doc@prov.org",
+                full_name="Some Doctor",
+                hashed_password=get_password_hash("password123"),
+                role=UserRole.doctor,
+                is_active=True,
+                organization_id=org.id,
+            ),
+        ]
+    )
+    db_session.commit()
+    org_id = org.id
+    app.dependency_overrides[get_current_user] = lambda: sa
+
+    resp = client.delete(f"/api/v1/organizations/{org_id}")
+    assert resp.status_code == 204, resp.text
+    assert db_session.query(Organization).filter(Organization.id == org_id).first() is None
+    remaining = (
+        db_session.query(User).filter(User.organization_id == org_id).count()
+    )
+    assert remaining == 0
 
 
 def test_delete_own_organization_forbidden(client, db_session):
