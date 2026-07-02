@@ -255,3 +255,42 @@ def test_delete_organization_forbidden_for_org_admin(client, db_session):
 
     resp = client.delete(f"/api/v1/organizations/{org.id}")
     assert resp.status_code == 403, resp.text
+
+
+def test_delete_organization_rolls_back_on_error(client, db_session, monkeypatch):
+    """If the cascade fails mid-transaction, nothing is deleted and 500 is returned."""
+    sa = _seed_superadmin(db_session)
+    org = Organization(name="Boom Org", is_active=True)
+    db_session.add(org)
+    db_session.flush()
+    db_session.add(
+        User(
+            email="member@boom.org",
+            full_name="Boom Member",
+            hashed_password=get_password_hash("password123"),
+            role=UserRole.doctor,
+            is_active=True,
+            organization_id=org.id,
+        )
+    )
+    db_session.commit()
+    org_id = org.id
+    app.dependency_overrides[get_current_user] = lambda: sa
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    # Force the org delete (after the user bulk-delete) to blow up.
+    monkeypatch.setattr(db_session, "delete", _boom)
+
+    resp = client.delete(f"/api/v1/organizations/{org_id}")
+    assert resp.status_code == 500, resp.text
+
+    # Rolled back: both the organization and its user survive.
+    assert (
+        db_session.query(Organization).filter(Organization.id == org_id).first()
+        is not None
+    )
+    assert (
+        db_session.query(User).filter(User.organization_id == org_id).count() == 1
+    )
