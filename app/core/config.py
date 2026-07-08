@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     GCP_DATASET_ID: Optional[str] = None
     GCP_FHIR_STORE_ID: Optional[str] = None
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None
-    LLM_MODEL_NAME: str = "gemini-2.5-pro"
+    LLM_MODEL_NAME: str = "gemini-3-flash-preview"
     
     # --- SECURITY ---
     SECRET_KEY: str

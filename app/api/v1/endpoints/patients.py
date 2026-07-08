@@ -21,6 +21,7 @@ from app.services.fhir import fhir_backend
 from app.services.fhir_service import convert_to_fhir_rda
 from app.services.llm import medical_llm_processor
 from app.services.patient_service import (
+    DeviceUidConflictError,
     create_or_update_patient,
     find_patient_strict,
     get_existing_history_count,
@@ -145,6 +146,9 @@ async def sync_patient(
 
     **Nurse restriction:** A `nurse` may call this endpoint to append vaccination records,
     but cannot add new entries to `medicalHistory`. Attempts to do so will return `403`.
+
+    **Device tag conflict:** If the record's `device_uid` is already registered to a
+    different patient, the endpoint returns `409` and no record is created or modified.
 
     **Allowed roles:** `doctor`, `nurse`.
     """
@@ -301,6 +305,17 @@ async def sync_patient(
 
     except HTTPException:
         raise
+
+    except DeviceUidConflictError:
+        logger.warning(
+            "Patient sync device tag conflict actor_id=%s org_id=%s",
+            current_user.id,
+            current_user.organization_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A patient is already registered with this device tag.",
+        )
 
     except Exception:
         logger.exception(

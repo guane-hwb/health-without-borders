@@ -210,6 +210,64 @@ def test_sync_patient_success(client: TestClient):
     assert data["fhir_status"] == "success"
 
 
+def test_sync_duplicate_device_uid_returns_409(client: TestClient, db_session):
+    """A new patient reusing an existing device_uid is rejected with 409, not 500."""
+    from app.db.models import Patient
+
+    first = _sync_patient(client)
+    assert first.status_code == 201
+
+    # Different patient (distinct patientId + document) reusing the same tag.
+    duplicate = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "TEST-UNIT-DUP",
+        "patientInfo": {
+            **MOCK_PATIENT_PAYLOAD["patientInfo"],
+            "identification": {
+                "documentType": "PT",
+                "documentNumber": "VZ-0000000",
+            },
+        },
+    }
+    response = _sync_patient(client, payload=duplicate)
+    _clear_overrides()
+
+    assert response.status_code == 409
+    # The conflicting record must not have been persisted.
+    assert (
+        db_session.query(Patient)
+        .filter(Patient.frontend_patient_id == "TEST-UNIT-DUP")
+        .first()
+        is None
+    )
+    # The original tag owner is untouched.
+    assert (
+        db_session.query(Patient)
+        .filter(Patient.device_uid == MOCK_PATIENT_PAYLOAD["device_uid"])
+        .count()
+        == 1
+    )
+
+
+def test_sync_bracelet_replacement_conflict_returns_409(client: TestClient):
+    """Reassigning an existing patient's device_uid to a tag owned by another
+    patient is rejected with 409, not 500."""
+    a = _sync_patient(client, payload=MOCK_PATIENT_PAYLOAD)
+    assert a.status_code == 201
+    b = _sync_patient(client, payload=MOCK_PATIENT_WITH_VISIT)
+    assert b.status_code == 201
+
+    # Re-sync patient B, but point its tag at patient A's device_uid.
+    collide = {
+        **MOCK_PATIENT_WITH_VISIT,
+        "device_uid": MOCK_PATIENT_PAYLOAD["device_uid"],
+    }
+    response = _sync_patient(client, payload=collide)
+    _clear_overrides()
+
+    assert response.status_code == 409
+
+
 def test_sync_patient_with_visit_generates_multiple_bundles(client: TestClient):
     """Syncing with 1 visit generates 2 FHIR bundles (RDA-Paciente + RDA-Consulta)."""
     _override_doctor()
