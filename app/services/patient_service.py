@@ -5,6 +5,7 @@ from datetime import date
 from typing import Optional
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.phi_sanitizer import mask_id, safe_patient_ref
@@ -14,6 +15,18 @@ from app.services.record_merger import merge_patient_records
 
 # Setup Logger
 logger = logging.getLogger(__name__)
+
+
+class DeviceUidConflictError(Exception):
+    """
+    Raised when a patient sync would bind a ``device_uid`` (NFC tag / bracelet)
+    that is already registered to a different patient.
+
+    ``device_uid`` is globally unique, so this covers both a brand-new patient
+    reusing an existing tag and a bracelet replacement that points an existing
+    patient at a tag owned by someone else. The API layer maps this to a
+    ``409 Conflict`` instead of a generic ``500``.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +78,29 @@ def get_patient_by_device_uid(db: Session, device_uid: str) -> Optional[Patient]
     return db.query(Patient).filter(
         Patient.device_uid == device_uid,
     ).first()
+
+
+def _ensure_device_uid_available(
+    db: Session, device_uid: str, exclude_patient_id: Optional[str] = None
+) -> None:
+    """
+    Guard the global uniqueness of ``device_uid`` before a write.
+
+    Raises ``DeviceUidConflictError`` if the tag is already bound to a different
+    patient. On creation, any existing owner is a conflict. On bracelet
+    replacement, the tag's current owner may legitimately be the same patient,
+    so ``exclude_patient_id`` is used to skip that self-match.
+    """
+    owner = get_patient_by_device_uid(db, device_uid)
+    if owner is not None and owner.id != exclude_patient_id:
+        logger.warning(
+            "Device tag already registered to another patient existing_ref=%s device=%s",
+            safe_patient_ref(owner.id),
+            mask_id(device_uid),
+        )
+        raise DeviceUidConflictError(
+            "A patient is already registered with this device tag."
+        )
 
 
 def find_patient_strict(
@@ -218,14 +254,28 @@ def create_or_update_patient(
 
         # BRACELET REPLACEMENT (Update device_uid)
         if patient_in.device_uid and patient_in.device_uid != existing_patient.device_uid:
+            # Reject early if the new tag already belongs to another patient.
+            _ensure_device_uid_available(
+                db, patient_in.device_uid, exclude_patient_id=existing_patient.id
+            )
             logger.info("Device tag updated for patient %s", safe_patient_ref(existing_patient.id))
             existing_patient.device_uid = patient_in.device_uid
 
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # Safety net for the race between the pre-check above and this commit.
+            db.rollback()
+            raise DeviceUidConflictError(
+                "A patient is already registered with this device tag."
+            )
         db.refresh(existing_patient)
         return existing_patient, synced_encounter_ids, old_bg_hash, rda_paciente_sent
 
     else:
+        # Reject early if this tag is already registered to any patient.
+        _ensure_device_uid_available(db, patient_in.device_uid)
+
         logger.info("Creating new patient record: %s", safe_patient_ref(patient_in.patientId))
         pi = patient_in.patientInfo
 
@@ -254,7 +304,14 @@ def create_or_update_patient(
         )
 
         db.add(db_patient)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # Safety net for the race between the pre-check above and this commit.
+            db.rollback()
+            raise DeviceUidConflictError(
+                "A patient is already registered with this device tag."
+            )
         db.refresh(db_patient)
         # New patient: no synced encounters, empty hash, not sent
         return db_patient, [], "", False

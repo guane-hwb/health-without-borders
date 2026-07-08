@@ -1,11 +1,18 @@
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_current_user
 from app.db.models import UserRole
 from app.main import app
+from app.schemas.patient import PatientFullRecord
 from app.services.fhir import fhir_backend
+from app.services.patient_service import (
+    DeviceUidConflictError,
+    create_or_update_patient,
+)
 
 
 class MockUser:
@@ -208,6 +215,98 @@ def test_sync_patient_success(client: TestClient):
     # H3: internal_id is now server-generated — just check it's a non-empty string
     assert len(data["internal_id"]) > 0
     assert data["fhir_status"] == "success"
+
+
+def test_sync_duplicate_device_uid_returns_409(client: TestClient, db_session):
+    """A new patient reusing an existing device_uid is rejected with 409, not 500."""
+    from app.db.models import Patient
+
+    first = _sync_patient(client)
+    assert first.status_code == 201
+
+    # Different patient (distinct patientId + document) reusing the same tag.
+    duplicate = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "TEST-UNIT-DUP",
+        "patientInfo": {
+            **MOCK_PATIENT_PAYLOAD["patientInfo"],
+            "identification": {
+                "documentType": "PT",
+                "documentNumber": "VZ-0000000",
+            },
+        },
+    }
+    response = _sync_patient(client, payload=duplicate)
+    _clear_overrides()
+
+    assert response.status_code == 409
+    # The conflicting record must not have been persisted.
+    assert (
+        db_session.query(Patient)
+        .filter(Patient.frontend_patient_id == "TEST-UNIT-DUP")
+        .first()
+        is None
+    )
+    # The original tag owner is untouched.
+    assert (
+        db_session.query(Patient)
+        .filter(Patient.device_uid == MOCK_PATIENT_PAYLOAD["device_uid"])
+        .count()
+        == 1
+    )
+
+
+def test_sync_bracelet_replacement_conflict_returns_409(client: TestClient):
+    """Reassigning an existing patient's device_uid to a tag owned by another
+    patient is rejected with 409, not 500."""
+    a = _sync_patient(client, payload=MOCK_PATIENT_PAYLOAD)
+    assert a.status_code == 201
+    b = _sync_patient(client, payload=MOCK_PATIENT_WITH_VISIT)
+    assert b.status_code == 201
+
+    # Re-sync patient B, but point its tag at patient A's device_uid.
+    collide = {
+        **MOCK_PATIENT_WITH_VISIT,
+        "device_uid": MOCK_PATIENT_PAYLOAD["device_uid"],
+    }
+    response = _sync_patient(client, payload=collide)
+    _clear_overrides()
+
+    assert response.status_code == 409
+
+
+def _raise_integrity_error(*args, **kwargs):
+    raise IntegrityError("commit", {}, Exception("UNIQUE constraint failed"))
+
+
+def test_create_patient_integrity_error_maps_to_conflict(db_session, monkeypatch):
+    """If the device_uid uniqueness check passes but the commit still races into
+    an IntegrityError, the create path maps it to a domain conflict (not a 500)."""
+    record = PatientFullRecord.model_validate(MOCK_PATIENT_PAYLOAD)
+
+    # Force the safety net: pre-check sees no owner, but the commit blows up.
+    monkeypatch.setattr(db_session, "commit", _raise_integrity_error)
+
+    with pytest.raises(DeviceUidConflictError):
+        create_or_update_patient(db_session, record, org_id="org-123")
+
+
+def test_bracelet_replacement_integrity_error_maps_to_conflict(
+    db_session, monkeypatch
+):
+    """Same race safety net, but on the bracelet-replacement (update) path."""
+    # First create the patient with a real commit.
+    record = PatientFullRecord.model_validate(MOCK_PATIENT_PAYLOAD)
+    create_or_update_patient(db_session, record, org_id="org-123")
+
+    # Re-sync the same patient with a new, unused tag → bracelet replacement.
+    updated = PatientFullRecord.model_validate(
+        {**MOCK_PATIENT_PAYLOAD, "device_uid": "04:A2:TEST:NEWUID"}
+    )
+    monkeypatch.setattr(db_session, "commit", _raise_integrity_error)
+
+    with pytest.raises(DeviceUidConflictError):
+        create_or_update_patient(db_session, updated, org_id="org-123")
 
 
 def test_sync_patient_with_visit_generates_multiple_bundles(client: TestClient):
