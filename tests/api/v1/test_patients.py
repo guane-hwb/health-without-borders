@@ -1,11 +1,18 @@
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_current_user
 from app.db.models import UserRole
 from app.main import app
+from app.schemas.patient import PatientFullRecord
 from app.services.fhir import fhir_backend
+from app.services.patient_service import (
+    DeviceUidConflictError,
+    create_or_update_patient,
+)
 
 
 class MockUser:
@@ -266,6 +273,40 @@ def test_sync_bracelet_replacement_conflict_returns_409(client: TestClient):
     _clear_overrides()
 
     assert response.status_code == 409
+
+
+def _raise_integrity_error(*args, **kwargs):
+    raise IntegrityError("commit", {}, Exception("UNIQUE constraint failed"))
+
+
+def test_create_patient_integrity_error_maps_to_conflict(db_session, monkeypatch):
+    """If the device_uid uniqueness check passes but the commit still races into
+    an IntegrityError, the create path maps it to a domain conflict (not a 500)."""
+    record = PatientFullRecord.model_validate(MOCK_PATIENT_PAYLOAD)
+
+    # Force the safety net: pre-check sees no owner, but the commit blows up.
+    monkeypatch.setattr(db_session, "commit", _raise_integrity_error)
+
+    with pytest.raises(DeviceUidConflictError):
+        create_or_update_patient(db_session, record, org_id="org-123")
+
+
+def test_bracelet_replacement_integrity_error_maps_to_conflict(
+    db_session, monkeypatch
+):
+    """Same race safety net, but on the bracelet-replacement (update) path."""
+    # First create the patient with a real commit.
+    record = PatientFullRecord.model_validate(MOCK_PATIENT_PAYLOAD)
+    create_or_update_patient(db_session, record, org_id="org-123")
+
+    # Re-sync the same patient with a new, unused tag → bracelet replacement.
+    updated = PatientFullRecord.model_validate(
+        {**MOCK_PATIENT_PAYLOAD, "device_uid": "04:A2:TEST:NEWUID"}
+    )
+    monkeypatch.setattr(db_session, "commit", _raise_integrity_error)
+
+    with pytest.raises(DeviceUidConflictError):
+        create_or_update_patient(db_session, updated, org_id="org-123")
 
 
 def test_sync_patient_with_visit_generates_multiple_bundles(client: TestClient):
