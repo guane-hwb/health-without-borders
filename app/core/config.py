@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     # --- NFC ---
     NFC_MASTER_KEY: str = ""  # Hex-encoded 32-byte AES-256 key for NFC payload encryption
 
+    # --- REPORTING ---
+    # Calendar dates and month boundaries in aggregated statistics are resolved
+    # in this zone. Reporting in UTC would push the last five hours of every
+    # Colombian month into the next one.
+    STATS_TIMEZONE: str = "America/Bogota"
+    # Slim container images do not always ship the IANA tz database. When the
+    # zone above cannot be loaded, this fixed offset is used instead. Colombia
+    # has observed no daylight saving since 1993, so -5 is exact year-round.
+    STATS_TIMEZONE_FALLBACK_OFFSET_HOURS: int = -5
+
     DEBUG: bool = False
     BACKEND_CORS_ORIGINS: str = ""
     RATE_LIMIT_LOGIN: str = "10/minute"
