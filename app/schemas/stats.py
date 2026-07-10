@@ -165,12 +165,20 @@ class NationalityStat(BaseModel):
     """
     Patients grouped by nationality.
 
-    ``code`` is the ISO 3166-1 *numeric* country code as stored on the patient
-    (e.g. '170' for Colombia), or 'UNK' when the patient has none. Resolving a
-    code to a country name and flag is left to the client.
+    ``code`` is echoed back exactly as stored on the patient, or 'UNK' when the
+    patient has none. In practice that is an ISO 3166-1 *alpha-3* code such as
+    'COL', because the registration form writes alpha-3.
+
+    Note that this is not the representation the RDA implementation guide binds
+    to: the nationality extension requires an ISO 3166-1 *numeric* code. That
+    mismatch is a separate, pre-existing conformance issue in the FHIR bundle
+    builder and is deliberately not papered over here — this endpoint reports
+    what is actually in the database.
+
+    Resolving a code to a country name and flag is left to the client.
     """
 
-    code: str = Field(..., description="ISO 3166-1 numeric code, or 'UNK'")
+    code: str = Field(..., description="Nationality code as stored, or 'UNK'")
     count: int
 
 
