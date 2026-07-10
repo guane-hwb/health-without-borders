@@ -243,7 +243,14 @@ class Address(BaseModel):
     cityCode: Optional[str] = Field(None, description="Código DIVIPOLA del municipio (Elem. 12.1)")
     state: str = Field(..., description="Departamento")
     zipCode: Optional[str] = None
-    country: str = Field("COL", description="Código ISO 3166-1 numérico del país (Elem. 11.1)")
+    country: str = Field(
+        "COL",
+        description=(
+            "Código ISO 3166-1 del país de residencia (Elem. 11.1). Se acepta "
+            "alfa-3 ('COL'), alfa-2 o numérico; la app envía alfa-3. El bundle "
+            "FHIR siempre emite el numérico, que es lo que exige el IG del RDA."
+        ),
+    )
     countryName: Optional[str] = Field(None, description="Nombre del país de residencia (Elem. 11.2)")
     zone: Optional[ResidenceZone] = Field(None, description="Zona territorial (Elem. 14)")
 
@@ -262,7 +269,14 @@ class PatientInfo(BaseModel):
     firstName: str = Field(..., description="Primer nombre (Elem. 1.3)")
     secondName: Optional[str] = Field(None, description="Segundo nombre (Elem. 1.4)")
     dob: date = Field(..., description="Fecha de nacimiento (Elem. 7)")
-    nationalityCode: str = Field(..., description="Código ISO 3166-1 numérico del país (Elem. 9)")
+    nationalityCode: str = Field(
+        ...,
+        description=(
+            "Código ISO 3166-1 del país de nacionalidad (Elem. 9). Se acepta "
+            "alfa-3 ('COL'), alfa-2 o numérico; la app envía alfa-3. El bundle "
+            "FHIR siempre emite el numérico, que es lo que exige el IG del RDA."
+        ),
+    )
     nationalityName: Optional[str] = Field(None, description="Nombre del país (Elem. 10)")
     biologicalSex: BiologicalSex = Field(..., description="Sexo biológico (Elem. 3)")
     ethnicity: Optional[Ethnicity] = Field(None, description="Pertenencia étnica (Elem. 5)")
