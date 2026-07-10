@@ -117,7 +117,8 @@ class Patient(Base):
 
     # --- Nationality (Elems. 1.1, 1.2) — critical for migrant population ---
     nationality_code = Column(String(3), index=True, nullable=True,
-                              comment="Código ISO 3166-1 del país de nacionalidad")
+                              comment="Código ISO 3166-1 alfa-3 del país de nacionalidad; "
+                                      "el bundle FHIR lo convierte a numérico")
 
     # --- Guardian ---
     guardian_name = Column(String)

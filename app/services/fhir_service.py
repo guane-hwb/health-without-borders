@@ -44,6 +44,7 @@ from app.schemas.patient import (
     PatientFullRecord,
     RiskFactorType,
 )
+from app.services import iso3166
 
 logger = logging.getLogger(__name__)
 
@@ -332,25 +333,57 @@ def _build_bundle_shell(bundle_id: str, profile: str, timestamp: str,
 # RESOURCE BUILDERS — Patient
 # ============================================================================
 
+def _country_coding(code: Optional[str], *, field: str) -> Optional[Dict[str, Any]]:
+    """
+    Build the Coding for a country-valued extension, or None when unmappable.
+
+    The RDA guide binds both ExtensionPatientNationality and ExtensionCountryCode
+    to a value set of ISO 3166-1 *numeric* codes with `required` strength, while
+    the app stores alpha-3. The conversion happens here and nowhere else, so the
+    internal model and the NFC payloads already written to patient wristbands
+    stay untouched.
+
+    An unrecognised code yields None so the caller omits the extension entirely.
+    That trades a missing must-support element for a bundle that does not violate
+    a required binding, and it means a bad country code never blocks a patient's
+    clinical record from syncing. A bare country code carries no PHI, so it is
+    safe to log.
+    """
+    numeric = iso3166.to_numeric(code)
+    if numeric is None:
+        logger.warning(
+            "Unmappable ISO 3166-1 country code %r in %s; omitting extension.",
+            code,
+            field,
+        )
+        return None
+
+    coding: Dict[str, Any] = {"system": SYSTEM_COUNTRY, "code": numeric}
+    display = iso3166.display_for(numeric)
+    if display:
+        coding["display"] = display
+    return coding
+
+
 def _build_patient_resource(patient: PatientFullRecord) -> Dict[str, Any]:
     pi = patient.patientInfo
     ident = pi.identification
     pat_id = _patient_id(patient)
 
+    patient_extensions: List[Dict[str, Any]] = []
+    nationality_coding = _country_coding(
+        pi.nationalityCode, field="patientInfo.nationalityCode"
+    )
+    if nationality_coding is not None:
+        patient_extensions.append(
+            {"url": EXT_NATIONALITY, "valueCoding": nationality_coding}
+        )
+
     resource: Dict[str, Any] = {
         "resourceType": "Patient",
         "id": pat_id,
         "meta": {"profile": [PROFILE_PATIENT]},
-        "extension": [
-            {
-                "url": EXT_NATIONALITY,
-                "valueCoding": {
-                    "system": SYSTEM_COUNTRY,
-                    "code": pi.nationalityCode,
-                    "display": pi.nationalityName or pi.nationalityCode,
-                },
-            }
-        ],
+        "extension": patient_extensions,
         "identifier": [
             {
                 "type": {
@@ -408,12 +441,13 @@ def _build_patient_resource(patient: PatientFullRecord) -> Dict[str, Any]:
             }]
         }
     fhir_addr["country"] = addr.countryName or "Colombia"
-    fhir_addr["_country"] = {
-        "extension": [{
-            "url": EXT_COUNTRY_CODE,
-            "valueCoding": {"system": SYSTEM_COUNTRY, "code": addr.country},
-        }]
-    }
+    country_coding = _country_coding(addr.country, field="address.country")
+    if country_coding is not None:
+        fhir_addr["_country"] = {
+            "extension": [
+                {"url": EXT_COUNTRY_CODE, "valueCoding": country_coding},
+            ]
+        }
     if addr.zone:
         fhir_addr["extension"] = [{
             "url": EXT_RESIDENCE_ZONE,
