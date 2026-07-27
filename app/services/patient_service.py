@@ -231,7 +231,7 @@ def create_or_update_patient(
         new_record_dump["patientInfo"]["secondName"] = old_record_dump["patientInfo"].get("secondName")
         new_record_dump["patientInfo"]["dob"] = old_record_dump["patientInfo"]["dob"]
         new_record_dump["patientInfo"]["biologicalSex"] = old_record_dump["patientInfo"]["biologicalSex"]
-        new_record_dump["patientInfo"]["bloodType"] = old_record_dump["patientInfo"].get("bloodType")
+        # new_record_dump["patientInfo"]["bloodType"] = old_record_dump["patientInfo"].get("bloodType")
         new_record_dump["patientInfo"]["identification"] = old_record_dump["patientInfo"]["identification"]
 
         # RULE 2: UPDATE ONLY ALLOWED FIELDS (guardian, address, vaccines)
