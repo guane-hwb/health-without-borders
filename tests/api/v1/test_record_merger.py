@@ -10,6 +10,7 @@ import pytest
 from app.services.record_merger import (
     _assign_missing_keys,
     _merge_items_by_key,
+    _preserve_consent_signature,
     merge_patient_records,
 )
 
@@ -368,3 +369,92 @@ class TestLegacyDataMigration:
 
         assert len(merged["vaccinationRecord"]) == 2
         assert merged["vaccinationRecord"][0].get("vaccinationId") is not None
+
+# ============================================================================
+# _preserve_consent_signature — guardian signature protection on merge
+# ============================================================================
+
+def _guardian(signature=None, *, with_consent=True, **consent_extra) -> dict:
+    """A guardian dict, optionally with a consent block and signature.
+
+    ``with_consent=False`` omits the consent block entirely (as a guardian
+    reconstructed from a card that never captured consent would look).
+    """
+    g = {"name": "María Pérez", "phone": "+57300000"}
+    if with_consent:
+        consent = {"accepted": True, "acceptedAt": "2026-04-01T10:00:00"}
+        consent.update(consent_extra)
+        if signature is not None:
+            consent["signatureBase64"] = signature
+        g["consent"] = consent
+    return g
+
+
+class TestPreserveConsentSignature:
+    def test_restores_signature_when_incoming_omits_it(self):
+        """Card-sourced guardian (signature stripped) keeps the server PNG."""
+        server = _guardian(signature="iVBORw0KGgo=")
+        incoming = _guardian()  # consent present but no signatureBase64
+        result = _preserve_consent_signature(server, incoming)
+        assert result["consent"]["signatureBase64"] == "iVBORw0KGgo="
+        # Other incoming consent fields are retained
+        assert result["consent"]["accepted"] is True
+
+    def test_incoming_signature_is_not_overwritten(self):
+        """An online edit carrying its own signature wins over the server's."""
+        server = _guardian(signature="OLD-SERVER-PNG")
+        incoming = _guardian(signature="NEW-DEVICE-PNG")
+        result = _preserve_consent_signature(server, incoming)
+        assert result["consent"]["signatureBase64"] == "NEW-DEVICE-PNG"
+
+    def test_carries_whole_consent_when_incoming_has_none(self):
+        """Incoming guardian without any consent block adopts the server's."""
+        server = _guardian(signature="iVBORw0KGgo=", email="g@example.com")
+        incoming = _guardian(with_consent=False)
+        result = _preserve_consent_signature(server, incoming)
+        assert result["consent"]["signatureBase64"] == "iVBORw0KGgo="
+        assert result["consent"]["email"] == "g@example.com"
+
+    def test_noop_when_server_has_no_signature(self):
+        server = _guardian(with_consent=False)
+        incoming = _guardian()
+        result = _preserve_consent_signature(server, incoming)
+        assert "signatureBase64" not in result["consent"]
+
+    def test_does_not_mutate_incoming(self):
+        server = _guardian(signature="iVBORw0KGgo=")
+        incoming = _guardian()
+        _preserve_consent_signature(server, incoming)
+        assert "signatureBase64" not in incoming["consent"]
+
+    def test_handles_missing_guardian_gracefully(self):
+        # guardian2Info is commonly absent (None) — must pass through untouched.
+        assert _preserve_consent_signature(None, None) is None
+        server = _guardian(signature="iVBORw0KGgo=")
+        assert _preserve_consent_signature(server, None) is None
+
+
+class TestMergePreservesGuardianSignature:
+    def test_merge_restores_stripped_guardian_signature(self):
+        """End-to-end: a card-sourced record keeps the server signature."""
+        server = _make_record()
+        server["guardianInfo"] = _guardian(signature="SERVER-PNG")
+        incoming = _make_record()
+        incoming["guardianInfo"] = _guardian()  # stripped by the card writer
+
+        merged = merge_patient_records(server, incoming)
+
+        assert merged["guardianInfo"]["consent"]["signatureBase64"] == "SERVER-PNG"
+
+    def test_merge_restores_second_guardian_signature(self):
+        server = _make_record()
+        server["guardian2Info"] = _guardian(signature="G2-SERVER-PNG")
+        incoming = _make_record()
+        incoming["guardian2Info"] = _guardian()
+
+        merged = merge_patient_records(server, incoming)
+
+        assert (
+            merged["guardian2Info"]["consent"]["signatureBase64"]
+            == "G2-SERVER-PNG"
+        )
