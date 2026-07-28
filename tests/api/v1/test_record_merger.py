@@ -421,6 +421,18 @@ class TestPreserveConsentSignature:
         result = _preserve_consent_signature(server, incoming)
         assert "signatureBase64" not in result["consent"]
 
+    def test_noop_when_server_consent_lacks_signature(self):
+        """Server has a consent block but no signature → nothing to restore.
+
+        Distinct from the case above: here the server consent dict exists (so
+        the earlier ``isinstance`` guard passes) but carries no
+        ``signatureBase64``, exercising the empty-signature short-circuit.
+        """
+        server = _guardian()  # consent present, signatureBase64 absent
+        incoming = _guardian()
+        result = _preserve_consent_signature(server, incoming)
+        assert "signatureBase64" not in result["consent"]
+
     def test_does_not_mutate_incoming(self):
         server = _guardian(signature="iVBORw0KGgo=")
         incoming = _guardian()
