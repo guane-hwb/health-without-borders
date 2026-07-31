@@ -69,8 +69,8 @@ Stores the core identity data of migrant children. Relational columns mirror the
 
 **Constraints:**
 
-- `UNIQUE(frontend_patient_id, organization_id)` — Two organizations can independently register the same frontend-generated ID without collision.
-- `UNIQUE(device_uid)` — A hardware bracelet can only be linked to one patient globally.
+- `UNIQUE(device_uid)` — A hardware bracelet is linked to exactly one patient globally. This is the primary identity key for cross-organization sync (see § 3.1).
+- `UNIQUE(frontend_patient_id, organization_id)` — A residual constraint from the earlier org-scoped model. It is no longer the sync identity mechanism (sync now resolves and merges globally) and remains only as a defensive guard against a single organization's device double-inserting the same frontend-generated ID.
 
 ### 2.4. Token Revocation (`revoked_tokens`)
 
@@ -100,8 +100,17 @@ Based on the **CVX** (Code for Vaccine Administered) standard.
 
 ## 3. Architecture & Design Decisions
 
-### 3.1. Multi-Tenancy & Global Patient Access
-Every `User` must belong to an `Organization`. Patient records track the `organization_id` of the registering organization for traceability. However, patients are **globally accessible** by any authenticated professional — this is by design for humanitarian settings where a child registered by NGO "A" in Cúcuta may later be seen by NGO "B" in Bogotá. The `frontend_patient_id` + `organization_id` composite unique constraint prevents cross-org data overwrites during sync, while the server-generated `id` (PK) ensures no frontend-generated ID collisions.
+### 3.1. Global Patients (Shared Across Organizations)
+Every `User` belongs to an `Organization`, but **patient records do not**. A patient is a single global record shared by every organization — by design for humanitarian settings where a child registered by NGO "A" in Cúcuta may later be seen by NGO "B" in Bogotá. The `organization_id` on a patient records only who *first* registered them (traceability); per-visit attribution lives on the FHIR `Encounter.serviceProvider`, not on the patient row.
+
+**Sync identity resolution.** `POST /patients/sync` resolves the single global record a payload belongs to (`_find_patient_for_sync`):
+
+1. `frontend_patient_id` — this device's own prior record. Covers re-syncs and bracelet replacement (where the incoming `device_uid` is new).
+2. `device_uid` — the hardware tag. A different organization scanning the same child's bracelet resolves to the existing record and **merges** into it, instead of colliding on the unique `device_uid`. Visits are combined by `encounterIdentifier`, so neither organization's visits are lost.
+
+**Identity guard.** When the match comes from the tag (a cross-organization merge) and the incoming identity document differs from the stored one, the sync is refused with `409` rather than silently mixing two children onto one record. Same-child cross-org syncs (matching document, or a missing document) merge normally. This relies on the operating assumption that **a physical bracelet is never reassigned from one child to another**.
+
+**Known limitation — cross-org duplicate with a new bracelet.** If a second organization attends the child with a *new* tag (neither `device_uid` nor `frontend_patient_id` matches — e.g. the first bracelet was lost and the second organization issues its own), a duplicate global record is created. This is the benign "false split"; a search-and-relink flow to reconcile it is planned.
 
 ### 3.2. Hybrid Relational-Document Model (JSON)
 Migrant populations often have unstructured or transient data.
@@ -116,8 +125,8 @@ Three columns track sync state: `synced_encounter_ids` (JSON list of encounter U
 Rows in critical tables (Users, Organizations) are never physically deleted. This preserves historical integrity for future audits.
 
 ### 3.5. Indexing Strategy
-* **Search Optimization:** B-Tree indexes on `first_name`, `last_name`, `document_number`, and `nationality_code` for fast patient lookups. Composite index on `(organization_id, frontend_patient_id)` for sync lookups.
-* **Data Integrity:** Unique constraints on `users.email`, `patients.device_uid`, and composite `(frontend_patient_id, organization_id)` to prevent duplicates during network sync anomalies.
+* **Search Optimization:** B-Tree indexes on `first_name`, `last_name`, `document_number`, and `nationality_code` for fast patient lookups. Sync identity now resolves by `device_uid` (unique) and `frontend_patient_id` (indexed); the composite `(organization_id, frontend_patient_id)` index is retained but no longer on the sync path.
+* **Data Integrity:** Unique constraints on `users.email` and `patients.device_uid`. The composite `(frontend_patient_id, organization_id)` constraint is retained from the org-scoped model as a defensive guard (see § 2.3).
 
 ---
 
@@ -152,5 +161,5 @@ Rows in critical tables (Users, Organizations) are never physically deleted. Thi
 ### 4.4. Design Rationale
 
 - **`superadmin` has zero clinical access.** It is a platform administrator role. It cannot read, create, or modify any patient record.
-- **`org_admin` manages staff, not patients.** It can provision and list users within its organization but has no access to clinical data.
-- **Multi-tenancy is enforced at the query level**, not just the role check. Every database query is automatically scoped to `current_user.organization_id`.
+- **`org_admin` manages staff.** It provisions and lists `doctor`/`nurse` users within its organization and has no access to the `sync` (write) path. Per § 4.3, the current code does grant `org_admin` read access to patients via `scan` and `search`.
+- **Patient data is global, not tenant-scoped.** Patient reads and writes (`scan`, `search`, `sync`) are intentionally *not* filtered by `current_user.organization_id` — any authenticated clinician can reach any patient. Tenant scoping applies only to the **Organizations** and **Users** administration endpoints, where each `org_admin` is confined to its own organization. Cross-organization access to a patient record is therefore expected behavior, not a vulnerability.

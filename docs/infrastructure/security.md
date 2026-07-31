@@ -28,7 +28,7 @@ Authentication uses the OAuth2 Password Flow with JSON Web Tokens (JWT). The sys
 
 ## 2. Authorization (AuthZ) & Multi-Tenancy
 
-Role-Based Access Control (RBAC) with strict multi-tenant isolation.
+Role-Based Access Control (RBAC). Tenant isolation applies to **organization and user administration**; patient clinical records are intentionally **global** — any authenticated clinician may access any patient (see Database Schema § 3.1).
 
 ### 2.1. System Roles
 
