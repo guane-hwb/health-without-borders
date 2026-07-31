@@ -32,7 +32,9 @@ Instead, please report them via one of the following channels:
 
 ### Scope
 
-In scope: authentication/authorization bypass, patient data exposure (PII/PHI), cross-tenant access, NFC 2FA bypass, FHIR bundle injection, LLM prompt injection affecting clinical data, infrastructure misconfigurations in GCP deployment templates.
+In scope: authentication/authorization bypass, patient data exposure (PII/PHI) to unauthenticated parties, cross-tenant access to **organization or user administration** data, NFC 2FA bypass, FHIR bundle injection, LLM prompt injection affecting clinical data, infrastructure misconfigurations in GCP deployment templates.
+
+> **Note on patient access:** Patient clinical records are intentionally **global** — any authenticated clinician from any organization may read and update any patient, by design for cross-border humanitarian care. Cross-organization access to a *patient record* is therefore **not** a vulnerability. Tenant-isolation concerns apply only to organization and user administration.
 
 Out of scope: third-party dependency vulnerabilities (report upstream), social engineering, DoS against development environments.
 

@@ -23,7 +23,7 @@ Before onboarding a pilot site, verify that all cloud infrastructure is operatio
 
 ## 2. Organization & User Setup
 
-Each pilot site operates as an isolated organization in the multi-tenant system. The setup sequence is:
+Each pilot site operates as its own organization for staff and administration. Patient clinical records, however, are **global** — shared across all organizations by design (see Database Schema § 3.1), so a child registered at one site can be attended at any other. The setup sequence is:
 
 **Step 1 — Create the organization:**
 
@@ -129,7 +129,7 @@ For the full resource mapping, see [FHIR RDA Architecture § Resource Mapping](.
 | Passwords hashed with bcrypt | Verified in codebase (`get_password_hash`) | [Security Protocols](../infrastructure/security.md) |
 | Secrets in Secret Manager (not env vars) | Check Cloud Run configuration | [GCP Deployment § Security](../infrastructure/gcp-deploy.md#4-security-secret-manager-setup) |
 | `.env` / credentials excluded from repo | `.gitignore` and `.dockerignore` verified | [Security Protocols](../infrastructure/security.md) |
-| Multi-tenancy isolation | Users only see data within their organization | [Database Schema § RBAC](../infrastructure/database.md#44-design-rationale) |
+| Tenant scoping (admin only) | `org_admin` and user management confined to own org; patient data is intentionally global | [Database Schema § RBAC](../infrastructure/database.md#44-design-rationale) |
 
 ---
 
