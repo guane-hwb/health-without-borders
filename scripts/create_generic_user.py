@@ -1,13 +1,13 @@
 import logging
-import sys
 import os
+import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from app.db.session import SessionLocal
-from app.db.models import User, Organization
-from app.core.security import get_password_hash
 from app.core.config import settings
+from app.core.security import get_password_hash
+from app.db.models import Organization, User
+from app.db.session import SessionLocal
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("CreateUser")

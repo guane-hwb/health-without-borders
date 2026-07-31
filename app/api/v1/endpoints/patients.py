@@ -173,7 +173,7 @@ async def sync_patient(
                 get_existing_history_count,
                 db,
                 patient_data.patientId,
-                current_user.organization_id,
+                patient_data.device_uid,
             )
             if (
                 existing_history_count is not None

@@ -218,7 +218,9 @@ def test_sync_patient_success(client: TestClient):
 
 
 def test_sync_duplicate_device_uid_returns_409(client: TestClient, db_session):
-    """A new patient reusing an existing device_uid is rejected with 409, not 500."""
+    """A patient with a DIFFERENT identity document reusing an existing
+    device_uid is rejected with 409, not 500 — the cross-org merge is
+    identity-guarded and refuses to mix two children on one tag."""
     from app.db.models import Patient
 
     first = _sync_patient(client)
@@ -608,22 +610,28 @@ def test_h1_background_change_triggers_rda_paciente(client: TestClient, db_sessi
 
 
 # ============================================================================
-# H3: ORG-SCOPED PATIENT TESTS
+# GLOBAL PATIENT TESTS — one shared record across organizations
 # ============================================================================
 
 
-def test_h3_same_frontend_id_different_orgs(client: TestClient, db_session):
+def test_global_patient_same_tag_across_orgs_merges(
+    client: TestClient, db_session
+):
     """
-    H3: Two organizations can independently register a patient with the
-    same frontend-generated patientId.
+    Patients are global: a second organization scanning the same child's
+    bracelet merges its visit into the existing record instead of colliding
+    on the unique device_uid (409) or creating a duplicate. The server-side
+    merge preserves the first organization's visit as well.
     """
     from app.db.models import Patient
 
-    # Sync as Org A
-    _sync_patient(client)
+    # Org A registers the child and records the first visit.
+    first = _sync_patient(client, payload=MOCK_PATIENT_WITH_VISIT)
     _clear_overrides()
+    assert first.status_code == 201
 
-    # Sync the SAME patientId but as Org B
+    # Org B scans the SAME bracelet (same device_uid, same identity document)
+    # with its own app-generated patientId and records a different visit.
     class MockDoctorOrgB:
         email = "doctor.b@ngo-b.org"
         id = "user-org-b-001"
@@ -631,9 +639,11 @@ def test_h3_same_frontend_id_different_orgs(client: TestClient, db_session):
         organization_id = "org-456"
 
     app.dependency_overrides[get_current_user] = lambda: MockDoctorOrgB()
+    org_b_visit = {**VISIT_1, "encounterIdentifier": "enc-org-b-visit"}
     payload_org_b = {
-        **MOCK_PATIENT_PAYLOAD,
-        "device_uid": "04:A2:ORGB:UID",  # different device
+        **MOCK_PATIENT_WITH_VISIT,
+        "patientId": "ORG-B-APP-UUID",  # org B's app generated its own id
+        "medicalHistory": [org_b_visit],
     }
     with patch.object(fhir_backend, "send_bundle") as mock_gcp:
         mock_gcp.return_value = {"status": "success", "google_response": {}}
@@ -642,19 +652,67 @@ def test_h3_same_frontend_id_different_orgs(client: TestClient, db_session):
 
     assert response.status_code == 201
 
-    # Both should exist as separate records
-    org_a = db_session.query(Patient).filter(
-        Patient.frontend_patient_id == "TEST-UNIT-001",
-        Patient.organization_id == "org-123",
-    ).first()
-    org_b = db_session.query(Patient).filter(
-        Patient.frontend_patient_id == "TEST-UNIT-001",
-        Patient.organization_id == "org-456",
-    ).first()
-    assert org_a is not None
-    assert org_b is not None
-    # H3: They have different server-generated IDs
-    assert org_a.id != org_b.id
+    # Exactly one record exists for that bracelet...
+    rows = (
+        db_session.query(Patient)
+        .filter(Patient.device_uid == MOCK_PATIENT_WITH_VISIT["device_uid"])
+        .all()
+    )
+    assert len(rows) == 1
+    # ...and it holds BOTH organizations' visits.
+    encounter_ids = {
+        v.get("encounterIdentifier")
+        for v in rows[0].full_record_json.get("medicalHistory", [])
+    }
+    assert "enc-visit-001" in encounter_ids
+    assert "enc-org-b-visit" in encounter_ids
+
+
+def test_global_patient_same_tag_different_identity_rejected(
+    client: TestClient, db_session
+):
+    """
+    The cross-org merge is identity-guarded: a bracelet presenting a
+    different identity document is refused with 409, never silently merged
+    into the wrong child's record.
+    """
+    from app.db.models import Patient
+
+    first = _sync_patient(client)
+    _clear_overrides()
+    assert first.status_code == 201
+
+    class MockDoctorOrgB:
+        email = "doctor.b@ngo-b.org"
+        id = "user-org-b-002"
+        role = UserRole.doctor
+        organization_id = "org-456"
+
+    app.dependency_overrides[get_current_user] = lambda: MockDoctorOrgB()
+    different_child = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "ORG-B-OTHER-CHILD",
+        "patientInfo": {
+            **MOCK_PATIENT_PAYLOAD["patientInfo"],
+            "identification": {
+                "documentType": "TI",
+                "documentNumber": "1122334455",
+            },
+        },
+    }
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=different_child)
+    _clear_overrides()
+
+    assert response.status_code == 409
+    # Only the original record exists for that tag.
+    assert (
+        db_session.query(Patient)
+        .filter(Patient.device_uid == MOCK_PATIENT_PAYLOAD["device_uid"])
+        .count()
+        == 1
+    )
 
 
 # ============================================================================

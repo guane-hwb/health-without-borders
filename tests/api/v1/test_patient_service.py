@@ -14,7 +14,11 @@ the dead top-level ``"medications"`` key from the hashed fields:
 
 import copy
 
-from app.services.patient_service import compute_background_hash
+from app.db.models import Patient
+from app.services.patient_service import (
+    _find_patient_for_sync,
+    compute_background_hash,
+)
 
 
 def _record() -> dict:
@@ -112,3 +116,48 @@ def test_changing_an_allergy_alters_background_hash():
     )
 
     assert compute_background_hash(base) != compute_background_hash(changed)
+
+
+# ---------------------------------------------------------------------------
+# _find_patient_for_sync — global identity resolution
+# ---------------------------------------------------------------------------
+
+
+def _persist(db, *, frontend_id, device_uid, doc="D-1"):
+    p = Patient(
+        frontend_patient_id=frontend_id,
+        organization_id="org-a",
+        device_uid=device_uid,
+        document_number=doc,
+        first_name="Isabella",
+        last_name="Martinez",
+        full_record_json={"medicalHistory": []},
+    )
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return p
+
+
+def test_find_for_sync_matches_own_record_by_frontend_id(db_session):
+    p = _persist(db_session, frontend_id="APP-1", device_uid="TAG-1")
+    # Bracelet replacement: same app id, brand-new tag not yet stored.
+    found = _find_patient_for_sync(db_session, "APP-1", "TAG-NEW")
+    assert found is not None and found.id == p.id
+
+
+def test_find_for_sync_resolves_cross_org_by_device_uid(db_session):
+    p = _persist(db_session, frontend_id="APP-A", device_uid="TAG-SHARED")
+    # A different organization's app id, same physical bracelet.
+    found = _find_patient_for_sync(db_session, "APP-B-DIFFERENT", "TAG-SHARED")
+    assert found is not None and found.id == p.id
+
+
+def test_find_for_sync_returns_none_for_new_patient_without_tag(db_session):
+    # Neither id nor tag matches, and no device_uid to fall back on.
+    assert _find_patient_for_sync(db_session, "APP-UNKNOWN", None) is None
+
+
+def test_find_for_sync_returns_none_when_tag_unknown(db_session):
+    _persist(db_session, frontend_id="APP-A", device_uid="TAG-A")
+    assert _find_patient_for_sync(db_session, "APP-UNKNOWN", "TAG-UNKNOWN") is None
