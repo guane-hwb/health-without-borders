@@ -26,8 +26,8 @@ import json
 import os
 import sys
 import time
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 try:
     import httpx
@@ -127,7 +127,7 @@ def traverse_who(
                         if errors <= 3:
                             print(f"    ⚠ Error: {url}\n      {e}")
                         elif errors == 4:
-                            print(f"    ⚠ Suppressing further errors...")
+                            print("    ⚠ Suppressing further errors...")
                         continue
 
                     total_fetched += 1
@@ -215,7 +215,7 @@ def main():
     print("=" * 60)
 
     if args.local:
-        print(f"\n⚠ Local mode: Vulcano fragments only (~395 ICD-10 codes)")
+        print("\n⚠ Local mode: Vulcano fragments only (~395 ICD-10 codes)")
         for i, (path, label) in enumerate([(args.local[0], "ICD-10"), (args.local[1], "ICD-11")]):
             print(f"\n[{i+1}/2] {label}")
             codes = load_vulcano_fragment(path) if Path(path).exists() else {}
@@ -233,8 +233,8 @@ def main():
 
         # --- ICD-10 (English + Vulcano Spanish enrichment) ---
         if not args.icd11_only:
-            print(f"\n[1/2] ICD-10 (WHO 2019 in English, ~12,000 codes)")
-            print(f"  This may take 5-15 minutes...")
+            print("\n[1/2] ICD-10 (WHO 2019 in English, ~12,000 codes)")
+            print("  This may take 5-15 minutes...")
             t0 = time.time()
             icd10 = traverse_who(
                 ICD10_ROOT, token, label="ICD-10",
@@ -254,17 +254,17 @@ def main():
                 vulcano = load_vulcano_fragment(vulcano_path)
                 icd10 = enrich_with_spanish(icd10, vulcano)
             else:
-                print(f"  ℹ No Vulcano fragment found — using English names.")
-                print(f"    Pass --vulcano-icd10 <file> for Spanish enrichment.")
+                print("  ℹ No Vulcano fragment found — using English names.")
+                print("    Pass --vulcano-icd10 <file> for Spanish enrichment.")
 
             write_lookup(icd10, OUTPUT_DIR / "icd10_codes.json", "ICD-10")
         else:
-            print(f"\n[1/2] ICD-10 — skipped")
+            print("\n[1/2] ICD-10 — skipped")
 
         # --- ICD-11 (Spanish directly) ---
         if not args.icd10_only:
-            print(f"\n[2/2] ICD-11 (WHO 2024-01 MMS in Spanish)")
-            print(f"  This may take 15-30 minutes...")
+            print("\n[2/2] ICD-11 (WHO 2024-01 MMS in Spanish)")
+            print("  This may take 15-30 minutes...")
             t0 = time.time()
             icd11 = traverse_who(
                 ICD11_ROOT, token, label="ICD-11",
@@ -273,7 +273,7 @@ def main():
             print(f"  Downloaded in {time.time() - t0:.0f}s")
             write_lookup(icd11, OUTPUT_DIR / "icd11_codes.json", "ICD-11")
         else:
-            print(f"\n[2/2] ICD-11 — skipped")
+            print("\n[2/2] ICD-11 — skipped")
 
     print(f"\n{'=' * 60}")
     print(f"  ✓ Done. Files in {OUTPUT_DIR}/")
