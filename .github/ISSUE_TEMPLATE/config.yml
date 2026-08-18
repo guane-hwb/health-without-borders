@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 💬 Community discussion
+    url: https://github.com/guane-hwb/health-without-borders/discussions
+    about: Ask questions or discuss ideas with the project team and community.
+  - name: 📖 Documentation
+    url: https://guane-hwb.github.io/health-without-borders/
+    about: Read the user and developer documentation before opening an issue.
