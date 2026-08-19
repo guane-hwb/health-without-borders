@@ -42,6 +42,15 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - User Guide:
+    - Overview: user-guide/index.md
+    - Getting Started: user-guide/getting-started.md
+    - Registering a Patient: user-guide/register-patient.md
+    - Finding & Viewing a Patient: user-guide/patient-records.md
+    - Consultations & Vaccines: user-guide/consultations-vaccines.md
+    - Syncing Pending Records: user-guide/sync-pending.md
+    - Statistics: user-guide/statistics.md
+    - Administration: user-guide/administration.md
   - Architecture:
     - FHIR RDA Architecture: architecture/fhir-rda.md
     - AI & NLP Integration: architecture/ai-integration.md
