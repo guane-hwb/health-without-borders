@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.phi_sanitizer import mask_id, safe_patient_ref
-from app.db.models import Patient
+from app.db.models import Patient, RetiredDeviceUid
 from app.schemas.patient import PatientFullRecord
 from app.services.record_merger import merge_patient_records
 
@@ -78,6 +78,24 @@ def get_patient_by_device_uid(db: Session, device_uid: str) -> Optional[Patient]
     return db.query(Patient).filter(
         Patient.device_uid == device_uid,
     ).first()
+
+
+def get_retired_device_uid(
+    db: Session, device_uid: str
+) -> Optional[RetiredDeviceUid]:
+    """
+    Return the most recent retirement record for a ``device_uid``, or None.
+
+    Used so a scan of a bracelet that was retired (lost/damaged/replaced) can be
+    answered distinctly — "this tag was retired and no longer belongs to HWB" —
+    instead of as a generic 404 that looks like a blank or unknown chip.
+    """
+    return (
+        db.query(RetiredDeviceUid)
+        .filter(RetiredDeviceUid.device_uid == device_uid)
+        .order_by(RetiredDeviceUid.retired_at.desc())
+        .first()
+    )
 
 
 def _ensure_device_uid_available(
@@ -222,7 +240,10 @@ def get_existing_history_count(
     return len((existing.full_record_json or {}).get("medicalHistory", []) or [])
 
 def create_or_update_patient(
-    db: Session, patient_in: PatientFullRecord, org_id: str
+    db: Session,
+    patient_in: PatientFullRecord,
+    org_id: str,
+    actor_user_id: Optional[str] = None,
 ) -> tuple["Patient", list[str], str, bool]:
     """
     Persists patient data into the local PostgreSQL database.
@@ -273,6 +294,11 @@ def create_or_update_patient(
     # Serialize the full JSON once to ensure consistency
     new_record_dump = patient_in.model_dump(mode="json")
 
+    # retiredDeviceReason is a transport-only signal for bracelet re-labeling;
+    # it must never be persisted into the authoritative clinical record or
+    # echoed back on /scan. Drop it before hashing, merging or storing.
+    new_record_dump.pop("retiredDeviceReason", None)
+
     # Compute the new background hash
     new_bg_hash = compute_background_hash(new_record_dump)
 
@@ -317,7 +343,29 @@ def create_or_update_patient(
             _ensure_device_uid_available(
                 db, patient_in.device_uid, exclude_patient_id=existing_patient.id
             )
-            logger.info("Device tag updated for patient %s", safe_patient_ref(existing_patient.id))
+            # Retire the old tag before overwriting it, so the previous UID is
+            # never silently lost. The row is added to this same transaction and
+            # commits atomically with the device_uid change below — if the commit
+            # races into an IntegrityError, the retirement rolls back with it.
+            old_device_uid = existing_patient.device_uid
+            retire_reason = (
+                patient_in.retiredDeviceReason.value
+                if patient_in.retiredDeviceReason is not None
+                else "replaced"
+            )
+            db.add(
+                RetiredDeviceUid(
+                    device_uid=old_device_uid,
+                    patient_id=existing_patient.id,
+                    reason=retire_reason,
+                    retired_by=actor_user_id,
+                )
+            )
+            logger.info(
+                "Device tag retired and replaced for patient %s reason=%s",
+                safe_patient_ref(existing_patient.id),
+                retire_reason,
+            )
             existing_patient.device_uid = patient_in.device_uid
 
         try:

@@ -232,6 +232,18 @@ class MedicationRequestIntent(str, Enum):
     PROPOSAL = "proposal"
 
 
+class RetiredDeviceReason(str, Enum):
+    """
+    Motivo por el que se retira la manilla anterior en un re-etiquetado.
+
+    Solo aplica cuando un ``/sync`` reemplaza el ``device_uid`` de un registro
+    existente. Si el ``device_uid`` cambia y la app no envía el motivo, el
+    servidor registra el retiro igual con el valor genérico ``replaced``.
+    """
+    LOST = "lost"        # Manilla perdida
+    DAMAGED = "damaged"  # Manilla dañada
+
+
 # ============================================================================
 # SUB-MODELS — Patient demographics
 # ============================================================================
@@ -522,6 +534,18 @@ class PatientFullRecord(BaseModel):
     """
     patientId: str = Field(..., description="UUID v4 generado por el frontend")
     device_uid: str = Field(..., description="UID del hardware NFC/QR de la manilla")
+
+    retiredDeviceReason: Optional[RetiredDeviceReason] = Field(
+        None,
+        description=(
+            "Motivo de retiro de la manilla anterior cuando este sync reemplaza "
+            "el device_uid (re-etiquetado por manilla perdida o dañada). Solo se "
+            "usa si el device_uid cambia respecto al registro existente; si no se "
+            "envía, el retiro se registra como 'replaced'. Es una señal de "
+            "transporte: no se persiste en el registro clínico ni se devuelve en "
+            "/scan, y nunca crea un registro duplicado."
+        ),
+    )
 
     patientInfo: PatientInfo
     guardianInfo: GuardianInfo
