@@ -189,3 +189,67 @@ class RevokedToken(Base):
         DateTime(timezone=True), nullable=False,
         comment="Original token expiry — safe to delete row after this time"
     )
+
+
+class EmergencyAccessLog(Base):
+    """
+    Central, append-only audit ledger of break-glass (emergency) accesses to a
+    minor's record made without the guardian's second factor present — the
+    offline emergency path in the mobile app.
+
+    The app records each access locally and syncs the pending entries here so
+    there is a tamper-evident central trail. It is the natural compensating
+    control for /search access to minors' records (which by design does not
+    require the guardian second factor): it leaves a record of who accessed
+    what, when, and why.
+
+    Idempotency: the client generates a stable ``client_event_id`` (UUID) per
+    entry. The local queue may retry, so re-sending the same entry is a no-op —
+    the unique constraint on ``client_event_id`` de-duplicates server-side.
+
+    Rows are never updated or deleted.
+    """
+    __tablename__ = "emergency_access_log"
+
+    id = Column(
+        String, primary_key=True, index=True,
+        default=lambda: str(uuid.uuid4()),
+    )
+    client_event_id = Column(
+        String, unique=True, index=True, nullable=False,
+        comment="Client-generated UUID — idempotency/dedup key across retries",
+    )
+    patient_uid = Column(
+        String, index=True, nullable=False,
+        comment="Hardware UID of the record that was accessed",
+    )
+    patient_name = Column(
+        String, nullable=True,
+        comment="Patient name as reported by the client (decrypted before sync)",
+    )
+    user_id = Column(
+        String, nullable=True,
+        comment="Acting user reported by the client (the break-glass actor)",
+    )
+    organization_id = Column(
+        String, ForeignKey("organizations.id"), nullable=False,
+        comment="Organization of the authenticated caller that synced the entry",
+    )
+    reason = Column(
+        String, nullable=False,
+        comment="Why the emergency access happened (e.g. guardian_absent_offline)",
+    )
+    occurred_at = Column(
+        String, nullable=False,
+        comment="Timestamp as reported by the client (ISO 8601; may be naive local time)",
+    )
+    received_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        comment="Server receipt time — the defensible audit timestamp",
+    )
+
+    def __repr__(self):
+        return (
+            f"<EmergencyAccessLog(client_event_id={self.client_event_id}, "
+            f"patient_uid={self.patient_uid}, reason={self.reason})>"
+        )

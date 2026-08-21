@@ -12,11 +12,16 @@ from app.core.phi_sanitizer import mask_id
 from app.core.rate_limit import limiter
 from app.db.models import User, UserRole
 from app.db.session import get_db
+from app.schemas.emergency_access import (
+    EmergencyAccessSyncRequest,
+    EmergencyAccessSyncResponse,
+)
 from app.schemas.patient import (
     PatientFullRecord,
     PatientSearchRequest,
     PatientSyncResponse,
 )
+from app.services.emergency_access_service import store_emergency_access_entries
 from app.services.fhir import fhir_backend
 from app.services.fhir_service import convert_to_fhir_rda
 from app.services.llm import medical_llm_processor
@@ -400,3 +405,61 @@ async def search_patient(
         )
 
     return patient.full_record_json
+
+
+@router.post(
+    "/emergency-access",
+    response_model=EmergencyAccessSyncResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def sync_emergency_access(
+    payload: EmergencyAccessSyncRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Sync break-glass (emergency access) audit entries from the mobile app.
+
+    When a clinician opens a minor's record through the offline emergency path
+    (without the guardian's second factor), the app records the access locally
+    and syncs the pending entries here into a central, append-only audit ledger.
+    This is the compensating control for `/search` access to minors' records.
+
+    **Idempotent:** each entry carries a client-generated `client_event_id`.
+    Re-sending the same entry (the local queue may retry) is a no-op — the
+    server de-duplicates on that id and reports it under `duplicates`.
+
+    **Allowed roles:** `doctor`, `nurse` (the point-of-care staff whose devices
+    hold the local log).
+
+    **Responses:**
+    - `200`: Batch processed. Body reports `received`, `stored`, `duplicates`.
+    - `403`: Caller is not `doctor` or `nurse`.
+    - `422`: Missing or malformed body fields (e.g. empty `entries`).
+    """
+    if current_user.role not in {UserRole.doctor, UserRole.nurse}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only doctors and nurses can sync emergency access logs.",
+        )
+
+    logger.info(
+        "Emergency access sync request actor_id=%s org_id=%s entries=%d",
+        current_user.id,
+        current_user.organization_id,
+        len(payload.entries),
+    )
+
+    stored, duplicates = await asyncio.to_thread(
+        store_emergency_access_entries,
+        db,
+        payload.entries,
+        current_user.organization_id,
+    )
+
+    return EmergencyAccessSyncResponse(
+        status="success",
+        received=len(payload.entries),
+        stored=stored,
+        duplicates=duplicates,
+    )
