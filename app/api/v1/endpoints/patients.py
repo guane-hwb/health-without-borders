@@ -31,6 +31,7 @@ from app.services.patient_service import (
     find_patient_strict,
     get_existing_history_count,
     get_patient_by_device_uid,
+    get_retired_device_uid,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,8 @@ async def get_patient_by_device_uid_scan(
     - `403`: Patient is a minor and the `X-Guardian-Device-UID` header was not provided.
     - `403`: Patient is a minor and guardian tag does not match.
     - `404`: No patient registered with that device UID.
+    - `410`: The tag was retired (lost/damaged/replaced) and no longer belongs to
+      HWB. Body: `{"code": "device_retired", "reason": ..., "message": ...}`.
     """
 
     if current_user.role not in {UserRole.doctor, UserRole.nurse, UserRole.org_admin}:
@@ -84,6 +87,28 @@ async def get_patient_by_device_uid_scan(
     patient_db = await asyncio.to_thread(get_patient_by_device_uid, db, device_uid)
     
     if not patient_db:
+        # Distinguish a retired bracelet (lost/damaged/replaced) from a genuinely
+        # unknown tag, so the app can tell the user the bracelet was retired
+        # instead of showing a blank/unknown-chip error.
+        retired = await asyncio.to_thread(get_retired_device_uid, db, device_uid)
+        if retired is not None:
+            logger.info(
+                "Scan of retired device tag org_id=%s device_ref=%s reason=%s",
+                current_user.organization_id,
+                mask_id(device_uid),
+                retired.reason,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail={
+                    "code": "device_retired",
+                    "reason": retired.reason,
+                    "message": (
+                        "This bracelet has been retired and no longer "
+                        "belongs to HWB."
+                    ),
+                },
+            )
         logger.warning(
             "Patient scan not found org_id=%s device_ref=%s",
             current_user.organization_id,
@@ -246,6 +271,7 @@ async def sync_patient(
             await asyncio.to_thread(
                 create_or_update_patient,
                 db, patient_data, current_user.organization_id,
+                current_user.id,
             )
         )
         

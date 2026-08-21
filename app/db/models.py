@@ -167,6 +167,56 @@ class Patient(Base):
         return f"<Patient(id={self.id}, frontend_id={self.frontend_patient_id}, doc={self.document_type}-{self.document_number}, org={self.organization_id})>"
 
 
+class RetiredDeviceUid(Base):
+    """
+    Append-only ledger of NFC device UIDs retired from a patient record.
+
+    When a lost, damaged or replaced bracelet is re-labeled, the patient record
+    keeps a single ``device_uid`` (updated in place — no duplicate patient record
+    is ever created). The previous UID is recorded here so that:
+
+      - a later scan of the retired bracelet can be answered distinctly
+        ("this tag was retired and no longer belongs to HWB") instead of the
+        generic 404 that looks like a blank or unknown chip, and
+      - there is an auditable trail of which UID belonged to which patient, when
+        it was retired, by whom, and why.
+
+    Rows are never updated or deleted — one row per retirement event. ``device_uid``
+    is intentionally NOT unique: it is a historical ledger, not a live binding.
+    """
+    __tablename__ = "retired_device_uids"
+
+    id = Column(
+        String, primary_key=True, index=True,
+        default=lambda: str(uuid.uuid4()),
+    )
+    device_uid = Column(
+        String, index=True, nullable=False,
+        comment="The retired hardware tag UID — no longer bound to any patient",
+    )
+    patient_id = Column(
+        String, ForeignKey("patients.id"), index=True, nullable=False,
+        comment="Patient whose record this UID was retired from",
+    )
+    reason = Column(
+        String, nullable=False,
+        comment="Why the UID was retired — 'lost', 'damaged' or 'replaced'",
+    )
+    retired_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    retired_by = Column(
+        String, nullable=True,
+        comment="User id that performed the retirement, when known",
+    )
+
+    def __repr__(self):
+        return (
+            f"<RetiredDeviceUid(device_uid={self.device_uid}, "
+            f"patient_id={self.patient_id}, reason={self.reason})>"
+        )
+
+
 class RevokedToken(Base):
     """
     Token revocation list.
