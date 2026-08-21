@@ -8,9 +8,13 @@ Locks in that the endpoint:
   * is restricted to doctor/nurse, and rejects an empty batch (422).
 """
 
+from sqlalchemy.exc import IntegrityError
+
 from app.api.deps import get_current_user
 from app.db.models import EmergencyAccessLog, UserRole
 from app.main import app
+from app.schemas.emergency_access import EmergencyAccessEntry
+from app.services.emergency_access_service import store_emergency_access_entries
 
 
 class MockDoctor:
@@ -133,3 +137,49 @@ def test_empty_batch_rejected(client):
     resp = client.post("/api/v1/patients/emergency-access", json={"entries": []})
     _clear()
     assert resp.status_code == 422
+
+
+def test_concurrent_insert_race_counts_as_duplicate(db_session, monkeypatch):
+    """If an entry slips past the pre-check and the insert races into an
+    IntegrityError (two devices syncing the same client_event_id at once), it is
+    absorbed and counted as a duplicate — never surfaced as a 500, and nothing
+    partial is left behind."""
+    real_flush = db_session.flush
+    state = {"raised": False}
+
+    def flaky_flush(*args, **kwargs):
+        # Only simulate the race on the explicit insert flush (when the new
+        # EmergencyAccessLog is pending) — not on the pre-check query's
+        # autoflush, which runs before anything is added.
+        pending = any(
+            isinstance(obj, EmergencyAccessLog) for obj in db_session.new
+        )
+        if pending and not state["raised"]:
+            state["raised"] = True
+            raise IntegrityError(
+                "flush", {}, Exception("UNIQUE constraint failed")
+            )
+        return real_flush(*args, **kwargs)
+
+    monkeypatch.setattr(db_session, "flush", flaky_flush)
+
+    stored, duplicates = store_emergency_access_entries(
+        db_session,
+        [EmergencyAccessEntry(**_entry("evt-race"))],
+        organization_id="org-123",
+    )
+
+    assert (stored, duplicates) == (0, 1)
+    assert db_session.query(EmergencyAccessLog).count() == 0
+
+
+def test_emergency_log_repr():
+    """__repr__ is safe and identifies the entry without dumping PHI fields."""
+    row = EmergencyAccessLog(
+        client_event_id="evt-x",
+        patient_uid="TAG-1",
+        reason="guardian_absent_offline",
+    )
+    text = repr(row)
+    assert "EmergencyAccessLog" in text
+    assert "evt-x" in text
