@@ -98,6 +98,61 @@ def get_retired_device_uid(
     )
 
 
+def _record_guardian_retirements(
+    db: Session,
+    *,
+    old_record: Optional[dict],
+    patient_in: PatientFullRecord,
+    patient_id: str,
+    reason: str,
+    actor_user_id: Optional[str],
+) -> None:
+    """
+    Append retirement rows for any guardian card UID that is being replaced or
+    removed on this sync.
+
+    Guardian UIDs live inside ``full_record_json`` (``guardianInfo.device_uid``
+    and ``guardian2Info.device_uid``), not on a Patient column. We compare the
+    persisted (old) UID of each guardian slot against the incoming one; when the
+    old UID is non-empty and differs from the new one, the old UID is retired
+    with ``device_role='guardian'``.
+
+    Idempotent: after a successful sync the stored UID equals the incoming one,
+    so a retried sync retires nothing further. A slot whose guardian was removed
+    (incoming UID empty/absent) still retires the old UID.
+    """
+    old = old_record or {}
+    guardian2 = patient_in.guardian2Info
+    slots = (
+        (
+            (old.get("guardianInfo") or {}).get("device_uid"),
+            patient_in.guardianInfo.device_uid,
+        ),
+        (
+            (old.get("guardian2Info") or {}).get("device_uid"),
+            guardian2.device_uid if guardian2 is not None else None,
+        ),
+    )
+    for old_uid, new_uid in slots:
+        old_norm = (old_uid or "").strip()
+        new_norm = (new_uid or "").strip()
+        if old_norm and old_norm != new_norm:
+            db.add(
+                RetiredDeviceUid(
+                    device_uid=old_norm,
+                    patient_id=patient_id,
+                    reason=reason,
+                    retired_by=actor_user_id,
+                    device_role="guardian",
+                )
+            )
+            logger.info(
+                "Guardian card retired for patient %s reason=%s",
+                safe_patient_ref(patient_id),
+                reason,
+            )
+
+
 def _ensure_device_uid_available(
     db: Session, device_uid: str, exclude_patient_id: Optional[str] = None
 ) -> None:
@@ -337,6 +392,14 @@ def create_or_update_patient(
         # Recompute hash on merged record since immutable fields were restored
         existing_patient.background_data_hash = compute_background_hash(merged_record)
 
+        # Single retirement reason for this sync — applies to every device UID
+        # (patient bracelet and/or guardian cards) that changes in this call.
+        retire_reason = (
+            patient_in.retiredDeviceReason.value
+            if patient_in.retiredDeviceReason is not None
+            else "replaced"
+        )
+
         # BRACELET REPLACEMENT (Update device_uid)
         if patient_in.device_uid and patient_in.device_uid != existing_patient.device_uid:
             # Reject early if the new tag already belongs to another patient.
@@ -348,17 +411,13 @@ def create_or_update_patient(
             # commits atomically with the device_uid change below — if the commit
             # races into an IntegrityError, the retirement rolls back with it.
             old_device_uid = existing_patient.device_uid
-            retire_reason = (
-                patient_in.retiredDeviceReason.value
-                if patient_in.retiredDeviceReason is not None
-                else "replaced"
-            )
             db.add(
                 RetiredDeviceUid(
                     device_uid=old_device_uid,
                     patient_id=existing_patient.id,
                     reason=retire_reason,
                     retired_by=actor_user_id,
+                    device_role="patient",
                 )
             )
             logger.info(
@@ -367,6 +426,18 @@ def create_or_update_patient(
                 retire_reason,
             )
             existing_patient.device_uid = patient_in.device_uid
+
+        # GUARDIAN CARD REPLACEMENT — guardian UIDs live inside full_record_json,
+        # so their re-labeling is persisted by the merge above; here we only
+        # record the retirement of any old guardian UID for the audit ledger.
+        _record_guardian_retirements(
+            db,
+            old_record=old_record_dump,
+            patient_in=patient_in,
+            patient_id=existing_patient.id,
+            reason=retire_reason,
+            actor_user_id=actor_user_id,
+        )
 
         try:
             db.commit()

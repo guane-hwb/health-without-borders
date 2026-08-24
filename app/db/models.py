@@ -171,15 +171,17 @@ class RetiredDeviceUid(Base):
     """
     Append-only ledger of NFC device UIDs retired from a patient record.
 
-    When a lost, damaged or replaced bracelet is re-labeled, the patient record
-    keeps a single ``device_uid`` (updated in place — no duplicate patient record
-    is ever created). The previous UID is recorded here so that:
+    When a lost, damaged or replaced bracelet (patient) or card (guardian) is
+    re-labeled, the record keeps a single UID per device (updated in place — no
+    duplicate patient record is ever created). The previous UID is recorded here
+    so that:
 
       - a later scan of the retired bracelet can be answered distinctly
         ("this tag was retired and no longer belongs to HWB") instead of the
         generic 404 that looks like a blank or unknown chip, and
-      - there is an auditable trail of which UID belonged to which patient, when
-        it was retired, by whom, and why.
+      - there is an auditable trail of which UID belonged to which patient, in
+        which role (patient bracelet vs guardian card), when it was retired, by
+        whom, and why.
 
     Rows are never updated or deleted — one row per retirement event. ``device_uid``
     is intentionally NOT unique: it is a historical ledger, not a live binding.
@@ -202,6 +204,10 @@ class RetiredDeviceUid(Base):
         String, nullable=False,
         comment="Why the UID was retired — 'lost', 'damaged' or 'replaced'",
     )
+    device_role = Column(
+        String, nullable=False, server_default="patient",
+        comment="Which device was retired — 'patient' bracelet or 'guardian' card",
+    )
     retired_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )
@@ -213,7 +219,8 @@ class RetiredDeviceUid(Base):
     def __repr__(self):
         return (
             f"<RetiredDeviceUid(device_uid={self.device_uid}, "
-            f"patient_id={self.patient_id}, reason={self.reason})>"
+            f"patient_id={self.patient_id}, role={self.device_role}, "
+            f"reason={self.reason})>"
         )
 
 
