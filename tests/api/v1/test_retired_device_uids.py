@@ -183,3 +183,182 @@ def test_scan_unknown_tag_still_returns_404(client: TestClient):
     _clear_overrides()
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Guardian card retirement — guardian UIDs live inside full_record_json
+# ---------------------------------------------------------------------------
+
+
+def _with_guardian_uid(uid):
+    return {
+        **BASE_PAYLOAD,
+        "guardianInfo": {**BASE_PAYLOAD["guardianInfo"], "device_uid": uid},
+    }
+
+
+def test_patient_retirement_has_device_role_patient(db_session):
+    """The patient bracelet retirement is tagged with device_role='patient'."""
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(BASE_PAYLOAD),
+        org_id="org-123",
+    )
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(
+            {**BASE_PAYLOAD, "device_uid": "TAG-NEW-ROLE", "retiredDeviceReason": "lost"}
+        ),
+        org_id="org-123",
+    )
+    retired = get_retired_device_uid(db_session, "TAG-OLD-001")
+    assert retired is not None
+    assert retired.device_role == "patient"
+
+
+def test_guardian_card_replacement_records_retired_uid(db_session):
+    """Replacing a guardian card UID retires the old one as device_role='guardian'."""
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(BASE_PAYLOAD),
+        org_id="org-123",
+        actor_user_id="u-9",
+    )
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(
+            {**_with_guardian_uid("GUARDIAN-UID-NEW"), "retiredDeviceReason": "damaged"}
+        ),
+        org_id="org-123",
+        actor_user_id="u-9",
+    )
+
+    retired = get_retired_device_uid(db_session, "GUARDIAN-UID-001")
+    assert retired is not None
+    assert retired.device_role == "guardian"
+    assert retired.reason == "damaged"
+    assert retired.retired_by == "u-9"
+    # No patient bracelet was touched, so only the guardian row exists.
+    assert db_session.query(RetiredDeviceUid).count() == 1
+
+
+def test_patient_and_guardian_replaced_together_share_reason(db_session):
+    """A single sync that changes both the patient and guardian UID retires both
+    with the same reason and the correct roles."""
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(BASE_PAYLOAD),
+        org_id="org-123",
+    )
+    payload = {
+        **_with_guardian_uid("GUARDIAN-UID-NEW"),
+        "device_uid": "TAG-NEW-BOTH",
+        "retiredDeviceReason": "lost",
+    }
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(payload),
+        org_id="org-123",
+    )
+
+    patient_row = get_retired_device_uid(db_session, "TAG-OLD-001")
+    guardian_row = get_retired_device_uid(db_session, "GUARDIAN-UID-001")
+    assert patient_row.device_role == "patient"
+    assert guardian_row.device_role == "guardian"
+    assert {patient_row.reason, guardian_row.reason} == {"lost"}
+    assert db_session.query(RetiredDeviceUid).count() == 2
+
+
+def test_second_guardian_replacement_records_retired_uid(db_session):
+    """Replacing guardian 2's card UID retires the old guardian-2 UID."""
+    with_two = {
+        **BASE_PAYLOAD,
+        "guardian2Info": {
+            "name": "José Pérez",
+            "relationship": "Padre",
+            "phone": "+573007654321",
+            "device_uid": "GUARDIAN2-UID-001",
+        },
+    }
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(with_two),
+        org_id="org-123",
+    )
+    changed = {
+        **with_two,
+        "guardian2Info": {
+            **with_two["guardian2Info"],
+            "device_uid": "GUARDIAN2-UID-NEW",
+        },
+    }
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(changed),
+        org_id="org-123",
+    )
+
+    retired = get_retired_device_uid(db_session, "GUARDIAN2-UID-001")
+    assert retired is not None
+    assert retired.device_role == "guardian"
+
+
+def test_guardian_removal_retires_old_uid(db_session):
+    """Removing guardian 2 entirely still retires its old card UID."""
+    with_two = {
+        **BASE_PAYLOAD,
+        "guardian2Info": {
+            "name": "José Pérez",
+            "relationship": "Padre",
+            "phone": "+573007654321",
+            "device_uid": "GUARDIAN2-UID-GONE",
+        },
+    }
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(with_two),
+        org_id="org-123",
+    )
+    # Re-sync without guardian 2 at all.
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(BASE_PAYLOAD),
+        org_id="org-123",
+    )
+
+    retired = get_retired_device_uid(db_session, "GUARDIAN2-UID-GONE")
+    assert retired is not None
+    assert retired.device_role == "guardian"
+
+
+def test_no_guardian_retirement_when_guardian_unchanged(db_session):
+    """Changing only the patient bracelet must not retire the unchanged guardian."""
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(BASE_PAYLOAD),
+        org_id="org-123",
+    )
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(
+            {**BASE_PAYLOAD, "device_uid": "TAG-NEW-ONLY"}
+        ),
+        org_id="org-123",
+    )
+    # Exactly one retirement — the patient bracelet — and no guardian row.
+    rows = db_session.query(RetiredDeviceUid).all()
+    assert len(rows) == 1
+    assert rows[0].device_role == "patient"
+
+
+def test_retired_device_uid_repr():
+    """__repr__ is safe and names the role."""
+    row = RetiredDeviceUid(
+        device_uid="TAG-1",
+        patient_id="pat-1",
+        reason="lost",
+        device_role="guardian",
+    )
+    text = repr(row)
+    assert "RetiredDeviceUid" in text
+    assert "guardian" in text
