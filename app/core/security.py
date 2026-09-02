@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Union
@@ -6,6 +7,8 @@ from jose import jwt
 from passlib.context import CryptContext
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Password hashing context using bcrypt algorithm
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -80,3 +83,47 @@ def get_password_hash(password: str) -> str:
     Generates a secure hash from a raw password.
     """
     return pwd_context.hash(password)
+
+
+def nfc_key_claims() -> dict[str, Any]:
+    """
+    Assemble the NFC key material handed to clients at login, refresh, and
+    ``/users/me``.
+
+    Returns a dict with three keys, matching the response schemas:
+      - ``nfc_encryption_key``: the current version's hex key. Kept for
+        backward compatibility with clients that predate key versioning.
+      - ``nfc_key_version``: the integer version clients stamp into the payload
+        header when writing a tag.
+      - ``nfc_keyring``: ``{version_str: hex}`` for every live key, so a device
+        can decrypt any tag still in circulation while offline and encrypt with
+        the current one.
+
+    When no key is configured every value is ``None``, preserving the previous
+    behavior of omitting the key from the response. When the configured current
+    version is missing from the keyring the writable fields are ``None`` (the
+    client can still read via the keyring) and a warning is logged.
+    """
+    ring = settings.nfc_keyring()
+    if not ring:
+        return {
+            "nfc_encryption_key": None,
+            "nfc_key_version": None,
+            "nfc_keyring": None,
+        }
+
+    current_version = settings.NFC_CURRENT_KEY_VERSION
+    current_key = ring.get(current_version)
+    if current_key is None:
+        logger.warning(
+            "NFC current key version %s is not present in the keyring "
+            "(available versions: %s); clients can read but not write NFC tags.",
+            current_version,
+            sorted(ring.keys()),
+        )
+
+    return {
+        "nfc_encryption_key": current_key,
+        "nfc_key_version": current_version if current_key is not None else None,
+        "nfc_keyring": {str(v): k for v, k in sorted(ring.items())},
+    }

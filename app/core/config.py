@@ -1,3 +1,5 @@
+import os
+import re
 from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -52,7 +54,15 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days
     
     # --- NFC ---
-    NFC_MASTER_KEY: str = ""  # Hex-encoded 32-byte AES-256 key for NFC payload encryption
+    # Version 0 is reserved for this legacy single key. Tags written before key
+    # versioning carry no version header and are decrypted with version 0.
+    NFC_MASTER_KEY: str = ""  # Hex-encoded 32-byte AES-256 key (key version 0)
+    # Version that new writes are encrypted with. Clients pick the key with this
+    # version from the keyring and stamp it into the NFC payload header.
+    # Defaults to 0 (the legacy NFC_MASTER_KEY) so existing deployments keep
+    # working unchanged. A rotated deployment adds NFC_KEY_V<n> secrets and
+    # bumps this to the highest live version.
+    NFC_CURRENT_KEY_VERSION: int = 0
 
     # --- REPORTING ---
     # Calendar dates and month boundaries in aggregated statistics are resolved
@@ -77,6 +87,30 @@ class Settings(BaseSettings):
     # --- REDIS (for rate limiting and token revocation) ---
     # Optional: falls back to in-memory storage when not set (local dev)
     REDIS_URL: Optional[str] = None
+
+    def nfc_keyring(self) -> dict[int, str]:
+        """
+        Build the ``{version: hex_key}`` map of every live NFC key.
+
+        Sources, merged in this order (later wins on a version clash):
+          - ``NFC_MASTER_KEY``, when set, is registered as version 0 (the
+            legacy key; tags written before versioning decrypt with it).
+          - Every environment variable named ``NFC_KEY_V<n>`` (n an integer)
+            registers version ``n``. These are meant to be mounted one secret
+            per key from a secret manager, so rotation is "add a secret and
+            bump NFC_CURRENT_KEY_VERSION" with no code or JSON edits.
+
+        Blank values are skipped. Returns an empty dict when nothing is set.
+        """
+        ring: dict[int, str] = {}
+        if self.NFC_MASTER_KEY.strip():
+            ring[0] = self.NFC_MASTER_KEY.strip()
+        pattern = re.compile(r"^NFC_KEY_V(\d+)$")
+        for name, value in os.environ.items():
+            match = pattern.match(name)
+            if match and value.strip():
+                ring[int(match.group(1))] = value.strip()
+        return ring
 
     model_config = SettingsConfigDict(
         env_file=".env",
