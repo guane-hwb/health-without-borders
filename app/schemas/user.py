@@ -38,7 +38,14 @@ class UserResponse(UserBase):
     id: str               
     organization_id: str
     nfc_encryption_key: Optional[str] = Field(
-        None, description="Hex AES-256 master key for NFC encryption"
+        None, description="Current version's hex AES-256 NFC key (backward compatible)"
+    )
+    nfc_key_version: Optional[int] = Field(
+        None, description="Key version clients stamp into NFC payloads when writing"
+    )
+    nfc_keyring: Optional[dict[str, str]] = Field(
+        None,
+        description="{version_str: hex} of every live NFC key, for offline reads",
     )
 
     class Config:
