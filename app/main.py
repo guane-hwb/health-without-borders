@@ -12,6 +12,15 @@ from app.services.terminology import terminology
 
 setup_logging()
 
+_nfc_keyring_errors = settings.nfc_keyring_errors()
+if _nfc_keyring_errors:
+    # Fail fast rather than serve a keyring that disables NFC on every device.
+    # The messages never contain key material, only which variable is at fault.
+    raise RuntimeError(
+        "Invalid NFC key configuration:\n  - "
+        + "\n  - ".join(_nfc_keyring_errors)
+    )
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version="1.0.0",

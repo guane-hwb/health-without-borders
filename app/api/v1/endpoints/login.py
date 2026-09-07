@@ -93,7 +93,7 @@ def login_access_token(
         refresh_token=refresh_token,
         token_type="bearer",
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        **security.nfc_key_claims(),
+        **security.nfc_key_claims(role=user.role),
     )
 
 
@@ -167,7 +167,7 @@ def refresh_access_token(
         # was dropped (app relaunch; the session-bound key is no longer
         # persisted to disk) repopulates it through the silent-refresh path
         # without an extra /users/me round-trip.
-        **security.nfc_key_claims(),
+        **security.nfc_key_claims(role=user.role),
     )
 
 

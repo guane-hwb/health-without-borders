@@ -137,7 +137,7 @@ def get_current_user_profile(current_user: User = Depends(get_current_user)):
         role=current_user.role,
         is_active=current_user.is_active,
         organization_id=current_user.organization_id,
-        **nfc_key_claims(),
+        **nfc_key_claims(role=current_user.role),
     )
 
 

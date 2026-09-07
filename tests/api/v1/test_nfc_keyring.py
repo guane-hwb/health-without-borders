@@ -215,3 +215,89 @@ class TestEndpointDelivery:
         assert data["nfc_encryption_key"] is None
         assert data["nfc_key_version"] is None
         assert data["nfc_keyring"] is None
+
+
+# ---------------------------------------------------------------------------
+# Keyring validation and role gating
+# ---------------------------------------------------------------------------
+
+class TestKeyringValidation:
+    def test_no_errors_when_unconfigured(self, clean_nfc_env):
+        assert settings.nfc_keyring_errors() == []
+
+    def test_no_errors_for_a_valid_ring(self, clean_nfc_env):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+        clean_nfc_env.setenv("NFC_KEY_V1", KEY_V1)
+        clean_nfc_env.setattr(settings, "NFC_CURRENT_KEY_VERSION", 1)
+        assert settings.nfc_keyring_errors() == []
+
+    def test_malformed_key_is_reported_without_leaking_it(self, clean_nfc_env):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+        clean_nfc_env.setenv("NFC_KEY_V1", "not-a-hex-key")
+
+        errors = settings.nfc_keyring_errors()
+
+        assert any("NFC_KEY_V1" in e for e in errors)
+        # The message names the variable, never the value.
+        assert all("not-a-hex-key" not in e for e in errors)
+
+    def test_key_of_wrong_length_is_reported(self, clean_nfc_env):
+        clean_nfc_env.setenv("NFC_KEY_V1", "abcd")
+        clean_nfc_env.setattr(settings, "NFC_CURRENT_KEY_VERSION", 1)
+        assert any("NFC_KEY_V1" in e for e in settings.nfc_keyring_errors())
+
+    def test_version_out_of_header_range_is_reported(self, clean_nfc_env):
+        clean_nfc_env.setenv("NFC_KEY_V256", KEY_V1)
+        clean_nfc_env.setattr(settings, "NFC_CURRENT_KEY_VERSION", 256)
+        assert any("NFC_KEY_V256" in e for e in settings.nfc_keyring_errors())
+
+    def test_current_version_without_a_key_is_reported(self, clean_nfc_env):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+        clean_nfc_env.setattr(settings, "NFC_CURRENT_KEY_VERSION", 3)
+        assert any(
+            "NFC_CURRENT_KEY_VERSION" in e for e in settings.nfc_keyring_errors()
+        )
+
+
+class TestRoleGating:
+    def test_superadmin_gets_no_key_material(self, clean_nfc_env):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+
+        claims = security.nfc_key_claims(role=UserRole.superadmin)
+
+        # A superadmin has no clinical access and never taps a wristband.
+        assert claims == {
+            "nfc_encryption_key": None,
+            "nfc_key_version": None,
+            "nfc_keyring": None,
+        }
+
+    def test_superadmin_gated_by_plain_string_too(self, clean_nfc_env):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+        assert security.nfc_key_claims(role="superadmin")["nfc_keyring"] is None
+
+    def test_clinical_roles_still_get_the_ring(self, clean_nfc_env):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+
+        for role in (UserRole.doctor, UserRole.nurse, UserRole.org_admin):
+            claims = security.nfc_key_claims(role=role)
+            assert claims["nfc_keyring"] == {"0": KEY_V0}, role
+
+    def test_omitting_role_still_delivers(self, clean_nfc_env):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+        assert security.nfc_key_claims()["nfc_keyring"] == {"0": KEY_V0}
+
+    def test_superadmin_login_carries_no_keyring(
+        self, client: TestClient, db_session, clean_nfc_env
+    ):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+        org = _create_org(db_session)
+        user = _create_user(db_session, org.id)
+        user.role = UserRole.superadmin
+        db_session.commit()
+
+        data = _login(client)
+
+        assert data["nfc_encryption_key"] is None
+        assert data["nfc_key_version"] is None
+        assert data["nfc_keyring"] is None
