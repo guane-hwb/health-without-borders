@@ -4,6 +4,11 @@ from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Highest key version representable in the one-byte NFC payload header.
+NFC_MAX_KEY_VERSION = 255
+
+_HEX_KEY_RE = re.compile(r"[0-9a-fA-F]{64}")
+
 
 class Settings(BaseSettings):
     """
@@ -111,6 +116,48 @@ class Settings(BaseSettings):
             if match and value.strip():
                 ring[int(match.group(1))] = value.strip()
         return ring
+
+    def nfc_keyring_errors(self) -> list[str]:
+        """
+        Describe everything wrong with the configured NFC keyring.
+
+        A malformed key is not a local problem: it is served to every device,
+        and a client that cannot parse it loses NFC entirely. Checking at
+        startup turns a fleet-wide outage discovered when someone taps a
+        wristband into a deployment that refuses to boot.
+
+        Returns an empty list when the configuration is usable. A deployment
+        with no NFC key at all is valid (NFC is simply unavailable).
+        """
+        errors: list[str] = []
+        ring = self.nfc_keyring()
+        if not ring:
+            return errors
+
+        for version, key in sorted(ring.items()):
+            source = (
+                "NFC_MASTER_KEY"
+                if version == 0 and key == self.NFC_MASTER_KEY.strip()
+                else f"NFC_KEY_V{version}"
+            )
+            if not 0 <= version <= NFC_MAX_KEY_VERSION:
+                errors.append(
+                    f"{source}: version must be between 0 and "
+                    f"{NFC_MAX_KEY_VERSION} to fit the NFC payload header."
+                )
+            if not _HEX_KEY_RE.fullmatch(key):
+                # Never include the value itself in the message.
+                errors.append(
+                    f"{source}: must be exactly 64 hexadecimal characters "
+                    "(a 32-byte AES-256 key)."
+                )
+
+        if self.NFC_CURRENT_KEY_VERSION not in ring:
+            errors.append(
+                f"NFC_CURRENT_KEY_VERSION={self.NFC_CURRENT_KEY_VERSION} has no "
+                f"matching key. Versions configured: {sorted(ring)}."
+            )
+        return errors
 
     model_config = SettingsConfigDict(
         env_file=".env",

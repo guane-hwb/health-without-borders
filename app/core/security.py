@@ -10,6 +10,9 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Roles with no clinical access, and therefore no reason to hold NFC keys.
+NFC_KEYLESS_ROLES = frozenset({"superadmin"})
+
 # Password hashing context using bcrypt algorithm
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -85,10 +88,16 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def nfc_key_claims() -> dict[str, Any]:
+def nfc_key_claims(role: Optional[str] = None) -> dict[str, Any]:
     """
     Assemble the NFC key material handed to clients at login, refresh, and
     ``/users/me``.
+
+    ``role`` gates delivery. A ``superadmin`` has no clinical access and never
+    reads or writes a wristband, so it is served no key at all: these are the
+    accounts most worth phishing, and there is no reason for a stolen one to
+    come with the material that decrypts every tag in the field. Omitting
+    ``role`` delivers the keyring, which keeps existing callers working.
 
     Returns a dict with three keys, matching the response schemas:
       - ``nfc_encryption_key``: the current version's hex key. Kept for
@@ -104,8 +113,11 @@ def nfc_key_claims() -> dict[str, Any]:
     version is missing from the keyring the writable fields are ``None`` (the
     client can still read via the keyring) and a warning is logged.
     """
+    # ``role`` may arrive as a UserRole enum member or a plain string.
+    role_value = getattr(role, "value", role)
+
     ring = settings.nfc_keyring()
-    if not ring:
+    if role_value in NFC_KEYLESS_ROLES or not ring:
         return {
             "nfc_encryption_key": None,
             "nfc_key_version": None,
