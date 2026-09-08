@@ -16,6 +16,11 @@ from app.schemas.emergency_access import (
     EmergencyAccessSyncRequest,
     EmergencyAccessSyncResponse,
 )
+from app.schemas.nfc_key_version import (
+    NfcKeyVersionSyncRequest,
+    NfcKeyVersionSyncResponse,
+    NfcKeyVersionUsageResponse,
+)
 from app.schemas.patient import (
     PatientFullRecord,
     PatientSearchRequest,
@@ -25,6 +30,10 @@ from app.services.emergency_access_service import store_emergency_access_entries
 from app.services.fhir import fhir_backend
 from app.services.fhir_service import convert_to_fhir_rda
 from app.services.llm import medical_llm_processor
+from app.services.nfc_key_version_service import (
+    store_key_version_observations,
+    summarize_key_version_usage,
+)
 from app.services.patient_service import (
     DeviceUidConflictError,
     create_or_update_patient,
@@ -489,3 +498,93 @@ async def sync_emergency_access(
         stored=stored,
         duplicates=duplicates,
     )
+
+
+@router.post(
+    "/nfc-key-versions",
+    response_model=NfcKeyVersionSyncResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def sync_nfc_key_versions(
+    payload: NfcKeyVersionSyncRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Report which NFC key version each scanned chip was found on.
+
+    A chip gives no readable hint of which key encrypted it, so this is the only
+    way to learn how far a key rotation has drained. Retiring a version makes
+    every chip still on it unreadable offline; without these counts that number
+    is unknowable and the decision is a guess.
+
+    **Not idempotent, by design.** Every sighting is appended. The device
+    already collapses repeat reads of one chip into a single pending row, and
+    the interval between sightings is what a retention period has to be sized
+    from — de-duplicating here would discard exactly that.
+
+    **Allowed roles:** `doctor`, `nurse` — the point-of-care staff whose devices
+    read chips.
+
+    **Privacy:** entries carry a device UID, a role, a key version and a
+    timestamp. No patient identifier, no clinical data, no key material.
+
+    **Responses:**
+    - `202`: Batch accepted. Body reports `received` and `stored`.
+    - `403`: Caller is not `doctor` or `nurse`.
+    - `422`: Missing or malformed body fields (e.g. empty `entries`).
+    """
+    if current_user.role not in {UserRole.doctor, UserRole.nurse}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only doctors and nurses can report NFC key versions.",
+        )
+
+    stored = store_key_version_observations(db, payload.entries, current_user)
+    return NfcKeyVersionSyncResponse(
+        received=len(payload.entries), stored=stored
+    )
+
+
+@router.get(
+    "/nfc-key-versions/usage",
+    response_model=NfcKeyVersionUsageResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_nfc_key_version_usage(
+    window_days: int = 90,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Summarise which key versions are still in circulation.
+
+    Each chip is counted once, under the version of its most recent sighting —
+    the version it is on now. `retirable_versions` lists versions with no
+    sighting inside `window_days`.
+
+    **Read that list as a veto, not a clearance.** A version missing from the
+    telemetry may still have chips in the field whose patients have not come
+    back; absence of sightings is not evidence of absence of chips. It can tell
+    you a retirement is obviously unsafe. It cannot tell you one is safe.
+
+    **Allowed roles:** `org_admin`, `superadmin` — this is an operational
+    question, not a point-of-care one.
+
+    **Responses:**
+    - `200`: Summary returned.
+    - `403`: Caller is not an administrator.
+    - `422`: `window_days` out of range.
+    """
+    if current_user.role not in {UserRole.org_admin, UserRole.superadmin}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only administrators can read NFC key version usage.",
+        )
+    if window_days < 1 or window_days > 3650:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="window_days must be between 1 and 3650.",
+        )
+
+    return summarize_key_version_usage(db, window_days=window_days)
