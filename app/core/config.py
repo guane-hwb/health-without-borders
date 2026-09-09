@@ -2,12 +2,16 @@ import os
 import re
 from typing import Optional
 
+from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Highest key version representable in the one-byte NFC payload header.
 NFC_MAX_KEY_VERSION = 255
 
 _HEX_KEY_RE = re.compile(r"[0-9a-fA-F]{64}")
+
+#: Matches the per-version NFC key variables, e.g. ``NFC_KEY_V1``.
+_NFC_KEY_VAR_RE = re.compile(r"^NFC_KEY_V(\d+)$")
 
 
 class Settings(BaseSettings):
@@ -100,22 +104,47 @@ class Settings(BaseSettings):
         Sources, merged in this order (later wins on a version clash):
           - ``NFC_MASTER_KEY``, when set, is registered as version 0 (the
             legacy key; tags written before versioning decrypt with it).
-          - Every environment variable named ``NFC_KEY_V<n>`` (n an integer)
-            registers version ``n``. These are meant to be mounted one secret
-            per key from a secret manager, so rotation is "add a secret and
-            bump NFC_CURRENT_KEY_VERSION" with no code or JSON edits.
+          - Every ``NFC_KEY_V<n>`` entry in the ``.env`` file, if present.
+          - Every ``NFC_KEY_V<n>`` environment variable. These are meant to be
+            mounted one secret per key from a secret manager, so rotation is
+            "add a secret and bump NFC_CURRENT_KEY_VERSION" with no code or
+            JSON edits.
+
+        The ``.env`` file is read explicitly because these names are dynamic:
+        pydantic-settings only loads it into declared fields, and ``NFC_KEY_V1``
+        is not one, so a rotated key in a developer's ``.env`` would otherwise
+        be silently ignored while the same name works in production. The
+        process environment is applied last so a real environment variable
+        still wins, matching how every other setting behaves.
 
         Blank values are skipped. Returns an empty dict when nothing is set.
         """
         ring: dict[int, str] = {}
         if self.NFC_MASTER_KEY.strip():
             ring[0] = self.NFC_MASTER_KEY.strip()
-        pattern = re.compile(r"^NFC_KEY_V(\d+)$")
-        for name, value in os.environ.items():
-            match = pattern.match(name)
-            if match and value.strip():
-                ring[int(match.group(1))] = value.strip()
+
+        for source in (self._dotenv_values(), os.environ):
+            for name, value in source.items():
+                match = _NFC_KEY_VAR_RE.match(name)
+                if match and value and value.strip():
+                    ring[int(match.group(1))] = value.strip()
         return ring
+
+    @staticmethod
+    def _dotenv_values() -> dict[str, str | None]:
+        """Read the ``.env`` file, or an empty mapping when there is none."""
+        env_file = Settings.model_config.get("env_file")
+        if not env_file or not os.path.exists(env_file):
+            return {}
+        try:
+            return dotenv_values(
+                env_file,
+                encoding=Settings.model_config.get("env_file_encoding", "utf-8"),
+            )
+        except OSError:
+            # An unreadable .env must not stop the app: the process
+            # environment is the authoritative source in deployments.
+            return {}
 
     def nfc_keyring_errors(self) -> list[str]:
         """

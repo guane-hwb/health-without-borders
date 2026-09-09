@@ -52,6 +52,7 @@ For physical security in refugee or transit camps:
 
 ### 3.1. Encryption at Rest
 - PostgreSQL on Google Cloud SQL encrypted with AES-256 (Google-managed keys).
+- NFC chip payloads encrypted with AES-256-GCM using a versioned keyring. See [NFC Key Management](nfc-key-management.md) for configuration, rotation and retirement.
 - Automated backups are identically encrypted.
 
 ### 3.2. Encryption in Transit
