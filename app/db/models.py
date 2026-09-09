@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     UniqueConstraint,
 )
@@ -165,6 +166,69 @@ class Patient(Base):
 
     def __repr__(self):
         return f"<Patient(id={self.id}, frontend_id={self.frontend_patient_id}, doc={self.document_type}-{self.document_number}, org={self.organization_id})>"
+
+
+class NfcKeyVersionObservation(Base):
+    """
+    Append-only record of which NFC key version a chip was seen on.
+
+    A chip carries no readable hint of which key encrypted it — the version is
+    only known once a device decrypts it — so this is the only way to learn how
+    far a key rotation has actually drained. Retiring a version makes every
+    chip still on it unreadable offline, and without this table that count is
+    unknowable.
+
+    **Append-only on purpose.** The device keeps one row per chip (its current
+    state); the server keeps every sighting. The gap between consecutive
+    sightings of the same UID is what a retention period has to be sized from,
+    and an upsert here would destroy exactly that.
+
+    ``device_role`` separates bracelets from guardian cards. Both are written
+    with the same keyring, and guardian cards are rewritten less often, so a
+    version cannot be retired safely by counting bracelets alone.
+
+    No patient identifier, no clinical data and no key material is stored here.
+    """
+
+    __tablename__ = "nfc_key_version_observations"
+
+    id = Column(
+        String, primary_key=True, index=True,
+        default=lambda: str(uuid.uuid4()),
+    )
+    device_uid = Column(
+        String, index=True, nullable=False,
+        comment="Hardware tag UID observed — not joined to any patient here",
+    )
+    device_role = Column(
+        String, nullable=False, server_default="patient",
+        comment="'patient' bracelet or 'guardian' card",
+    )
+    key_version = Column(
+        Integer, index=True, nullable=False,
+        comment="NFC key version that decrypted this chip",
+    )
+    had_header = Column(
+        Boolean, nullable=False, server_default="false",
+        comment="Whether the payload carried a version header (version >= 1)",
+    )
+    observed_at = Column(
+        DateTime(timezone=True), nullable=False,
+        comment="When the device read the chip (client clock)",
+    )
+    reported_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        comment="When the server received it — may lag by days for a brigade "
+                "that was offline",
+    )
+    reported_by = Column(
+        String, ForeignKey("users.id"), index=True, nullable=True,
+        comment="User whose device reported the sighting",
+    )
+    organization_id = Column(
+        String, ForeignKey("organizations.id"), index=True, nullable=True,
+        comment="Retained for traceability only, never for access control",
+    )
 
 
 class RetiredDeviceUid(Base):
