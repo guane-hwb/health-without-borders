@@ -10,7 +10,7 @@ Covers:
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core import security
+from app.core import config, security
 from app.core.config import settings
 from app.core.security import get_password_hash
 from app.db.models import Organization, User, UserRole
@@ -301,3 +301,71 @@ class TestRoleGating:
         assert data["nfc_encryption_key"] is None
         assert data["nfc_key_version"] is None
         assert data["nfc_keyring"] is None
+
+
+# ---------------------------------------------------------------------------
+# Keys declared in a .env file (local development)
+# ---------------------------------------------------------------------------
+
+class TestDotenvKeys:
+    """
+    ``NFC_KEY_V<n>`` names are dynamic, so pydantic-settings never loads them
+    from ``.env`` into a field. They are read from the file explicitly, or a
+    rotation a developer configures locally would be silently ignored while the
+    same variable works in production.
+    """
+
+    def _write_env(self, tmp_path, monkeypatch, body: str):
+        env_file = tmp_path / ".env"
+        env_file.write_text(body, encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        return env_file
+
+    def test_versioned_key_is_read_from_dotenv(
+        self, clean_nfc_env, tmp_path
+    ):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+        self._write_env(tmp_path, clean_nfc_env, f'NFC_KEY_V1="{KEY_V1}"\n')
+
+        assert settings.nfc_keyring() == {0: KEY_V0, 1: KEY_V1}
+
+    def test_process_environment_wins_over_dotenv(
+        self, clean_nfc_env, tmp_path
+    ):
+        self._write_env(tmp_path, clean_nfc_env, f'NFC_KEY_V1="{KEY_V1}"\n')
+        clean_nfc_env.setenv("NFC_KEY_V1", KEY_V2)
+
+        # Matches how every other setting behaves in a deployment.
+        assert settings.nfc_keyring() == {1: KEY_V2}
+
+    def test_missing_dotenv_is_not_an_error(self, clean_nfc_env, tmp_path):
+        clean_nfc_env.chdir(tmp_path)
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+
+        assert settings.nfc_keyring() == {0: KEY_V0}
+
+    def test_unreadable_dotenv_is_ignored_not_fatal(
+        self, clean_nfc_env, tmp_path
+    ):
+        self._write_env(tmp_path, clean_nfc_env, f'NFC_KEY_V1="{KEY_V1}"\n')
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+
+        def _boom(*args, **kwargs):
+            raise OSError("permission denied")
+
+        clean_nfc_env.setattr(config, "dotenv_values", _boom)
+
+        # A .env that cannot be read must not take the app down: in a
+        # deployment the process environment is the authoritative source.
+        assert settings.nfc_keyring() == {0: KEY_V0}
+
+    def test_dotenv_keys_are_validated_like_any_other(
+        self, clean_nfc_env, tmp_path
+    ):
+        self._write_env(tmp_path, clean_nfc_env, 'NFC_KEY_V1="not-hex"\n')
+        clean_nfc_env.setattr(settings, "NFC_CURRENT_KEY_VERSION", 1)
+
+        errors = settings.nfc_keyring_errors()
+
+        assert any("NFC_KEY_V1" in e for e in errors)
+        assert all("not-hex" not in e for e in errors)
