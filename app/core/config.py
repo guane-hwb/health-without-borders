@@ -13,6 +13,12 @@ _HEX_KEY_RE = re.compile(r"[0-9a-fA-F]{64}")
 #: Matches the per-version NFC key variables, e.g. ``NFC_KEY_V1``.
 _NFC_KEY_VAR_RE = re.compile(r"^NFC_KEY_V(\d+)$")
 
+#: Env file location. Declared here rather than read back out of
+#: ``model_config`` so the value has a concrete ``str`` type and the two cannot
+#: drift apart.
+_ENV_FILE = ".env"
+_ENV_FILE_ENCODING = "utf-8"
+
 
 class Settings(BaseSettings):
     """
@@ -133,14 +139,10 @@ class Settings(BaseSettings):
     @staticmethod
     def _dotenv_values() -> dict[str, str | None]:
         """Read the ``.env`` file, or an empty mapping when there is none."""
-        env_file = Settings.model_config.get("env_file")
-        if not env_file or not os.path.exists(env_file):
+        if not os.path.exists(_ENV_FILE):
             return {}
         try:
-            return dotenv_values(
-                env_file,
-                encoding=Settings.model_config.get("env_file_encoding", "utf-8"),
-            )
+            return dotenv_values(_ENV_FILE, encoding=_ENV_FILE_ENCODING)
         except OSError:
             # An unreadable .env must not stop the app: the process
             # environment is the authoritative source in deployments.
@@ -189,8 +191,8 @@ class Settings(BaseSettings):
         return errors
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
+        env_file=_ENV_FILE,
+        env_file_encoding=_ENV_FILE_ENCODING,
         extra="ignore",
         case_sensitive=True
     )
