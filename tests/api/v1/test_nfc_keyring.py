@@ -10,7 +10,7 @@ Covers:
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core import security
+from app.core import config, security
 from app.core.config import settings
 from app.core.security import get_password_hash
 from app.db.models import Organization, User, UserRole
@@ -342,6 +342,21 @@ class TestDotenvKeys:
         clean_nfc_env.chdir(tmp_path)
         clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
 
+        assert settings.nfc_keyring() == {0: KEY_V0}
+
+    def test_unreadable_dotenv_is_ignored_not_fatal(
+        self, clean_nfc_env, tmp_path
+    ):
+        self._write_env(tmp_path, clean_nfc_env, f'NFC_KEY_V1="{KEY_V1}"\n')
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+
+        def _boom(*args, **kwargs):
+            raise OSError("permission denied")
+
+        clean_nfc_env.setattr(config, "dotenv_values", _boom)
+
+        # A .env that cannot be read must not take the app down: in a
+        # deployment the process environment is the authoritative source.
         assert settings.nfc_keyring() == {0: KEY_V0}
 
     def test_dotenv_keys_are_validated_like_any_other(
