@@ -53,7 +53,22 @@ still read chips written by a newer one during a partial rollout.
 
 ---
 
-## 3. Generating a key
+## 3. Field history
+
+Recorded so the state of chips already in circulation is not guesswork.
+
+**Every chip written in the field to date is key version 0, in the headerless
+format.** No build carrying the versioned wire format was distributed to any
+device between 3 and 8 September 2026, so nothing was ever written with a
+version header, and no rotation has taken place: `NFC_CURRENT_KEY_VERSION` has
+been `0` throughout.
+
+That means the two formats never coexisted in the field, and the wire format is
+frozen from the current build onwards. It also means the key in
+`NFC_MASTER_KEY` is the only key any existing chip can be read with — losing or
+changing it makes every chip in circulation unreadable offline.
+
+## 4. Generating a key
 
 ```bash
 openssl rand -hex 32
@@ -64,7 +79,7 @@ into an issue or a chat.
 
 ---
 
-## 4. Rotating
+## 5. Rotating
 
 Rotation limits how long a leaked key stays useful. It does **not** re-encrypt
 existing chips: those migrate when they are next written.
@@ -92,7 +107,7 @@ who never return stay on their original version indefinitely.
 
 ---
 
-## 5. Retiring a version
+## 6. Retiring a version
 
 Retiring means removing `NFC_KEY_V<n>` from the deployment. From that moment,
 chips still on version `n` **cannot be decrypted offline**.
@@ -147,7 +162,7 @@ retention policy it would need — remains open.
 
 ---
 
-## 6. On the device
+## 7. On the device
 
 - The keyring lives in the platform secure store (Keystore / Keychain).
 - It is **bounded by the session window**: it is only served while the refresh
@@ -163,7 +178,7 @@ retention policy it would need — remains open.
 
 ---
 
-## 7. Local development
+## 8. Local development
 
 `NFC_KEY_V<n>` entries are read from `.env` as well as from the process
 environment, so a rotation can be exercised locally:
