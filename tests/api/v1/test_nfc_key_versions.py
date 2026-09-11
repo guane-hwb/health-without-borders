@@ -77,6 +77,19 @@ def clinician(client: TestClient, db_session):
 
 
 @pytest.fixture
+def superadmin(client: TestClient, db_session):
+    org = db_session.query(Organization).first() or _create_org(db_session)
+    _create_user(
+        db_session,
+        org.id,
+        role=UserRole.superadmin,
+        email="super-keyver@hwb.org",
+        user_id="user-keyver-super",
+    )
+    return _token(client, email="super-keyver@hwb.org")
+
+
+@pytest.fixture
 def admin(client: TestClient, db_session):
     org = db_session.query(Organization).first() or _create_org(db_session)
     _create_user(
@@ -135,9 +148,13 @@ class TestSyncEndpoint:
         )
         assert resp.status_code == 422
 
-    def test_admin_cannot_report(self, client, admin):
+    def test_superadmin_cannot_report(self, client, superadmin):
+        # superadmin receives no key material at all, so it can never have
+        # legitimately decrypted a chip: a sighting from it is meaningless.
         resp = client.post(
-            SYNC_URL, json={"entries": [_entry("uid-z", 0)]}, headers=_auth(admin)
+            SYNC_URL,
+            json={"entries": [_entry("uid-z", 0)]},
+            headers=_auth(superadmin),
         )
         assert resp.status_code == 403
 
@@ -264,3 +281,84 @@ class TestUsageSummary:
     def test_clinician_cannot_read_summary(self, client, clinician):
         resp = client.get(USAGE_URL, headers=_auth(clinician))
         assert resp.status_code == 403
+
+
+class TestTimestampContract:
+    """
+    ``observed_at`` must carry an offset. A naive value would be read as UTC and
+    silently shift every sighting by the reporting device's timezone — five
+    hours in Colombia — which corrupts the ordering between devices in
+    different zones.
+    """
+
+    def test_naive_timestamp_is_rejected(self, client, clinician):
+        entry = _entry("uid-naive", 0)
+        entry["observed_at"] = "2026-09-10T10:00:00"  # no offset
+
+        resp = client.post(
+            SYNC_URL, json={"entries": [entry]}, headers=_auth(clinician)
+        )
+
+        assert resp.status_code == 422
+
+    def test_utc_timestamp_is_accepted(self, client, clinician):
+        entry = _entry("uid-utc", 0)
+        entry["observed_at"] = "2026-09-10T10:00:00Z"
+
+        resp = client.post(
+            SYNC_URL, json={"entries": [entry]}, headers=_auth(clinician)
+        )
+
+        assert resp.status_code == 202
+
+    def test_offset_timestamp_is_accepted(self, client, clinician):
+        entry = _entry("uid-offset", 0)
+        entry["observed_at"] = "2026-09-10T05:00:00-05:00"
+
+        resp = client.post(
+            SYNC_URL, json={"entries": [entry]}, headers=_auth(clinician)
+        )
+
+        assert resp.status_code == 202
+
+
+class TestOrgAdminReporting:
+    def test_org_admin_can_report(self, client, admin):
+        # org_admin reaches the patient profile through the lost-wristband flow
+        # and holds the keyring, so its sightings must not be dropped.
+        resp = client.post(
+            SYNC_URL,
+            json={"entries": [_entry("uid-admin", 0)]},
+            headers=_auth(admin),
+        )
+
+        assert resp.status_code == 202
+        assert resp.json()["stored"] == 1
+
+
+class TestAttributionUsesServerClock:
+    def test_a_skewed_client_clock_does_not_flip_attribution(
+        self, client, clinician, admin
+    ):
+        """
+        Two sightings of one chip arrive in order: version 0 first, then
+        version 1 — but the second carries an *older* client timestamp, as a
+        device with a skewed clock would send. The chip has migrated, and the
+        summary must say so.
+        """
+        client.post(
+            SYNC_URL,
+            json={"entries": [_entry("uid-skew", 0, days_ago=1)]},
+            headers=_auth(clinician),
+        )
+        client.post(
+            SYNC_URL,
+            json={"entries": [_entry("uid-skew", 1, days_ago=30, header=True)]},
+            headers=_auth(clinician),
+        )
+
+        body = client.get(USAGE_URL, headers=_auth(admin)).json()
+
+        counts = {(c["key_version"], c["device_role"]): c for c in body["counts"]}
+        assert (0, "patient") not in counts
+        assert counts[(1, "patient")]["devices"] == 1

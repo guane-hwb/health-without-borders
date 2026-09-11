@@ -523,8 +523,10 @@ def sync_nfc_key_versions(
     the interval between sightings is what a retention period has to be sized
     from — de-duplicating here would discard exactly that.
 
-    **Allowed roles:** `doctor`, `nurse` — the point-of-care staff whose devices
-    read chips.
+    **Allowed roles:** `doctor`, `nurse`, `org_admin` — everyone whose device
+    holds the keyring and can therefore read a chip. `org_admin` is included
+    because it reaches the patient profile through the lost-wristband flow and
+    receives keys; excluding it would silently drop its observations.
 
     **Privacy:** entries carry a device UID, a role, a key version and a
     timestamp. No patient identifier, no clinical data, no key material.
@@ -534,10 +536,17 @@ def sync_nfc_key_versions(
     - `403`: Caller is not `doctor` or `nurse`.
     - `422`: Missing or malformed body fields (e.g. empty `entries`).
     """
-    if current_user.role not in {UserRole.doctor, UserRole.nurse}:
+    if current_user.role not in {
+        UserRole.doctor,
+        UserRole.nurse,
+        UserRole.org_admin,
+    }:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access Denied: Only doctors and nurses can report NFC key versions.",
+            detail=(
+                "Access Denied: Only clinical staff and organization admins "
+                "can report NFC key versions."
+            ),
         )
 
     stored = store_key_version_observations(db, payload.entries, current_user)

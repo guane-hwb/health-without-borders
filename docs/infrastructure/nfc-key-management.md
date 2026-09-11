@@ -101,6 +101,23 @@ They are not lost: with connectivity the UID still resolves the patient from the
 backend, and the next write migrates the chip. The degradation is "this chip is
 online-only until someone uses it once with a signal".
 
+### Telemetry storage
+
+Sightings land in `nfc_key_version_observations`, created by
+`scripts/create_tables.py` like every other table. It is **append-only**: the
+device keeps one row per chip, the server keeps every sighting, because the gap
+between consecutive sightings of the same UID is what a retention period has to
+be sized from.
+
+`observed_at` must arrive with a timezone offset. A naive value would be read as
+UTC and silently shift the sighting by the reporting device's own offset, which
+corrupts ordering between devices in different zones. The API rejects naive
+timestamps.
+
+Attribution ("latest sighting wins") is ordered by the **server's** clock, not
+the client's, so a device with a skewed clock cannot make a stale sighting
+outrank a newer one reported elsewhere.
+
 ### Check before retiring
 
 ```
@@ -137,7 +154,10 @@ retention policy it would need — remains open.
   token's `exp` is in the future, checked locally so it holds offline. Outside
   the window it is wiped from memory and disk and NFC is refused.
 - Moving the device clock backwards more than 24 hours is treated as tampering
-  and closes the window.
+  and closes the window. The high-water mark is re-anchored to the server's own
+  clock (the refresh token's `iat`) on every successful login and refresh, so a
+  device whose clock ran ahead recovers by reconnecting rather than staying
+  locked out.
 - `superadmin` accounts receive **no** key material: they have no clinical access
   and never touch a chip.
 

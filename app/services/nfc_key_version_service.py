@@ -78,7 +78,11 @@ def summarize_key_version_usage(
     """
     rows = (
         db.query(NfcKeyVersionObservation)
-        .order_by(NfcKeyVersionObservation.observed_at.asc())
+        # Ordered by the server's own clock, not the client's. "Latest
+        # sighting wins" decides which version a chip is attributed to, and a
+        # device with a skewed clock could otherwise make a stale sighting
+        # outrank a newer one reported from another device.
+        .order_by(NfcKeyVersionObservation.reported_at.asc())
         .all()
     )
 

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 
 class NfcKeyVersionEntry(BaseModel):
@@ -15,7 +15,14 @@ class NfcKeyVersionEntry(BaseModel):
     had_header: bool = Field(
         False, description="Payload carried a version header (version >= 1)"
     )
-    observed_at: datetime = Field(..., description="Client clock at read time")
+    observed_at: AwareDatetime = Field(
+        ...,
+        description=(
+            "Client clock at read time. Must carry an offset: a naive value "
+            "would be read as UTC and silently shift the sighting by the "
+            "device's timezone."
+        ),
+    )
 
 
 class NfcKeyVersionSyncRequest(BaseModel):
