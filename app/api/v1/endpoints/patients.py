@@ -17,6 +17,9 @@ from app.schemas.emergency_access import (
     EmergencyAccessSyncResponse,
 )
 from app.schemas.nfc_key_version import (
+    NfcKeyRevokeRequest,
+    NfcKeyRevokeResponse,
+    NfcKeyringStatusResponse,
     NfcKeyVersionSyncRequest,
     NfcKeyVersionSyncResponse,
     NfcKeyVersionUsageResponse,
@@ -30,6 +33,7 @@ from app.services.emergency_access_service import store_emergency_access_entries
 from app.services.fhir import fhir_backend
 from app.services.fhir_service import convert_to_fhir_rda
 from app.services.llm import medical_llm_processor
+from app.services.nfc_key_service import keyring_status, revoke_version
 from app.services.nfc_key_version_service import (
     store_key_version_observations,
     summarize_key_version_usage,
@@ -597,3 +601,114 @@ def get_nfc_key_version_usage(
         )
 
     return summarize_key_version_usage(db, window_days=window_days)
+
+
+@router.post(
+    "/nfc-keys/revoke",
+    response_model=NfcKeyRevokeResponse,
+    status_code=status.HTTP_200_OK,
+)
+def revoke_nfc_key(
+    payload: NfcKeyRevokeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Stop serving an NFC key version. **Emergency operation.**
+
+    Use this when a key is believed to be compromised — an extracted device, a
+    leaked value. The version stops being delivered to any device, for reading
+    as well as writing; anything less is useless against a leak, since the
+    leaked key is precisely the one that reads.
+
+    **What it costs.** Chips written under the revoked version become
+    *online-only* until they are rewritten. No data is lost: the chip UID is
+    unencrypted, resolves the patient through `/patients/scan`, and the next
+    save migrates the chip to the current version. If the revoked version was
+    the current one, a replacement is generated and becomes current.
+
+    **What it does not do.** Revocation stops *delivery*. A device that already
+    holds the ring keeps it until its next refresh — up to an hour online, and
+    up to the refresh-token window (7 days) if it is offline. There is no way
+    to reach an offline device sooner.
+
+    **Before advancing the current version**, every device must be running a
+    build that understands the keyring. An older build takes the current key,
+    ignores the ring, and loses the ability to read everything written under the
+    previous version. `acknowledge_chip_impact` exists so this is a deliberate
+    choice rather than a surprise.
+
+    **Allowed roles:** `superadmin`.
+
+    **Responses:**
+    - `200`: Revoked. Body reports the replacement version, if one was created.
+    - `400`: Already revoked, or the keyring is served from the environment
+      (no `NFC_KEK` configured, so there is nothing to change at runtime).
+    - `403`: Caller is not a `superadmin`.
+    - `404`: No such key version.
+    - `422`: Malformed body, or `acknowledge_chip_impact` not set.
+    """
+    if current_user.role != UserRole.superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only superadmins can revoke NFC keys.",
+        )
+    if not payload.acknowledge_chip_impact:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "acknowledge_chip_impact must be true: revoking makes chips on "
+                "this version online-only until they are rewritten."
+            ),
+        )
+
+    try:
+        result = revoke_version(
+            db,
+            version=payload.version,
+            actor_id=current_user.id,
+            reason=payload.reason,
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    return NfcKeyRevokeResponse(**result)
+
+
+@router.get(
+    "/nfc-keys",
+    response_model=NfcKeyringStatusResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_nfc_keyring_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    The state of the keyring: which versions exist, which is current, which are
+    revoked.
+
+    **Never returns key material** — only version numbers, status, the
+    fingerprint of the KEK that wrapped each row, and timestamps.
+
+    `source` reports where the ring comes from: `database` once `NFC_KEK` is
+    configured, `environment` otherwise.
+
+    **Allowed roles:** `superadmin`.
+
+    **Responses:**
+    - `200`: Status returned.
+    - `403`: Caller is not a `superadmin`.
+    """
+    if current_user.role != UserRole.superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only superadmins can read the NFC keyring state.",
+        )
+    return NfcKeyringStatusResponse(**keyring_status(db))

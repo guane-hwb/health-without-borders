@@ -127,7 +127,10 @@ def get_users_by_organization(
     return users
 
 @router.get("/me", response_model=UserResponse)
-def get_current_user_profile(current_user: User = Depends(get_current_user)):
+def get_current_user_profile(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Return the current user's profile, including the NFC keyring so the
     device can repopulate its in-memory key after a cold start."""
     return UserResponse(
@@ -137,7 +140,7 @@ def get_current_user_profile(current_user: User = Depends(get_current_user)):
         role=current_user.role,
         is_active=current_user.is_active,
         organization_id=current_user.organization_id,
-        **nfc_key_claims(role=current_user.role),
+        **nfc_key_claims(role=current_user.role, db=db),
     )
 
 

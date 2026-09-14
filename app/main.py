@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -21,7 +23,49 @@ if _nfc_keyring_errors:
         + "\n  - ".join(_nfc_keyring_errors)
     )
 
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """
+    Prepare the NFC keyring before serving traffic.
+
+    Two things have to happen once, in this order: the environment's version 0
+    is imported so the keyring lives entirely in the database, and the current
+    version is unwrapped to prove the configured KEK is the right one. A wrong
+    KEK would otherwise surface as devices receiving an empty ring and NFC
+    quietly not working — far worse than refusing to start.
+
+    With no ``NFC_KEK`` configured both steps are no-ops and the ring is served
+    from the environment exactly as before.
+    """
+    if settings.NFC_KEK.strip():
+        from app.db.session import SessionLocal
+        from app.services.nfc_key_service import ensure_initialised, load_keyring
+
+        db = SessionLocal()
+        try:
+            ensure_initialised(db)
+            ring = load_keyring(db)
+            if ring is not None and ring["current"] is None and ring["keys"]:
+                raise RuntimeError(
+                    "The NFC keyring has live keys but no usable current "
+                    "version: devices could read but not write. Check "
+                    "nfc_keyring_state."
+                )
+            if ring is not None and not ring["keys"]:
+                raise RuntimeError(
+                    "NFC_KEK is configured but no key could be unwrapped. "
+                    "Either the KEK is not the one that wrapped these rows, or "
+                    "the keyring is empty. Devices would receive no NFC key."
+                )
+        finally:
+            db.close()
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title=settings.PROJECT_NAME,
     version="1.0.0",
     description="Backend Health Without Borders Project - Open Source",
