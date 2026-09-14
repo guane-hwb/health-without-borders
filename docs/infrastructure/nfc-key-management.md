@@ -147,6 +147,41 @@ existing chips: those migrate when they are next written.
 > ignores the ring, losing the ability to read anything written under the old
 > key.
 
+### Rotating with the keyring in the database
+
+Once `NFC_KEK` is configured, rotation no longer needs a redeploy.
+
+**Manually:**
+
+```
+POST /api/v1/patients/nfc-keys/rotate
+{"reason": "...", "acknowledge_fleet_updated": true}
+```
+
+`superadmin` only. A new version is generated and becomes current. Older
+versions keep being delivered, so chips written under them stay readable
+offline and migrate as they are rewritten.
+
+**Automatically:** set `NFC_AUTO_ROTATE=true` and the current key is replaced
+once it reaches `NFC_ROTATION_PERIOD_DAYS` (default 90). The check runs on the
+request path, not on a schedule — the project has no scheduler, and an adopting
+organisation should not have to stand one up for key rotation to happen. It is
+evaluated at most once a minute per instance, on its own database session so a
+rotation never commits anything an in-flight login had pending. A failed
+rotation is logged and retried later; it never breaks a login.
+
+> ### ⚠️ `NFC_AUTO_ROTATE` is the fleet gate
+>
+> It defaults to `false` and must stay there until **every** device runs a
+> build that understands the keyring. An older build takes the current key,
+> ignores the ring, and loses the ability to read everything written under the
+> previous version. Turning it on is a deliberate act by someone who has
+> confirmed the fleet; `acknowledge_fleet_updated` asks the same question of the
+> manual endpoint.
+
+Version 255 is the ceiling — the version travels in one byte of the payload
+header. Rotating past it is refused, and retiring old versions is the way out.
+
 ### Migration is passive
 
 A chip moves to the current version when something rewrites it — a consultation,

@@ -106,3 +106,33 @@ class NfcKeyringStatusResponse(BaseModel):
     source: str = Field(..., description="'database' or 'environment'")
     current_version: Optional[int] = None
     versions: List[NfcKeyVersionState]
+
+
+class NfcKeyRotateRequest(BaseModel):
+    """Ask for a new key version to become current."""
+
+    reason: str = Field(
+        ...,
+        min_length=3,
+        description="Why the keyring is being rotated. Recorded in the audit log.",
+    )
+    acknowledge_fleet_updated: bool = Field(
+        ...,
+        description=(
+            "Must be true. Confirms every device runs a build that understands "
+            "the keyring. An older build takes the current key, ignores the "
+            "ring, and loses the ability to read everything written under the "
+            "previous version."
+        ),
+    )
+
+
+class NfcKeyRotateResponse(BaseModel):
+    new_version: Optional[int] = Field(
+        None,
+        description=(
+            "The version now current, or null when another instance rotated "
+            "first — which is not an error."
+        ),
+    )
+    previous_version: int
