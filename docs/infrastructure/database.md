@@ -82,7 +82,42 @@ Stores the JTI (JWT ID) of tokens that have been explicitly revoked via logout o
 | `revoked_at` | DateTime | Default: now() | When the token was revoked. |
 | `expires_at` | DateTime | Not Null | Original token expiry — safe to delete this row after this time. |
 
-### 2.5. Standard Clinical Catalogs
+### 2.5. NFC Keyring (`nfc_keys`, `nfc_keyring_state`, `nfc_key_events`)
+
+Holds the AES keys that encrypt NFC chip payloads, so a version can be created
+or revoked at runtime instead of through a redeploy.
+
+| Table | Purpose |
+| :--- | :--- |
+| `nfc_keys` | One row per key version. `wrapped_key` is the key **sealed under the KEK**, never the key itself; `kek_id` is a fingerprint of the KEK that sealed it. |
+| `nfc_keyring_state` | Single row naming the version new writes use. Advanced with a conditional update so two instances cannot both move it. |
+| `nfc_key_events` | Append-only record of every generation, rotation and revocation, with actor and reason. |
+
+> ### ⚠️ A database backup of these tables is useless on its own
+>
+> `nfc_keys` stores **wrapped** key material. Unwrapping it requires `NFC_KEK`,
+> which lives in Secret Manager and **is not part of any database backup**.
+>
+> Restoring the database without also holding the KEK yields rows nobody can
+> open. Chips on those versions become readable only online, until each one is
+> rewritten. No patient data is lost — the chip UID resolves the patient
+> through the backend — but offline reads stop working across the fleet.
+>
+> **Before relying on a database backup, confirm the KEK backup is available
+> and matches.** The `kek_id` column is what makes that check cheap: compare it
+> against the fingerprint of the backed-up KEK without unwrapping anything.
+>
+> Custody, the backup procedure and the fingerprint check are documented in
+> [NFC Key Management](nfc-key-management.md).
+
+### 2.6. NFC Key Version Telemetry (`nfc_key_version_observations`)
+
+Append-only record of which key version each chip was last seen on, used to
+decide whether a version can be retired without leaving chips unreadable
+offline. Holds a device UID, a role, a version and timestamps — no patient
+identifier, no clinical data, no key material.
+
+### 2.7. Standard Clinical Catalogs
 
 #### Vaccines Catalog (`catalog_vaccines`)
 Based on the **CVX** (Code for Vaccine Administered) standard.

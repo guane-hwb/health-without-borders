@@ -281,8 +281,27 @@ Then one custodian downloads `kek.age` **from their Drive** — not the local co
   one secret, not two.
 - Re-verify when a custodian changes, and at least once a year.
 - **A database backup is incomplete without the KEK backup.** Restoring the
-  database alone yields keys nobody can unwrap. This belongs in the restore
-  runbook.
+  database alone yields keys nobody can unwrap. This is recorded alongside the
+  tables themselves in [Database Architecture](database.md), so whoever
+  restores a backup meets the warning without having to know this page exists.
+
+### Checking a backup matches production
+
+`kek_id` is a fingerprint of the KEK that sealed each row, and it is not secret
+— which is what makes it useful. To confirm a backed-up KEK is the one in use,
+without unwrapping anything:
+
+```bash
+age -d kek.age | tr -d '\n' | xxd -r -p | sha256sum | cut -c1-16
+```
+
+Compare the result with the `kek_id` reported by
+`GET /api/v1/patients/nfc-keys`. A mismatch means the backup does not
+correspond to production — something to find out now rather than during an
+incident.
+
+Record the current fingerprint next to each copy of `kek.age`. It is safe to
+store in the clear.
 
 If both custodians forget the passphrase the KEK is lost just the same. Each may
 keep it on paper, held personally and separately from the file. A six-word
