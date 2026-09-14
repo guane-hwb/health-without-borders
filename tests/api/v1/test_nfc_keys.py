@@ -345,6 +345,25 @@ class TestKeyringStatus:
         body = client.get(STATUS_URL, headers=_auth(superadmin)).json()
 
         assert body["source"] == "environment"
+        assert body["current_version"] == 0
+        assert body["versions"] == []
+
+    def test_works_before_the_keyring_tables_exist(
+        self, client, superadmin, db_session
+    ):
+        # The tables are created by scripts/create_tables.py, not at startup,
+        # so without a KEK this endpoint must not query them at all — otherwise
+        # merging the feature breaks it until someone runs the script.
+        from app.db.models import NfcKey as _NfcKey
+
+        _NfcKey.__table__.drop(db_session.get_bind(), checkfirst=True)
+        try:
+            resp = client.get(STATUS_URL, headers=_auth(superadmin))
+
+            assert resp.status_code == 200
+            assert resp.json()["source"] == "environment"
+        finally:
+            _NfcKey.__table__.create(db_session.get_bind(), checkfirst=True)
 
     def test_shows_a_revoked_version_with_its_reason(
         self, client, superadmin, with_kek

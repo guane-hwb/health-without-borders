@@ -254,11 +254,28 @@ def revoke_version(
 
 
 def keyring_status(db: Session) -> dict:
-    """Versions and their state, with no key material."""
+    """
+    Versions and their state, with no key material.
+
+    With no KEK configured the tables may not even exist yet — they are created
+    by ``scripts/create_tables.py``, not at startup — so this reports the
+    environment's view without querying them. Otherwise merging this feature
+    would break the endpoint on every deployment until someone ran the script.
+    """
+    if kek_wrapper() is None:
+        env_ring = settings.nfc_keyring()
+        return {
+            "source": "environment",
+            "current_version": (
+                settings.NFC_CURRENT_KEY_VERSION if env_ring else None
+            ),
+            "versions": [],
+        }
+
     rows = db.query(NfcKey).order_by(NfcKey.version.asc()).all()
     state = db.query(NfcKeyringState).filter(NfcKeyringState.id == 1).first()
     return {
-        "source": "database" if kek_wrapper() is not None else "environment",
+        "source": "database",
         "current_version": state.current_version if state else None,
         "versions": [
             {
