@@ -168,6 +168,92 @@ class Patient(Base):
         return f"<Patient(id={self.id}, frontend_id={self.frontend_patient_id}, doc={self.document_type}-{self.document_number}, org={self.organization_id})>"
 
 
+class NfcKey(Base):
+    """
+    An NFC key version, with its material wrapped by the KEK.
+
+    Keys live here rather than in the environment so that creating and revoking
+    a version is a runtime operation instead of a redeploy. Before this table,
+    a leaked key kept working for months while a rotation was deployed twice
+    and chips migrated on their own.
+
+    ``wrapped_key`` is never usable on its own: it is AES-256-GCM sealed under
+    the KEK, with the version number as associated data so a row cannot be
+    moved to another version. ``kek_id`` records which KEK sealed it, so
+    replacing the KEK later is a row-by-row re-wrap rather than guesswork.
+    """
+
+    __tablename__ = "nfc_keys"
+
+    version = Column(
+        Integer, primary_key=True,
+        comment="Key version, stamped into the NFC payload header",
+    )
+    wrapped_key = Column(
+        String, nullable=False,
+        comment="Base64 of nonce+ciphertext+tag, sealed under the KEK",
+    )
+    kek_id = Column(
+        String, nullable=False,
+        comment="Fingerprint of the KEK that sealed this row — not the secret",
+    )
+    status = Column(
+        String, nullable=False, server_default="live", index=True,
+        comment="'live' (delivered to devices) or 'revoked' (never delivered)",
+    )
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_by = Column(String, ForeignKey("users.id"), nullable=True)
+    revoke_reason = Column(String, nullable=True)
+
+
+class NfcKeyringState(Base):
+    """
+    Single row holding which key version new writes use.
+
+    Kept apart from :class:`NfcKey` so advancing the pointer is one conditional
+    update: two Cloud Run instances acting at the same time must end with one
+    new version and one advance, not two.
+    """
+
+    __tablename__ = "nfc_keyring_state"
+
+    id = Column(Integer, primary_key=True, default=1)
+    current_version = Column(Integer, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class NfcKeyEvent(Base):
+    """
+    Append-only log of what was done to the keyring, by whom and why.
+
+    Covers all three operations, not only revocation: reconstructing an
+    incident needs to know when a version appeared as much as when it stopped
+    being served, and an adopting organisation needs it for its own compliance.
+    """
+
+    __tablename__ = "nfc_key_events"
+
+    id = Column(
+        String, primary_key=True, index=True,
+        default=lambda: str(uuid.uuid4()),
+    )
+    action = Column(
+        String, nullable=False, index=True,
+        comment="'generated', 'rotated', 'revoked' or 'imported'",
+    )
+    version = Column(Integer, nullable=False, index=True)
+    actor_id = Column(String, ForeignKey("users.id"), nullable=True)
+    reason = Column(String, nullable=True)
+    at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class NfcKeyVersionObservation(Base):
     """
     Append-only record of which NFC key version a chip was seen on.

@@ -68,7 +68,55 @@ frozen from the current build onwards. It also means the key in
 `NFC_MASTER_KEY` is the only key any existing chip can be read with — losing or
 changing it makes every chip in circulation unreadable offline.
 
-## 4. Generating a key
+## 4. Where the ring lives
+
+The ring can come from two places, and `GET /api/v1/patients/nfc-keys` reports
+which one is in use.
+
+**Without `NFC_KEK`** the ring is read from the environment, exactly as it
+always was. Nothing changes on upgrade.
+
+**With `NFC_KEK`** the ring lives in the `nfc_keys` table, with each key sealed
+under the KEK (AES-256-GCM, version as associated data, `kek_id` recording which
+KEK sealed each row). On first start the environment's `NFC_MASTER_KEY` is
+imported as version 0 and the table becomes the source of truth. That is what
+makes revocation an API call instead of a redeploy.
+
+Importing version 0 also closes the `hwb-nfc-master-key:latest` hazard — adding a
+Secret Manager version there can no longer silently change what version 0 *is*.
+The trade is that the KEK then guards every version, version 0 included: losing
+it costs offline reads across the whole fleet, not just for rotated chips.
+**The KEK backup procedure is a precondition for setting `NFC_KEK`.**
+
+The backend refuses to start if the KEK cannot unwrap the current version. A
+wrong KEK would otherwise surface as devices quietly receiving an empty ring.
+
+### Revoking a compromised key
+
+```
+POST /api/v1/patients/nfc-keys/revoke
+{"version": 0, "reason": "...", "acknowledge_chip_impact": true}
+```
+
+`superadmin` only. The version stops being delivered for reading *and* writing —
+anything less is useless against a leak, since the leaked key is the one that
+reads. If it was the current version, a replacement is generated and becomes
+current. Every operation is recorded in `nfc_key_events` with actor and reason.
+
+**It is not instant on the device.** Revocation stops *delivery*. A device that
+already holds the ring keeps it until its next refresh: up to an hour online, up
+to the refresh-token window (7 days) offline. There is no way to reach an
+offline device sooner.
+
+**Chips on the revoked version become online-only** until rewritten. No data is
+lost: the UID resolves the patient through the backend and the next save
+migrates the chip.
+
+**Before the current version advances past 0**, every device must run a
+keyring-aware build — the same rule as for rotation. `acknowledge_chip_impact`
+exists so this is deliberate.
+
+## 5. Generating a key
 
 ```bash
 openssl rand -hex 32
@@ -79,7 +127,7 @@ into an issue or a chat.
 
 ---
 
-## 5. Rotating
+## 6. Rotating
 
 Rotation limits how long a leaked key stays useful. It does **not** re-encrypt
 existing chips: those migrate when they are next written.
@@ -107,7 +155,7 @@ who never return stay on their original version indefinitely.
 
 ---
 
-## 6. Retiring a version
+## 7. Retiring a version
 
 Retiring means removing `NFC_KEY_V<n>` from the deployment. From that moment,
 chips still on version `n` **cannot be decrypted offline**.
@@ -162,7 +210,7 @@ retention policy it would need — remains open.
 
 ---
 
-## 7. On the device
+## 8. On the device
 
 - The keyring lives in the platform secure store (Keystore / Keychain).
 - It is **bounded by the session window**: it is only served while the refresh
@@ -178,7 +226,7 @@ retention policy it would need — remains open.
 
 ---
 
-## 8. Local development
+## 9. Local development
 
 `NFC_KEY_V<n>` entries are read from `.env` as well as from the process
 environment, so a rotation can be exercised locally:
@@ -191,3 +239,52 @@ NFC_CURRENT_KEY_VERSION=1
 
 A real environment variable of the same name wins over the `.env` entry, matching
 every other setting. Use throwaway values locally — never a production key.
+
+---
+
+## 10. KEK custody
+
+`NFC_KEK` is the single secret that unwraps every key in the table. Losing it
+makes every chip on a database-held version unreadable offline until rewritten —
+which, once version 0 is imported, means the whole fleet. There is no recovery
+by design: if there were, the wrapping would be worthless.
+
+**Custodians:** Andrés Guerrero and Leonardo Calderón.
+
+**Primary copy:** Secret Manager, as the value of `NFC_KEK`.
+
+**Backup:** the KEK encrypted with `age` under a six-word passphrase known to
+both custodians, stored in each custodian's Drive — two separate accounts.
+
+Created once, at the time the KEK is generated:
+
+```bash
+openssl rand -hex 32 > kek.txt          # the KEK: 64 hex characters
+age -p -a -o kek.age kek.txt            # prompts for the passphrase
+
+age -d kek.age > kek-check.txt          # verify BEFORE deleting anything
+diff kek.txt kek-check.txt && echo "BACKUP OK"
+
+# kek.txt  -> Secret Manager, as NFC_KEK
+# kek.age  -> each custodian's Drive
+
+shred -u kek.txt kek-check.txt          # macOS: rm -P
+```
+
+Then one custodian downloads `kek.age` **from their Drive** — not the local copy
+— and decrypts it, to prove what was uploaded works.
+
+**Permanent rules:**
+
+- Never paste the KEK or the passphrase into chat, email or Slack.
+- The passphrase must not live in the same Drive as the file. Together they are
+  one secret, not two.
+- Re-verify when a custodian changes, and at least once a year.
+- **A database backup is incomplete without the KEK backup.** Restoring the
+  database alone yields keys nobody can unwrap. This belongs in the restore
+  runbook.
+
+If both custodians forget the passphrase the KEK is lost just the same. Each may
+keep it on paper, held personally and separately from the file. A six-word
+passphrase transcribes without error; 64 hex characters does not, which is the
+whole reason the file is encrypted rather than the key printed.

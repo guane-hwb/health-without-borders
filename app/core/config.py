@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     # working unchanged. A rotated deployment adds NFC_KEY_V<n> secrets and
     # bumps this to the highest live version.
     NFC_CURRENT_KEY_VERSION: int = 0
+    # Key Encryption Key: wraps the NFC keys stored in the database, so they
+    # can be created and revoked without a redeploy. Its only job is to encrypt
+    # other keys; it never touches patient data. When empty the backend behaves
+    # exactly as before, serving the ring straight from the environment, so no
+    # existing deployment changes on upgrade.
+    NFC_KEK: str = ""  # Hex-encoded 32-byte AES-256 key
 
     # --- REPORTING ---
     # Calendar dates and month boundaries in aggregated statistics are resolved
@@ -163,6 +169,15 @@ class Settings(BaseSettings):
         errors: list[str] = []
         ring = self.nfc_keyring()
         if not ring:
+            # No key in the environment is valid: either NFC is unused, or the
+            # ring lives in the database behind the KEK.
+            if self.NFC_KEK.strip() and not _HEX_KEY_RE.fullmatch(
+                self.NFC_KEK.strip()
+            ):
+                errors.append(
+                    "NFC_KEK: must be exactly 64 hexadecimal characters "
+                    "(a 32-byte AES-256 key)."
+                )
             return errors
 
         for version, key in sorted(ring.items()):
@@ -182,6 +197,12 @@ class Settings(BaseSettings):
                     f"{source}: must be exactly 64 hexadecimal characters "
                     "(a 32-byte AES-256 key)."
                 )
+
+        if self.NFC_KEK.strip() and not _HEX_KEY_RE.fullmatch(self.NFC_KEK.strip()):
+            errors.append(
+                "NFC_KEK: must be exactly 64 hexadecimal characters "
+                "(a 32-byte AES-256 key)."
+            )
 
         if self.NFC_CURRENT_KEY_VERSION not in ring:
             errors.append(

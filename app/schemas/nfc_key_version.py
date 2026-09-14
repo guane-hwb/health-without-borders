@@ -63,3 +63,46 @@ class NfcKeyVersionUsageResponse(BaseModel):
     window_days: int
     counts: List[NfcKeyVersionCount]
     retirable_versions: List[int]
+
+
+class NfcKeyRevokeRequest(BaseModel):
+    """Ask for a key version to stop being served."""
+
+    version: int = Field(..., ge=0, le=255)
+    reason: str = Field(
+        ...,
+        min_length=3,
+        description="Why the version is being revoked. Recorded in the audit log.",
+    )
+    acknowledge_chip_impact: bool = Field(
+        ...,
+        description=(
+            "Must be true. Confirms the operator understands that chips written "
+            "under this version become online-only until rewritten, and that "
+            "advancing to a new version requires every device to run a "
+            "keyring-aware build."
+        ),
+    )
+
+
+class NfcKeyRevokeResponse(BaseModel):
+    revoked_version: int
+    replacement_version: Optional[int] = None
+    was_current: bool
+
+
+class NfcKeyVersionState(BaseModel):
+    version: int
+    status: str
+    kek_id: str
+    created_at: datetime
+    revoked_at: Optional[datetime] = None
+    revoke_reason: Optional[str] = None
+
+
+class NfcKeyringStatusResponse(BaseModel):
+    """The keyring's state. Never includes key material."""
+
+    source: str = Field(..., description="'database' or 'environment'")
+    current_version: Optional[int] = None
+    versions: List[NfcKeyVersionState]

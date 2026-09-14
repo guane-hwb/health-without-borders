@@ -88,7 +88,7 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def nfc_key_claims(role: Optional[str] = None) -> dict[str, Any]:
+def nfc_key_claims(role: Optional[str] = None, db: Optional[Any] = None) -> dict[str, Any]:
     """
     Assemble the NFC key material handed to clients at login, refresh, and
     ``/users/me``.
@@ -112,20 +112,30 @@ def nfc_key_claims(role: Optional[str] = None) -> dict[str, Any]:
     behavior of omitting the key from the response. When the configured current
     version is missing from the keyring the writable fields are ``None`` (the
     client can still read via the keyring) and a warning is logged.
+
+    ``db`` lets the ring come from the database, which is what makes revoking a
+    version take effect without a redeploy. Without a session, or without a KEK
+    configured, the ring is read from the environment exactly as before.
     """
     # ``role`` may arrive as a UserRole enum member or a plain string.
     role_value = getattr(role, "value", role)
 
-    ring = settings.nfc_keyring()
-    if role_value in NFC_KEYLESS_ROLES or not ring:
+    if role_value in NFC_KEYLESS_ROLES:
         return {
             "nfc_encryption_key": None,
             "nfc_key_version": None,
             "nfc_keyring": None,
         }
 
-    current_version = settings.NFC_CURRENT_KEY_VERSION
-    current_key = ring.get(current_version)
+    ring, current_version = _resolve_keyring(db)
+    if not ring:
+        return {
+            "nfc_encryption_key": None,
+            "nfc_key_version": None,
+            "nfc_keyring": None,
+        }
+
+    current_key = ring.get(current_version) if current_version is not None else None
     if current_key is None:
         logger.warning(
             "NFC current key version %s is not present in the keyring "
@@ -139,3 +149,31 @@ def nfc_key_claims(role: Optional[str] = None) -> dict[str, Any]:
         "nfc_key_version": current_version if current_key is not None else None,
         "nfc_keyring": {str(v): k for v, k in sorted(ring.items())},
     }
+
+
+def _resolve_keyring(db: Optional[Any]) -> tuple[dict[int, str], Optional[int]]:
+    """
+    The live ring and the version new writes use.
+
+    Prefers the database when a KEK is configured and a session is available,
+    because that is the copy an operator can change at runtime. Falls back to
+    the environment otherwise, which keeps every deployment that has not
+    adopted the KEK working unchanged.
+    """
+    if db is not None:
+        try:
+            from app.services.nfc_key_service import load_keyring
+
+            stored = load_keyring(db)
+            if stored is not None:
+                return stored["keys"], stored["current"]
+        except Exception:  # pragma: no cover - defensive
+            # Never let a keyring lookup break authentication. Falling back to
+            # the environment is the safe direction: worst case the device gets
+            # the pre-KEK ring.
+            logger.exception(
+                "Could not read the NFC keyring from the database; falling "
+                "back to the environment."
+            )
+
+    return settings.nfc_keyring(), settings.NFC_CURRENT_KEY_VERSION
