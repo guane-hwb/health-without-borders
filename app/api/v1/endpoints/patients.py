@@ -20,6 +20,8 @@ from app.schemas.nfc_key_version import (
     NfcKeyRevokeRequest,
     NfcKeyRevokeResponse,
     NfcKeyringStatusResponse,
+    NfcKeyRotateRequest,
+    NfcKeyRotateResponse,
     NfcKeyVersionSyncRequest,
     NfcKeyVersionSyncResponse,
     NfcKeyVersionUsageResponse,
@@ -33,7 +35,11 @@ from app.services.emergency_access_service import store_emergency_access_entries
 from app.services.fhir import fhir_backend
 from app.services.fhir_service import convert_to_fhir_rda
 from app.services.llm import medical_llm_processor
-from app.services.nfc_key_service import keyring_status, revoke_version
+from app.services.nfc_key_service import (
+    keyring_status,
+    revoke_version,
+    rotate_to_new_version,
+)
 from app.services.nfc_key_version_service import (
     store_key_version_observations,
     summarize_key_version_usage,
@@ -712,3 +718,71 @@ def get_nfc_keyring_status(
             detail="Access Denied: Only superadmins can read the NFC keyring state.",
         )
     return NfcKeyringStatusResponse(**keyring_status(db))
+
+
+@router.post(
+    "/nfc-keys/rotate",
+    response_model=NfcKeyRotateResponse,
+    status_code=status.HTTP_200_OK,
+)
+def rotate_nfc_key(
+    payload: NfcKeyRotateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Generate a new key version and make it current.
+
+    Rotation limits how long a leaked key stays useful. It does **not**
+    re-encrypt existing chips: older versions keep being delivered, so chips
+    written under them stay readable offline, and they migrate to the new
+    version as they are rewritten.
+
+    This is the manual trigger. The same thing happens on its own once
+    `NFC_AUTO_ROTATE` is enabled and the current key reaches
+    `NFC_ROTATION_PERIOD_DAYS`.
+
+    **The fleet must be ready.** Advancing the current version breaks reads on
+    any device still running a build that predates the keyring: it takes the
+    current key, ignores the ring, and can no longer read anything written
+    under the previous version. `acknowledge_fleet_updated` exists so this is a
+    deliberate act by someone who has checked.
+
+    **Allowed roles:** `superadmin`.
+
+    **Responses:**
+    - `200`: Rotated. `new_version` is null when another instance rotated
+      first, which is not an error.
+    - `400`: The keyring is served from the environment (no `NFC_KEK`), it has
+      not been initialised, or version 255 has been reached.
+    - `403`: Caller is not a `superadmin`.
+    - `422`: Malformed body, or `acknowledge_fleet_updated` not set.
+    """
+    if current_user.role != UserRole.superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only superadmins can rotate NFC keys.",
+        )
+    if not payload.acknowledge_fleet_updated:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "acknowledge_fleet_updated must be true: advancing the current "
+                "version breaks reads on devices running an older build."
+            ),
+        )
+
+    state = keyring_status(db)
+    previous = state["current_version"]
+    try:
+        new_version = rotate_to_new_version(
+            db, actor_id=current_user.id, reason=payload.reason
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    return NfcKeyRotateResponse(
+        new_version=new_version, previous_version=previous
+    )

@@ -604,3 +604,270 @@ def test_ensure_initialised_is_a_noop_without_a_kek(db_session):
     nfc_key_service.ensure_initialised(db_session)
 
     assert db_session.query(NfcKey).count() == 0
+
+# ---------------------------------------------------------------------------
+# Rotation
+# ---------------------------------------------------------------------------
+
+ROTATE_URL = "/api/v1/patients/nfc-keys/rotate"
+
+
+def _age_current_key(db, days: int):
+    """Backdate the current key so the periodic check considers it stale."""
+    from datetime import datetime, timedelta, timezone
+
+    state = db.query(NfcKeyringState).filter(NfcKeyringState.id == 1).one()
+    row = db.query(NfcKey).filter(NfcKey.version == state.current_version).one()
+    row.created_at = datetime.now(timezone.utc) - timedelta(days=days)
+    db.commit()
+    nfc_key_service.invalidate_cache()
+
+
+class TestManualRotation:
+    def _rotate(self, client, token, ack=True, reason="quarterly rotation"):
+        return client.post(
+            ROTATE_URL,
+            json={"reason": reason, "acknowledge_fleet_updated": ack},
+            headers=_auth(token),
+        )
+
+    def test_creates_a_new_current_version(
+        self, client, superadmin, with_kek, db_session
+    ):
+        resp = self._rotate(client, superadmin)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"new_version": 1, "previous_version": 0}
+
+    def test_the_previous_version_is_still_served(
+        self, client, superadmin, with_kek, db_session
+    ):
+        self._rotate(client, superadmin)
+        nfc_key_service.invalidate_cache()
+        db_session.expire_all()
+
+        claims = security.nfc_key_claims(role=UserRole.doctor, db=db_session)
+
+        # Rotation is not revocation: chips on version 0 must stay readable
+        # offline until they are rewritten.
+        assert set(claims["nfc_keyring"]) == {"0", "1"}
+        assert claims["nfc_key_version"] == 1
+
+    def test_it_is_recorded(self, client, superadmin, with_kek, db_session):
+        self._rotate(client, superadmin, reason="scheduled")
+        db_session.expire_all()
+
+        rotated = (
+            db_session.query(NfcKeyEvent)
+            .filter(NfcKeyEvent.action == "rotated")
+            .one()
+        )
+        assert rotated.actor_id == "u-super"
+        assert "scheduled" in rotated.reason
+
+    def test_the_fleet_acknowledgement_is_required(
+        self, client, superadmin, with_kek
+    ):
+        resp = self._rotate(client, superadmin, ack=False)
+
+        assert resp.status_code == 422
+
+    def test_a_doctor_cannot_rotate(self, client, doctor, with_kek):
+        resp = self._rotate(client, doctor)
+
+        assert resp.status_code == 403
+
+    def test_without_a_kek_rotation_is_refused(self, client, superadmin):
+        resp = self._rotate(client, superadmin)
+
+        assert resp.status_code == 400
+
+
+class TestAutomaticRotation:
+    def test_disabled_by_default(self, with_kek, db_session):
+        _age_current_key(db_session, days=999)
+
+        # The flag is the fleet gate: it can never default to on.
+        assert settings.NFC_AUTO_ROTATE is False
+        assert nfc_key_service.maybe_auto_rotate(db_session) is None
+        assert db_session.query(NfcKey).count() == 1
+
+    def test_a_fresh_key_is_not_rotated(
+        self, with_kek, db_session, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "NFC_AUTO_ROTATE", True)
+
+        assert nfc_key_service.maybe_auto_rotate(db_session) is None
+
+    def test_a_stale_key_is_rotated(self, with_kek, db_session, monkeypatch):
+        monkeypatch.setattr(settings, "NFC_AUTO_ROTATE", True)
+        monkeypatch.setattr(settings, "NFC_ROTATION_PERIOD_DAYS", 90)
+        _age_current_key(db_session, days=91)
+
+        assert nfc_key_service.maybe_auto_rotate(db_session) == 1
+
+        state = (
+            db_session.query(NfcKeyringState)
+            .filter(NfcKeyringState.id == 1)
+            .one()
+        )
+        assert state.current_version == 1
+
+    def test_the_period_is_configurable(
+        self, with_kek, db_session, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "NFC_AUTO_ROTATE", True)
+        monkeypatch.setattr(settings, "NFC_ROTATION_PERIOD_DAYS", 30)
+        _age_current_key(db_session, days=31)
+
+        assert nfc_key_service.maybe_auto_rotate(db_session) == 1
+
+    def test_an_automatic_rotation_records_no_actor(
+        self, with_kek, db_session, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "NFC_AUTO_ROTATE", True)
+        _age_current_key(db_session, days=200)
+        nfc_key_service.maybe_auto_rotate(db_session)
+        db_session.expire_all()
+
+        rotated = (
+            db_session.query(NfcKeyEvent)
+            .filter(NfcKeyEvent.action == "rotated")
+            .one()
+        )
+        assert rotated.actor_id is None
+        assert "automatic rotation" in rotated.reason
+
+    def test_a_failure_never_propagates(
+        self, with_kek, db_session, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "NFC_AUTO_ROTATE", True)
+        _age_current_key(db_session, days=200)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("database unavailable")
+
+        monkeypatch.setattr(nfc_key_service, "rotate_to_new_version", _boom)
+
+        # Taking down login because a rotation could not be written would be a
+        # far worse trade than keeping the current key a little longer.
+        assert nfc_key_service.maybe_auto_rotate(db_session) is None
+
+    def test_nothing_happens_without_a_kek(self, db_session, monkeypatch):
+        monkeypatch.setattr(settings, "NFC_AUTO_ROTATE", True)
+
+        assert nfc_key_service.maybe_auto_rotate(db_session) is None
+
+
+class TestRotationLimits:
+    def test_a_lost_race_is_not_an_error(
+        self, with_kek, db_session, monkeypatch
+    ):
+        """
+        Another instance advances the pointer between our read and our write.
+
+        The conditional update must then match nothing and the call must return
+        None: two Cloud Run instances reaching the same conclusion at the same
+        moment have to end with one new current version, and the request that
+        lost the race should be none the wiser.
+        """
+        from sqlalchemy.orm import Session as SASession
+
+        original_insert = nfc_key_service._insert_key
+
+        def _insert_then_lose_the_race(db, wrapper, version, material):
+            original_insert(db, wrapper, version=version, material=material)
+            # A competing instance commits its own advance first.
+            other = SASession(bind=db_session.get_bind())
+            try:
+                other.query(NfcKeyringState).filter(
+                    NfcKeyringState.id == 1
+                ).update({"current_version": 77}, synchronize_session=False)
+                other.commit()
+            finally:
+                other.close()
+
+        monkeypatch.setattr(
+            nfc_key_service, "_insert_key", _insert_then_lose_the_race
+        )
+
+        assert (
+            nfc_key_service.rotate_to_new_version(
+                db_session, actor_id=None, reason="race"
+            )
+            is None
+        )
+
+    def test_the_header_ceiling_is_enforced(
+        self, client, superadmin, with_kek, db_session
+    ):
+        from app.core.key_wrapper import EnvKekWrapper, generate_key
+
+        wrapper = EnvKekWrapper(KEK)
+        db_session.add(
+            NfcKey(
+                version=255,
+                wrapped_key=wrapper.wrap(generate_key(), 255),
+                kek_id=wrapper.kek_id,
+                status="live",
+            )
+        )
+        db_session.commit()
+        nfc_key_service.invalidate_cache()
+
+        resp = client.post(
+            ROTATE_URL,
+            json={"reason": "ceiling test", "acknowledge_fleet_updated": True},
+            headers=_auth(superadmin),
+        )
+
+        # The version travels in one byte of the payload header.
+        assert resp.status_code == 400
+        assert "255" in resp.json()["detail"]
+
+
+class TestRotationFailureModes:
+    def test_rotating_before_initialisation_is_refused(
+        self, monkeypatch, db_session
+    ):
+        monkeypatch.setattr(settings, "NFC_KEK", KEK)
+        nfc_key_service.invalidate_cache()
+        # KEK configured but ensure_initialised never ran.
+        with pytest.raises(ValueError, match="not been initialised"):
+            nfc_key_service.rotate_to_new_version(
+                db_session, actor_id=None, reason="too early"
+            )
+
+    def test_a_commit_conflict_during_rotation_is_not_an_error(
+        self, with_kek, db_session, monkeypatch
+    ):
+        from sqlalchemy.exc import IntegrityError
+
+        def _conflict():
+            raise IntegrityError("stmt", {}, Exception("conflict"))
+
+        monkeypatch.setattr(db_session, "commit", _conflict)
+
+        # Same meaning as losing the conditional update: another instance got
+        # there first, and the caller carries on.
+        assert (
+            nfc_key_service.rotate_to_new_version(
+                db_session, actor_id=None, reason="race at commit"
+            )
+            is None
+        )
+
+    def test_a_revoked_current_version_stops_auto_rotation(
+        self, with_kek, db_session, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "NFC_AUTO_ROTATE", True)
+        state = (
+            db_session.query(NfcKeyringState)
+            .filter(NfcKeyringState.id == 1)
+            .one()
+        )
+        state.current_version = 404  # points at a version that does not exist
+        db_session.commit()
+        nfc_key_service.invalidate_cache()
+
+        assert nfc_key_service.maybe_auto_rotate(db_session) is None

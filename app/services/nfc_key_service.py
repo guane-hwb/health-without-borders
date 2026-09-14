@@ -79,6 +79,8 @@ def load_keyring(db: Session) -> Optional[dict]:
         if _cached_ring is not None and time.monotonic() - _cached_at < _CACHE_TTL_SECONDS:
             return _cached_ring
 
+    _auto_rotate_in_its_own_session()
+
     rows = db.query(NfcKey).filter(NfcKey.status == "live").all()
     keys: dict[int, str] = {}
     for row in rows:
@@ -152,6 +154,164 @@ def ensure_initialised(db: Session) -> None:
     db.commit()
     invalidate_cache()
     logger.info("Imported NFC_MASTER_KEY into the keyring as version 0.")
+
+
+def rotate_to_new_version(
+    db: Session,
+    actor_id: Optional[str],
+    reason: str,
+) -> Optional[int]:
+    """
+    Create a new key version and make it current.
+
+    Older versions keep being delivered, so chips written under them stay
+    readable offline; only new writes use the new version. Chips migrate as
+    they are rewritten.
+
+    Returns the new version, or None when another instance advanced the pointer
+    first. That is not an error: two Cloud Run instances reaching the same
+    conclusion at the same time must end with one new current version, and the
+    request that lost the race should be none the wiser.
+    """
+    wrapper = kek_wrapper()
+    if wrapper is None:
+        raise ValueError(
+            "The keyring is served from the environment; configure NFC_KEK to "
+            "manage key versions at runtime."
+        )
+
+    state = db.query(NfcKeyringState).filter(NfcKeyringState.id == 1).first()
+    if state is None:
+        raise ValueError("The keyring has not been initialised yet.")
+
+    previous = state.current_version
+    new_version = _next_version(db)
+    if new_version > 255:
+        raise ValueError(
+            "Key version 255 is the highest the one-byte payload header can "
+            "carry. Retire old versions before rotating again."
+        )
+
+    _insert_key(db, wrapper, version=new_version, material=generate_key())
+    _log_event(
+        db, action="generated", version=new_version, actor_id=actor_id, reason=reason
+    )
+
+    advanced = (
+        db.query(NfcKeyringState)
+        .filter(
+            NfcKeyringState.id == 1,
+            NfcKeyringState.current_version == previous,
+        )
+        .update(
+            {"current_version": new_version, "updated_at": _now()},
+            synchronize_session=False,
+        )
+    )
+    if not advanced:
+        db.rollback()
+        logger.info(
+            "Another instance rotated the NFC keyring first; nothing to do."
+        )
+        return None
+
+    _log_event(
+        db,
+        action="rotated",
+        version=new_version,
+        actor_id=actor_id,
+        reason=f"current advanced from {previous}: {reason}",
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        logger.info(
+            "Another instance rotated the NFC keyring first; nothing to do."
+        )
+        return None
+
+    invalidate_cache()
+    logger.info(
+        "NFC keyring rotated: version %s is now current (was %s). %s",
+        new_version,
+        previous,
+        reason,
+    )
+    return new_version
+
+
+def _auto_rotate_in_its_own_session() -> None:
+    """
+    Run the rotation check on a session of its own.
+
+    This is reached from the login and refresh paths, and rotation commits. On
+    the request's session that commit would also persist whatever the endpoint
+    had pending — the refresh endpoint, for one, has an unflushed token
+    revocation at that point. Rotation is rare and login is not: it borrows a
+    session rather than sharing one.
+    """
+    from app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        maybe_auto_rotate(db)
+    finally:
+        db.close()
+
+
+def maybe_auto_rotate(db: Session) -> Optional[int]:
+    """
+    Rotate when the current key is older than the configured period.
+
+    Runs on the request path rather than on a schedule: the project has no
+    scheduler, and an adopting organisation should not have to stand one up for
+    key rotation to happen. The check only runs when the assembled ring is not
+    cached, so at most once a minute per instance.
+
+    Does nothing unless ``NFC_AUTO_ROTATE`` is on. That flag is the fleet gate:
+    advancing the current version breaks reads on any device still running a
+    build that predates the keyring, so it has to be a deliberate act by
+    someone who has confirmed the fleet.
+
+    Never raises. A failed rotation leaves the current key in place and is
+    retried on the next uncached read; taking down login because a rotation
+    could not be written would be a far worse trade.
+    """
+    if not settings.NFC_AUTO_ROTATE:
+        return None
+
+    try:
+        state = db.query(NfcKeyringState).filter(NfcKeyringState.id == 1).first()
+        if state is None:
+            return None
+
+        current = (
+            db.query(NfcKey)
+            .filter(NfcKey.version == state.current_version)
+            .first()
+        )
+        if current is None or current.created_at is None:
+            return None
+
+        age = _now() - _as_utc(current.created_at)
+        if age.days < settings.NFC_ROTATION_PERIOD_DAYS:
+            return None
+
+        return rotate_to_new_version(
+            db,
+            actor_id=None,
+            reason=(
+                f"automatic rotation: version {state.current_version} reached "
+                f"{age.days} days"
+            ),
+        )
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Automatic NFC key rotation failed; keeping the current version."
+        )
+        return None
 
 
 def revoke_version(
@@ -327,3 +487,10 @@ def _now():
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc)
+
+
+def _as_utc(value):
+    """SQLite hands back naive datetimes; treat those as UTC."""
+    from datetime import timezone
+
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)

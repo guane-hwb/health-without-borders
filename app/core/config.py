@@ -84,6 +84,15 @@ class Settings(BaseSettings):
     # exactly as before, serving the ring straight from the environment, so no
     # existing deployment changes on upgrade.
     NFC_KEK: str = ""  # Hex-encoded 32-byte AES-256 key
+    # Fleet gate for automatic rotation. Rotating advances the current version,
+    # and a device running a build that predates the keyring takes the current
+    # key, ignores the ring, and loses the ability to read everything written
+    # under the previous version. Operations flips this to true only after
+    # confirming every device runs a keyring-aware build — which is why it can
+    # never default to true.
+    NFC_AUTO_ROTATE: bool = False
+    # How old the current key may get before automatic rotation replaces it.
+    NFC_ROTATION_PERIOD_DAYS: int = 90
 
     # --- REPORTING ---
     # Calendar dates and month boundaries in aggregated statistics are resolved
