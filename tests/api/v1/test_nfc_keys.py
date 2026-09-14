@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from app.core import security
 from app.core.config import settings
 from app.core.key_wrapper import EnvKekWrapper, KeyWrapperError, generate_key
+from app.core.nfc_startup import prepare_nfc_keyring
 from app.core.security import get_password_hash
 from app.db.models import (
     NfcKey,
@@ -485,3 +486,121 @@ class TestRingEdgeCases:
             nfc_key_service.revoke_version(
                 db_session, version=0, actor_id=None, reason="x"
             )
+
+# ---------------------------------------------------------------------------
+# Startup preparation
+# ---------------------------------------------------------------------------
+
+class TestStartupPreparation:
+    def test_does_nothing_without_a_kek(self, db_session):
+        # Every deployment behaves this way until the KEK is deliberately set.
+        prepare_nfc_keyring(db_session)
+
+        assert db_session.query(NfcKey).count() == 0
+
+    def test_imports_and_validates_with_a_kek(self, monkeypatch, db_session):
+        monkeypatch.setattr(settings, "NFC_KEK", KEK)
+        nfc_key_service.invalidate_cache()
+
+        prepare_nfc_keyring(db_session)
+
+        assert db_session.query(NfcKey).count() == 1
+
+    def test_a_wrong_kek_refuses_to_start(self, with_kek, monkeypatch, db_session):
+        # Rows were wrapped under KEK; start with a different one.
+        monkeypatch.setattr(settings, "NFC_KEK", OTHER_KEK)
+        nfc_key_service.invalidate_cache()
+
+        # Failing to boot is far better than devices quietly receiving an empty
+        # ring and NFC simply not working.
+        with pytest.raises(RuntimeError, match="no key could be unwrapped"):
+            prepare_nfc_keyring(db_session)
+
+    def test_live_keys_without_a_current_version_refuse_to_start(
+        self, with_kek, db_session
+    ):
+        state = (
+            db_session.query(NfcKeyringState)
+            .filter(NfcKeyringState.id == 1)
+            .one()
+        )
+        state.current_version = 99
+        db_session.commit()
+        nfc_key_service.invalidate_cache()
+
+        with pytest.raises(RuntimeError, match="no usable current version"):
+            prepare_nfc_keyring(db_session)
+
+
+# ---------------------------------------------------------------------------
+# Configuration validation
+# ---------------------------------------------------------------------------
+
+class TestKekValidation:
+    def test_a_malformed_kek_is_reported(self, monkeypatch):
+        monkeypatch.setattr(settings, "NFC_KEK", "not-a-hex-key")
+
+        errors = settings.nfc_keyring_errors()
+
+        assert any("NFC_KEK" in e for e in errors)
+        # The message names the variable, never the value.
+        assert all("not-a-hex-key" not in e for e in errors)
+
+    def test_a_malformed_kek_is_reported_even_with_no_env_ring(
+        self, monkeypatch
+    ):
+        # The ring may legitimately be empty in the environment once it lives in
+        # the database, but a broken KEK still has to be caught.
+        monkeypatch.setattr(settings, "NFC_MASTER_KEY", "")
+        monkeypatch.setattr(settings, "NFC_KEK", "abcd")
+
+        errors = settings.nfc_keyring_errors()
+
+        assert any("NFC_KEK" in e for e in errors)
+
+    def test_a_valid_kek_reports_nothing(self, monkeypatch):
+        monkeypatch.setattr(settings, "NFC_KEK", KEK)
+
+        assert settings.nfc_keyring_errors() == []
+
+
+def test_a_concurrent_change_during_revocation_is_reported(
+    with_kek, db_session, monkeypatch
+):
+    from sqlalchemy.exc import IntegrityError
+
+    def _conflict():
+        raise IntegrityError("stmt", {}, Exception("conflict"))
+
+    monkeypatch.setattr(db_session, "commit", _conflict)
+
+    # Two instances acting at once must surface as "retry", not a 500.
+    with pytest.raises(ValueError, match="Another instance"):
+        nfc_key_service.revoke_version(
+            db_session, version=0, actor_id=None, reason="x"
+        )
+
+def test_lifespan_runs_without_a_kek(db_session):
+    """
+    The app must boot with no KEK configured, which is how every environment
+    starts out — merging this feature changes nothing until it is enabled.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as c:
+        assert c.get("/api/v1/patients/nonexistent-route").status_code == 404
+
+
+def test_startup_helper_opens_and_closes_its_own_session(monkeypatch):
+    from app.core import nfc_startup
+
+    monkeypatch.setattr(settings, "NFC_KEK", "")
+    # No KEK: the helper is a no-op and must not need a database at all.
+    nfc_startup.prepare_nfc_keyring_at_startup()
+
+def test_ensure_initialised_is_a_noop_without_a_kek(db_session):
+    nfc_key_service.ensure_initialised(db_session)
+
+    assert db_session.query(NfcKey).count() == 0
