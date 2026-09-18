@@ -398,11 +398,21 @@ async def search_patient(
     that the document number, names and birth date never leak into access logs,
     proxies or browser history.
 
+    Identity is pinned by `document_number` + `birth_date`. The names confirm
+    that identity, so they are compared on **standardized text** — accents,
+    letter case and extra spacing are ignored, and a partial entry is enough.
+    A child registered as "Andrés Guerrero" is therefore still found when a
+    clinician in the next clinic types "andres guerrero".
+
     **Body fields (`PatientSearchRequest`):**
-    - `document_number`: Exact match against the patient's identity document.
+    - `document_number`: Exact match against the patient's identity document,
+      ignoring case and optional separators (`vz 987.6543` finds `VZ-9876543`).
     - `birth_date`: Exact match (YYYY-MM-DD).
-    - `first_name`: Exact match (case-insensitive).
-    - `last_name`: Exact match against first OR second last name (case-insensitive).
+    - `first_name`: Partial match against the patient's given names (first and
+      second), accent- and case-insensitive.
+    - `last_name`: Partial match against the patient's last names — send one if
+      the patient has one, both if they have two, in any order. Accepted as
+      `last_names` too.
     - `guardian_name` (optional): If the patient has a registered guardian,
       providing this adds an extra layer of verification. Partial match is allowed.
 

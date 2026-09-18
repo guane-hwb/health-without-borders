@@ -1,3 +1,5 @@
+from copy import deepcopy
+from datetime import date
 from unittest.mock import patch
 
 import pytest
@@ -5,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_current_user
-from app.db.models import UserRole
+from app.db.models import Patient, UserRole
 from app.main import app
 from app.schemas.patient import PatientFullRecord
 from app.services.fhir import fhir_backend
@@ -191,6 +193,19 @@ def _clear_overrides():
     app.dependency_overrides.pop(get_current_user, None)
 
 
+def _payload_with_names(
+    first_name="Santiago",
+    first_last_name="Rodríguez",
+    second_last_name="Pérez",
+):
+    """Helper: MOCK_PATIENT_PAYLOAD with the patient's name parts replaced."""
+    payload = deepcopy(MOCK_PATIENT_PAYLOAD)
+    payload["patientInfo"]["firstName"] = first_name
+    payload["patientInfo"]["firstLastName"] = first_last_name
+    payload["patientInfo"]["secondLastName"] = second_last_name
+    return payload
+
+
 def _sync_patient(client, payload=None):
     """Helper: sync a patient as doctor with GCP mocked."""
     _override_doctor()
@@ -221,8 +236,6 @@ def test_sync_duplicate_device_uid_returns_409(client: TestClient, db_session):
     """A patient with a DIFFERENT identity document reusing an existing
     device_uid is rejected with 409, not 500 — the cross-org merge is
     identity-guarded and refuses to mix two children on one tag."""
-    from app.db.models import Patient
-
     first = _sync_patient(client)
     assert first.status_code == 201
 
@@ -1004,6 +1017,262 @@ def test_search_wrong_guardian_returns_404(client: TestClient):
     _clear_overrides()
 
     assert response.status_code == 404
+
+
+def test_search_ignores_accents_on_names(client: TestClient):
+    """
+    The case partial matching exists for: the record says "Rodríguez" but the
+    clinician in the next clinic types it without accents — and vice versa.
+    """
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Rodriguez",  # stored as "Rodríguez"
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_ignores_accents_the_other_way_around(client: TestClient):
+    """An accent typed where the record has none also matches."""
+    payload = _payload_with_names(first_name="Andres", first_last_name="Guerrero")
+    _sync_patient(client, payload)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Andrés",   # stored as "Andres"
+        "last_name": "guerrero",  # stored as "Guerrero"
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_ignores_surrounding_and_repeated_whitespace(client: TestClient):
+    """Names pasted or typed with stray spacing still match."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "  Santiago  ",
+        "last_name": " Rodríguez   Pérez ",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_by_both_last_names(client: TestClient):
+    """The field asks for the patient's last names — both together match."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Rodríguez Pérez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_by_both_last_names_in_reverse_order(client: TestClient):
+    """Order is not part of the comparison — staff do not always know it."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Pérez Rodríguez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_by_single_last_name_patient(client: TestClient):
+    """A patient with only one last name is found by that one last name."""
+    payload = _payload_with_names(first_last_name="Guerrero", second_last_name=None)
+    _sync_patient(client, payload)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Guerrero",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_accepts_the_last_names_field_alias(client: TestClient):
+    """Clients may send the field under its plural name."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_names": "Rodríguez Pérez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_by_both_given_names(client: TestClient):
+    """
+    The second given name lives only in the stored payload, but clinicians type
+    what the identity document shows.
+    """
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago Andres",  # stored: Santiago + "Andrés"
+        "last_name": "Rodríguez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_by_truncated_name(client: TestClient):
+    """A name cut short still matches — comparison is partial, not exact."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santi",
+        "last_name": "Rodrig",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_ignores_document_number_separators(client: TestClient):
+    """"vz 987.6543" is the same document as "VZ-9876543"."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "vz 987.6543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Rodríguez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_guardian_name_ignores_accents(client: TestClient):
+    """Guardian verification is standardized the same way as patient names."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Rodríguez",
+        "guardian_name": "maria perez",  # stored as "María Pérez"
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_wrong_last_name_returns_404(client: TestClient):
+    """Partial matching does not mean any last name will do."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Gómez",  # neither last name
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 404
+
+
+def test_search_extra_last_name_returns_404(client: TestClient):
+    """
+    Every word typed must be accounted for, so a third last name the patient
+    does not have is a mismatch rather than a looser match.
+    """
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Rodríguez Gómez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 404
+
+
+def test_search_ambiguous_duplicate_registration_returns_404(
+    client: TestClient, db_session
+):
+    """
+    Two records sharing document, birth date and names (a duplicate
+    registration) are never disclosed — neither record is returned.
+    """
+    _sync_patient(client)
+
+    db_session.add(
+        Patient(
+            frontend_patient_id="TEST-UNIT-DUPLICATE",
+            organization_id="org-123",
+            device_uid="04:A2:DUPLICATE:UID",
+            document_type="PT",
+            document_number="VZ-9876543",
+            first_name="Santiago",
+            last_name="Rodríguez",
+            second_last_name="Pérez",
+            birth_date=date(2020, 1, 1),
+            guardian_name="María Pérez",
+            full_record_json={},
+        )
+    )
+    db_session.commit()
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Rodríguez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 404
+    assert "No patient found" in response.json()["detail"]
 
 
 def test_search_missing_mandatory_params_returns_422(client: TestClient):
