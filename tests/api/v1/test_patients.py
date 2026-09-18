@@ -13,6 +13,7 @@ from app.schemas.patient import PatientFullRecord
 from app.services.fhir import fhir_backend
 from app.services.patient_service import (
     DeviceUidConflictError,
+    DuplicateIdentityError,
     create_or_update_patient,
 )
 
@@ -288,6 +289,152 @@ def test_sync_bracelet_replacement_conflict_returns_409(client: TestClient):
     _clear_overrides()
 
     assert response.status_code == 409
+
+
+def _payload_with(payload=None, **patient_info):
+    """A copy of a sync payload with ``patientInfo`` fields overridden."""
+    base = deepcopy(payload or MOCK_PATIENT_PAYLOAD)
+    base["patientInfo"].update(patient_info)
+    return base
+
+
+def test_sync_same_document_new_device_uid_returns_409(client: TestClient, db_session):
+    """The same person re-registered from scratch — new bracelet, new
+    frontend patientId — is rejected with 409 instead of creating a second
+    record and splitting the clinical history."""
+    first = _sync_patient(client)
+    assert first.status_code == 201
+
+    duplicate = {
+        **deepcopy(MOCK_PATIENT_PAYLOAD),
+        "patientId": "TEST-UNIT-REREG",
+        "device_uid": "04:A2:TEST:OTHERUID",
+    }
+    response = _sync_patient(client, payload=duplicate)
+    _clear_overrides()
+
+    assert response.status_code == 409
+    assert "identity document" in response.json()["detail"]
+    # Nothing was persisted for the duplicate registration.
+    assert (
+        db_session.query(Patient)
+        .filter(Patient.frontend_patient_id == "TEST-UNIT-REREG")
+        .first()
+        is None
+    )
+    assert db_session.query(Patient).count() == 1
+
+
+def test_sync_same_document_different_formatting_returns_409(client: TestClient):
+    """Document numbers are compared in canonical form, so re-typing
+    "VZ-9876543" as "vz 987.6543" is still the same person."""
+    assert _sync_patient(client).status_code == 201
+
+    duplicate = _payload_with(
+        {
+            **deepcopy(MOCK_PATIENT_PAYLOAD),
+            "patientId": "TEST-UNIT-REREG-FMT",
+            "device_uid": "04:A2:TEST:OTHERUID2",
+        },
+        identification={"documentType": "PT", "documentNumber": "vz 987.6543"},
+    )
+    response = _sync_patient(client, payload=duplicate)
+    _clear_overrides()
+
+    assert response.status_code == 409
+
+
+def test_sync_same_number_different_document_type_is_allowed(client: TestClient):
+    """Uniqueness is on type + number: the same digits under another document
+    type are a different identity and must still register."""
+    assert _sync_patient(client).status_code == 201
+
+    other = _payload_with(
+        {
+            **deepcopy(MOCK_PATIENT_PAYLOAD),
+            "patientId": "TEST-UNIT-OTHERTYPE",
+            "device_uid": "04:A2:TEST:OTHERUID3",
+        },
+        identification={"documentType": "CC", "documentNumber": "VZ-9876543"},
+    )
+    response = _sync_patient(client, payload=other)
+    _clear_overrides()
+
+    assert response.status_code == 201
+
+
+def test_sync_unidentified_document_types_are_exempt(client: TestClient, db_session):
+    """AS/MS/SI numbers are placeholders assigned at registration, so two
+    unnamed patients sharing one must not block each other."""
+    first = _payload_with(
+        {**deepcopy(MOCK_PATIENT_PAYLOAD), "patientId": "TEST-UNIT-MS-1"},
+        identification={"documentType": "MS", "documentNumber": "SIN-ID"},
+    )
+    second = _payload_with(
+        {
+            **deepcopy(MOCK_PATIENT_PAYLOAD),
+            "patientId": "TEST-UNIT-MS-2",
+            "device_uid": "04:A2:TEST:UID-MS2",
+        },
+        identification={"documentType": "MS", "documentNumber": "SIN-ID"},
+    )
+    assert _sync_patient(client, payload=first).status_code == 201
+    response = _sync_patient(client, payload=second)
+    _clear_overrides()
+
+    assert response.status_code == 201
+    assert db_session.query(Patient).count() == 2
+
+
+def test_resync_same_patient_is_not_a_duplicate(client: TestClient, db_session):
+    """The guard only runs on creation: re-syncing an existing record (same
+    frontend patientId and document) still updates it in place."""
+    assert _sync_patient(client).status_code == 201
+    response = _sync_patient(client)
+    _clear_overrides()
+
+    assert response.status_code == 201
+    assert db_session.query(Patient).count() == 1
+
+
+def test_bracelet_replacement_is_not_a_duplicate(client: TestClient, db_session):
+    """A legitimate bracelet replacement keeps the document and changes only
+    the tag — it must not trip the duplicate-identity guard."""
+    assert _sync_patient(client).status_code == 201
+
+    replaced = {
+        **deepcopy(MOCK_PATIENT_PAYLOAD),
+        "device_uid": "04:A2:TEST:REPLACEMENT",
+        "retiredDeviceReason": "lost",
+    }
+    response = _sync_patient(client, payload=replaced)
+    _clear_overrides()
+
+    assert response.status_code == 201
+    assert db_session.query(Patient).count() == 1
+    assert (
+        db_session.query(Patient).one().device_uid == "04:A2:TEST:REPLACEMENT"
+    )
+
+
+def test_create_duplicate_identity_raises_domain_error(db_session):
+    """Service-level contract: the second registration of one document raises
+    DuplicateIdentityError, distinct from a device tag conflict."""
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(MOCK_PATIENT_PAYLOAD),
+        org_id="org-123",
+    )
+    duplicate = PatientFullRecord.model_validate(
+        {
+            **deepcopy(MOCK_PATIENT_PAYLOAD),
+            "patientId": "TEST-UNIT-REREG-SVC",
+            "device_uid": "04:A2:TEST:SVCUID",
+        }
+    )
+
+    with pytest.raises(DuplicateIdentityError):
+        create_or_update_patient(db_session, duplicate, org_id="org-999")
 
 
 def _raise_integrity_error(*args, **kwargs):

@@ -145,7 +145,13 @@ Every `User` belongs to an `Organization`, but **patient records do not**. A pat
 
 **Identity guard.** When the match comes from the tag (a cross-organization merge) and the incoming identity document differs from the stored one, the sync is refused with `409` rather than silently mixing two children onto one record. Same-child cross-org syncs (matching document, or a missing document) merge normally. This relies on the operating assumption that **a physical bracelet is never reassigned from one child to another**.
 
-**Known limitation — cross-org duplicate with a new bracelet.** If a second organization attends the child with a *new* tag (neither `device_uid` nor `frontend_patient_id` matches — e.g. the first bracelet was lost and the second organization issues its own), a duplicate global record is created. This is the benign "false split"; a search-and-relink flow to reconcile it is planned.
+**Duplicate-identity guard (new bracelet, same person).** `device_uid` alone cannot stop a "false split": if a second organization attends the child with a *new* tag (neither `device_uid` nor `frontend_patient_id` matches — e.g. the first bracelet was lost and the second organization issues its own), nothing collides and a second global record would be created for the same person. Before creating a record, the sync therefore also checks the identity document: if `documentType` + `documentNumber` already belong to another patient, the sync is refused with `409` (`DuplicateIdentityError`) and nothing is written, so the app keeps the record pending instead of splitting the clinical history.
+
+* The number is compared in canonical form (lowercased, separators removed — see `normalize_document_number`), so `VZ-9876543` and `vz 987.6543` are the same document.
+* Uniqueness is on **type + number**, so the same digits under a different `documentType` are a different identity. A child whose `RC` is later re-issued as a `TI` with the same number is therefore *not* recognised as a duplicate — reconciling that transition still needs the planned search-and-relink flow.
+* Placeholder types `AS`, `MS` and `SI` (adulto/menor sin identificar, sin identificación) are exempt: their numbers are assigned locally at registration, so enforcing uniqueness would block every unnamed patient after the first.
+* The guard runs on the **creation path only**. Re-syncs and bracelet replacements target an existing record, whose identification block is immutable, so they can never take over another patient's document.
+* Enforcement is at application level; there is no `UNIQUE(document_type, document_number)` constraint, since existing data may already contain duplicates and the exempt types would violate it.
 
 ### 3.2. Hybrid Relational-Document Model (JSON)
 Migrant populations often have unstructured or transient data.

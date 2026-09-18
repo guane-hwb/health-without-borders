@@ -46,6 +46,7 @@ from app.services.nfc_key_version_service import (
 )
 from app.services.patient_service import (
     DeviceUidConflictError,
+    DuplicateIdentityError,
     create_or_update_patient,
     find_patient_strict,
     get_existing_history_count,
@@ -198,6 +199,12 @@ async def sync_patient(
 
     **Device tag conflict:** If the record's `device_uid` is already registered to a
     different patient, the endpoint returns `409` and no record is created or modified.
+
+    **Duplicate identity:** If the record would create a NEW patient whose identity
+    document (`documentType` + `documentNumber`) already belongs to another record,
+    the endpoint returns `409` and nothing is created — the same person must not be
+    registered twice under two different `device_uid`s. Unidentified document types
+    (`AS`, `MS`, `SI`) are exempt, since their numbers are local placeholders.
 
     **Allowed roles:** `doctor`, `nurse`.
     """
@@ -365,6 +372,17 @@ async def sync_patient(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A patient is already registered with this device tag.",
+        )
+
+    except DuplicateIdentityError:
+        logger.warning(
+            "Patient sync duplicate identity document actor_id=%s org_id=%s",
+            current_user.id,
+            current_user.organization_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A patient is already registered with this identity document.",
         )
 
     except Exception:

@@ -34,6 +34,21 @@ class DeviceUidConflictError(Exception):
     """
 
 
+class DuplicateIdentityError(Exception):
+    """
+    Raised when a sync would create a *second* patient record for an identity
+    document (type + number) that is already registered under another
+    ``device_uid``.
+
+    ``device_uid`` only catches a bracelet being reused. A child who lost their
+    bracelet and is registered from scratch in the next clinic arrives with a
+    new tag *and* a new mobile-generated ``patientId``, so nothing collides and
+    the same person silently ends up with two records and a split clinical
+    history. The API layer maps this to a ``409 Conflict``, so the app keeps the
+    record pending instead of duplicating the patient.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Background data hash computation
 # ---------------------------------------------------------------------------
@@ -202,6 +217,71 @@ def _normalized_document_column(column):
     for separator in DOCUMENT_SEPARATORS:
         expression = func.replace(expression, separator, "")
     return expression
+
+
+# Document types that stand in for "no usable identity document" (adulto/menor
+# sin identificar, sin identificación). Their number is a placeholder assigned
+# at registration, so two records sharing one is not evidence of the same
+# person — the duplicate-identity guard skips them.
+UNIDENTIFIED_DOCUMENT_TYPES = frozenset({"AS", "MS", "SI"})
+
+
+def get_patient_by_document(
+    db: Session, document_type: Optional[str], document_number: Optional[str]
+) -> Optional[Patient]:
+    """
+    Fetch the patient registered under an identity document, or None.
+
+    The number is compared in canonical form (see ``normalize_document_number``)
+    so "VZ-9876543" and "vz 9876543" resolve to the same person. The type is
+    compared literally: it is a closed code list (``DocumentType``) persisted
+    from the enum value, so there is nothing to normalize.
+    """
+    normalized = normalize_document_number(document_number)
+    if not document_type or not normalized:
+        return None
+    return (
+        db.query(Patient)
+        .filter(
+            Patient.document_type == document_type,
+            _normalized_document_column(Patient.document_number) == normalized,
+        )
+        .first()
+    )
+
+
+def _ensure_identity_available(
+    db: Session,
+    document_type: Optional[str],
+    document_number: Optional[str],
+    exclude_patient_id: Optional[str] = None,
+) -> None:
+    """
+    Guard against registering the same person twice under different bracelets.
+
+    Raises ``DuplicateIdentityError`` if the identity document (type + number)
+    already belongs to another patient record. Only the creation path needs
+    this: on update the identification block is immutable, so an existing
+    record can never take over someone else's document.
+
+    Placeholder document types (``UNIDENTIFIED_DOCUMENT_TYPES``) are skipped —
+    their numbers are assigned locally at registration and say nothing about who
+    the patient is, so enforcing uniqueness on them would block every unnamed
+    patient after the first.
+    """
+    if not document_type or document_type in UNIDENTIFIED_DOCUMENT_TYPES:
+        return
+    owner = get_patient_by_document(db, document_type, document_number)
+    if owner is not None and owner.id != exclude_patient_id:
+        logger.warning(
+            "Identity document already registered existing_ref=%s type=%s doc=%s",
+            safe_patient_ref(owner.id),
+            document_type,
+            mask_id(document_number or ""),
+        )
+        raise DuplicateIdentityError(
+            "A patient is already registered with this identity document."
+        )
 
 
 def _stored_given_names(patient: Patient) -> tuple[Optional[str], ...]:
@@ -403,12 +483,11 @@ def create_or_update_patient(
         existing_patient is not None
         and existing_patient.frontend_patient_id != patient_in.patientId
     ):
-        incoming_doc = patient_in.patientInfo.identification.documentNumber
-        if (
-            existing_patient.document_number
-            and incoming_doc
-            and existing_patient.document_number != incoming_doc
-        ):
+        incoming_doc = normalize_document_number(
+            patient_in.patientInfo.identification.documentNumber
+        )
+        existing_doc = normalize_document_number(existing_patient.document_number)
+        if existing_doc and incoming_doc and existing_doc != incoming_doc:
             logger.warning(
                 "Sync tag identity mismatch existing_ref=%s device=%s",
                 safe_patient_ref(existing_patient.id),
@@ -527,8 +606,18 @@ def create_or_update_patient(
         # Reject early if this tag is already registered to any patient.
         _ensure_device_uid_available(db, patient_in.device_uid)
 
-        logger.info("Creating new patient record: %s", safe_patient_ref(patient_in.patientId))
         pi = patient_in.patientInfo
+        # Reject just as early if this person is already on record under a
+        # different bracelet: a new tag plus a new frontend_patient_id collides
+        # on nothing, so without this the same child gets a second record and a
+        # split clinical history.
+        _ensure_identity_available(
+            db,
+            pi.identification.documentType.value,
+            pi.identification.documentNumber,
+        )
+
+        logger.info("Creating new patient record: %s", safe_patient_ref(patient_in.patientId))
 
         db_patient = Patient(
             # Server generates the PK; frontend ID stored separately
