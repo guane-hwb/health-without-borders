@@ -9,6 +9,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.phi_sanitizer import mask_id, safe_patient_ref
+from app.core.text_normalizer import (
+    DOCUMENT_SEPARATORS,
+    normalize_document_number,
+    text_matches,
+)
 from app.db.models import Patient, RetiredDeviceUid
 from app.schemas.patient import PatientFullRecord
 from app.services.record_merger import merge_patient_records
@@ -176,6 +181,72 @@ def _ensure_device_uid_available(
         )
 
 
+# Maximum rows pulled for in-Python name matching. ``document_number`` +
+# ``birth_date`` is an identity pair, so real candidate sets are 1 row; the cap
+# only bounds the damage of dirty data (duplicate registrations) and never
+# widens access — more than one surviving match is denied anyway.
+_CANDIDATE_LIMIT = 10
+
+
+def _normalized_document_column(column):
+    """
+    SQL expression that reduces a stored document number to the same canonical
+    form as ``normalize_document_number``, so "VZ-9876543" is found by
+    "vz 9876543". Uses only ``lower``/``replace``, which behave identically on
+    PostgreSQL and on the SQLite used by the test suite.
+
+    Diacritics are not stripped here (no portable SQL primitive does it) —
+    identity document numbers are alphanumeric, so there is nothing to strip.
+    """
+    expression = func.lower(column)
+    for separator in DOCUMENT_SEPARATORS:
+        expression = func.replace(expression, separator, "")
+    return expression
+
+
+def _stored_given_names(patient: Patient) -> tuple[Optional[str], ...]:
+    """
+    Every given name on record for a patient.
+
+    ``first_name`` is mirrored in a relational column, but the second given name
+    only lives in the authoritative ``full_record_json`` payload, and clinicians
+    type what the document shows ("Santiago Andrés"). Reading it here keeps both
+    names searchable without a schema migration. The payload is patient-supplied
+    JSON, so every step is defensive.
+    """
+    second_name = None
+    record = patient.full_record_json
+    if isinstance(record, dict):
+        patient_info = record.get("patientInfo")
+        if isinstance(patient_info, dict):
+            second_name = patient_info.get("secondName")
+    return (patient.first_name, second_name)
+
+
+def _identity_matches(
+    patient: Patient,
+    first_name: str,
+    last_name: str,
+    guardian_name: Optional[str],
+) -> bool:
+    """
+    Confirm a candidate row against the typed names, tolerating accents, case
+    and partial entry (see ``text_matches``).
+    """
+    if not text_matches(first_name, *_stored_given_names(patient)):
+        return False
+
+    if not text_matches(last_name, patient.last_name, patient.second_last_name):
+        return False
+
+    if guardian_name and not text_matches(
+        guardian_name, patient.guardian_name, patient.guardian2_name
+    ):
+        return False
+
+    return True
+
+
 def find_patient_strict(
     db: Session,
     document_number: str,
@@ -187,41 +258,43 @@ def find_patient_strict(
     """
     Strict patient lookup — returns exactly one patient or None.
 
-    All four mandatory parameters must match for a result to be returned.
-    This prevents accidental exposure of patient data and complies with 
-    Ley 1581 de 2012 (Habeas Data) and Resolución 1888/2025 privacy requirements.
+    All four mandatory parameters must match for a result to be returned. This
+    prevents accidental exposure of patient data and complies with Ley 1581 de
+    2012 (Habeas Data) and Resolución 1888/2025 privacy requirements.
+
+    Identity is pinned by ``document_number`` + ``birth_date``; the names are a
+    confirmation step, so they are compared on standardized text instead of
+    literally — the same child is registered as "Andrés Guerrero" in one clinic
+    and typed as "andres guerrero" in the next, and must still be found.
 
     Matching rules:
-      - document_number: exact match (case-insensitive)
+      - document_number: exact match, ignoring case and the optional separators
+                         in ``DOCUMENT_SEPARATORS`` ("vz 987.6543" == "VZ-9876543")
       - birth_date:      exact match
-      - first_name:      exact match (case-insensitive, trimmed)
-      - last_name:       exact match against first OR second last name (case-insensitive)
-      - guardian_name:    if provided, must match (case-insensitive, partial)
+      - first_name:      partial match against the patient's given names
+                         (first and second), ignoring case and accents
+      - last_name:       partial match against the patient's last names — one
+                         or both, in any order ("Guerrero", "Duque Guerrero")
+      - guardian_name:   if provided, partial match against either guardian
 
     Returns None if zero or more than one patient matches (ambiguous = denied).
     """
-    query = db.query(Patient).filter(
-        func.lower(Patient.document_number) == document_number.strip().lower(),
-        Patient.birth_date == birth_date,
-        func.lower(Patient.first_name) == first_name.strip().lower(),
-    )
-
-    # Last name must match either first or second last name
-    last_name_lower = last_name.strip().lower()
-    query = query.filter(
-        (func.lower(Patient.last_name) == last_name_lower)
-        | (func.lower(Patient.second_last_name) == last_name_lower)
-    )
-
-    # Guardian verification — if provided, it must match either guardian
-    if guardian_name:
-        guardian_lower = guardian_name.strip().lower()
-        query = query.filter(
-            (func.lower(Patient.guardian_name).contains(guardian_lower))
-            | (func.lower(Patient.guardian2_name).contains(guardian_lower))
+    candidates = (
+        db.query(Patient)
+        .filter(
+            _normalized_document_column(Patient.document_number)
+            == normalize_document_number(document_number),
+            Patient.birth_date == birth_date,
         )
+        .limit(_CANDIDATE_LIMIT)
+        .all()
+    )
 
-    results = query.limit(2).all()
+    results = [
+        patient
+        for patient in candidates
+        if _identity_matches(patient, first_name, last_name, guardian_name)
+    ]
 
     if len(results) == 1:
         return results[0]

@@ -22,7 +22,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 # ============================================================================
 # ENUMS — Resolution 866/2021 coded domains
@@ -590,12 +590,21 @@ class PatientSearchRequest(BaseModel):
         description="Número de documento de identidad del paciente (Res. 866 Elem. 2.2)",
     )
     birth_date: date = Field(..., description="Fecha de nacimiento del paciente (YYYY-MM-DD)")
-    first_name: str = Field(..., min_length=2, description="Primer nombre del paciente")
+    first_name: str = Field(
+        ..., min_length=2,
+        description="Nombre(s) del paciente — primer nombre, o primero y segundo",
+    )
     last_name: str = Field(
         ..., min_length=2,
-        description="Primer o segundo apellido del paciente",
+        validation_alias=AliasChoices("last_name", "last_names"),
+        description=(
+            "Apellidos del paciente — uno solo si solo tiene uno, ambos si tiene "
+            "dos"
+        ),
     )
     guardian_name: Optional[str] = Field(
         None, min_length=3,
         description="Nombre completo del acudiente (refuerza la verificación si el paciente tiene guardián)",
     )
+
+    model_config = ConfigDict(populate_by_name=True)

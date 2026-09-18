@@ -7,12 +7,24 @@ This page explains how to find an existing patient and how to read a patient's c
 ## 1. Search for a patient
 
 1. From the home screen, tap **Search patients**.
-2. Enter the patient's identifying details (for example, document number or name).
+2. Enter the patient's identifying details: document number, date of birth, given name(s) and last name(s).
 3. Tap **Search**.
+
+### What the fields accept
+
+The document number and the date of birth must be the patient's own — they are what identifies the record. The names confirm that identity, so you do not have to reproduce them exactly:
+
+* **Accents and capitals are ignored.** A child registered as "Andrés Guerrero" is found by typing "andres guerrero".
+* **Last names:** enter the last names the patient has — one if they have one, both if they have two, in either order. Entering only one of two also works.
+* **Given names:** the first name alone is enough; entering the first and second name also works.
+* **A shortened name still matches.** "Rodrig" finds "Rodríguez".
+* **Document number separators are ignored.** "vz 987.6543" finds "VZ-9876543".
+
+A name the patient does not have is still a mismatch, so adding a last name that is not theirs returns no result.
 
 If no match is found, the app shows the message:
 *"No patient found with these details. Please check the fields."*
-Review the values you entered and try again.
+Review the values you entered and try again. If two records happen to share the same document number, date of birth and names, the app deliberately shows neither — report it so the duplicate can be resolved.
 
 ---
 
