@@ -1,11 +1,21 @@
+from copy import deepcopy
+from datetime import date
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_current_user
-from app.db.models import UserRole
+from app.db.models import Patient, UserRole
 from app.main import app
+from app.schemas.patient import PatientFullRecord
 from app.services.fhir import fhir_backend
+from app.services.patient_service import (
+    DeviceUidConflictError,
+    DuplicateIdentityError,
+    create_or_update_patient,
+)
 
 
 class MockUser:
@@ -29,7 +39,7 @@ class MockUnauthorized:
     organization_id = "org-123"
 
 
-# RDA-compliant mock payload (Resolution 1888/2025)
+# RDA-compliant mock payload (Resolution 1888/2025 + IG RDA v0.8.1 / schema v3.0)
 MOCK_PATIENT_PAYLOAD = {
     "patientId": "TEST-UNIT-001",
     "device_uid": "04:A2:TEST:UID",
@@ -52,9 +62,9 @@ MOCK_PATIENT_PAYLOAD = {
             "cityCode": "54001",
             "state": "Norte de Santander",
             "zipCode": "540001",
-            "country": "COL",
+            "country": "170",           # ISO 3166-1 numeric for Colombia
             "countryName": "Colombia",
-            "zone": "U",
+            "zone": "01",               # v3.0: "01" = URBANA (was "U")
         },
         "bloodType": "O+",
         "weight": 15.5,
@@ -67,20 +77,20 @@ MOCK_PATIENT_PAYLOAD = {
         "device_uid": "GUARDIAN-UID-001",
     },
     "backgroundHistory": {
-        "chronicConditions": None,
+        "chronicConditions": [],        # v3.0: list, not None
         "personalHistory": None,
         "familyHistory": [
             {
-                "conditionCie10Code": "E11",
                 "conditionDescription": "Diabetes mellitus tipo 2",
-                "relationship": "04",
+                "relationship": "04",   # FamilyRelationship.ABUELOS
             }
         ],
         "familyHistoryNotes": "Abuelo paterno con diabetes.",
+        "medications": [],
     },
     "allergies": [
         {
-            "category": "01",
+            "category": "01",           # AllergyCategory.MEDICAMENTO
             "allergen": "Penicilina",
             "reaction": "Habones",
             "notes": "Reacción leve en la infancia reportada por la madre",
@@ -88,6 +98,72 @@ MOCK_PATIENT_PAYLOAD = {
     ],
     "medicalHistory": [],
     "vaccinationRecord": [],
+}
+
+# H7: Visits now include explicit encounterIdentifier for deterministic delta testing
+VISIT_1 = {
+    "type": "Consultation",
+    "encounterIdentifier": "enc-visit-001",  # H7: explicit UUID
+    "startDateTime": "2026-01-15T09:00:00",
+    "endDateTime": "2026-01-15T09:45:00",
+    "careModality": "01",
+    "serviceGroup": "01",
+    "careEnvironment": "05",
+    "provider": {
+        "repsCode": "540015400101",
+        "name": "Hospital Erasmo Meoz",
+        "nitNumber": "890500600",
+        "locationSeatCode": "540015400101-01",
+    },
+    "practitioner": {
+        "documentType": "CC",
+        "documentNumber": "88001234",
+        "name": "GOMEZ, ANDREA",
+        "firstName": "Andrea",
+        "secondName": None,
+        "firstLastName": "Gomez",
+        "secondLastName": None,
+    },
+    "location": "HOSPITAL_ERASMO_MEOZ",
+    "physician": "GOMEZ, ANDREA",
+    "clinicalEvaluation": {
+        "historyOfCurrentIllness": "Fiebre de 3 días de evolución, tos seca.",
+        "generalPhysicalExamination": "T: 38.5°C, FC: 110. Faringe eritematosa.",
+        "systemsExamination": "Respiratorio: murmullo vesicular conservado.",
+        "treatmentPlanObservations": "Acetaminofén 15mg/kg cada 6h. Control en 48h.",
+    },
+    "diagnosis": [
+        {
+            "icd10Code": "J06.9",
+            "icd11Code": None,
+            "description": "Infección aguda de las vías respiratorias superiores",
+        }
+    ],
+    "diagnosisType": "01",
+    "riskFactors": [],
+    "incapacity": None,
+    "payer": None,
+}
+
+VISIT_2 = {
+    **VISIT_1,
+    "encounterIdentifier": "enc-visit-002",  # H7: different UUID
+    "startDateTime": "2026-04-10T09:00:00",
+    "endDateTime": None,
+    "clinicalEvaluation": {
+        "historyOfCurrentIllness": "Control post-infección respiratoria.",
+        "generalPhysicalExamination": None,
+        "systemsExamination": None,
+        "treatmentPlanObservations": None,
+    },
+    "diagnosis": [
+        {
+            "icd10Code": "Z09",
+            "icd11Code": None,
+            "description": "Examen de seguimiento",
+        }
+    ],
+    "diagnosisType": "02",
 }
 
 # Payload with a medical visit
@@ -102,43 +178,7 @@ MOCK_PATIENT_WITH_VISIT = {
             "documentNumber": "VZ-1111111",
         },
     },
-    "medicalHistory": [
-        {
-            "type": "Consultation",
-            "startDateTime": "2026-01-15T09:00:00",
-            "endDateTime": "2026-01-15T09:45:00",
-            "careModality": "01",
-            "serviceGroup": "01",
-            "careEnvironment": "05",
-            "provider": {
-                "repsCode": "540015400101",
-                "name": "Hospital Erasmo Meoz",
-            },
-            "practitioner": {
-                "documentType": "CC",
-                "documentNumber": "88001234",
-                "name": "GOMEZ, ANDREA",
-            },
-            "location": "HOSPITAL_ERASMO_MEOZ",
-            "physician": "GOMEZ, ANDREA",
-            "clinicalEvaluation": {
-                "historyOfCurrentIllness": "Fiebre de 3 días de evolución, tos seca.",
-                "generalPhysicalExamination": "T: 38.5°C, FC: 110. Faringe eritematosa.",
-                "systemsExamination": "Respiratorio: murmullo vesicular conservado.",
-                "treatmentPlanObservations": "Acetaminofén 15mg/kg cada 6h. Control en 48h.",
-            },
-            "diagnosis": [
-                {
-                    "icd10Code": "J06.9",
-                    "description": "Infección aguda de las vías respiratorias superiores",
-                }
-            ],
-            "diagnosisType": "01",
-            "riskFactors": [],
-            "incapacity": None,
-            "payer": None,
-        }
-    ],
+    "medicalHistory": [VISIT_1],
 }
 
 
@@ -152,6 +192,19 @@ def _override_nurse():
 
 def _clear_overrides():
     app.dependency_overrides.pop(get_current_user, None)
+
+
+def _payload_with_names(
+    first_name="Santiago",
+    first_last_name="Rodríguez",
+    second_last_name="Pérez",
+):
+    """Helper: MOCK_PATIENT_PAYLOAD with the patient's name parts replaced."""
+    payload = deepcopy(MOCK_PATIENT_PAYLOAD)
+    payload["patientInfo"]["firstName"] = first_name
+    payload["patientInfo"]["firstLastName"] = first_last_name
+    payload["patientInfo"]["secondLastName"] = second_last_name
+    return payload
 
 
 def _sync_patient(client, payload=None):
@@ -175,8 +228,247 @@ def test_sync_patient_success(client: TestClient):
     assert response.status_code == 201
     data = response.json()
     assert data["status"] == "success"
-    assert data["internal_id"] == "TEST-UNIT-001"
+    # H3: internal_id is now server-generated — just check it's a non-empty string
+    assert len(data["internal_id"]) > 0
     assert data["fhir_status"] == "success"
+
+
+def test_sync_duplicate_device_uid_returns_409(client: TestClient, db_session):
+    """A patient with a DIFFERENT identity document reusing an existing
+    device_uid is rejected with 409, not 500 — the cross-org merge is
+    identity-guarded and refuses to mix two children on one tag."""
+    first = _sync_patient(client)
+    assert first.status_code == 201
+
+    # Different patient (distinct patientId + document) reusing the same tag.
+    duplicate = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "TEST-UNIT-DUP",
+        "patientInfo": {
+            **MOCK_PATIENT_PAYLOAD["patientInfo"],
+            "identification": {
+                "documentType": "PT",
+                "documentNumber": "VZ-0000000",
+            },
+        },
+    }
+    response = _sync_patient(client, payload=duplicate)
+    _clear_overrides()
+
+    assert response.status_code == 409
+    # The conflicting record must not have been persisted.
+    assert (
+        db_session.query(Patient)
+        .filter(Patient.frontend_patient_id == "TEST-UNIT-DUP")
+        .first()
+        is None
+    )
+    # The original tag owner is untouched.
+    assert (
+        db_session.query(Patient)
+        .filter(Patient.device_uid == MOCK_PATIENT_PAYLOAD["device_uid"])
+        .count()
+        == 1
+    )
+
+
+def test_sync_bracelet_replacement_conflict_returns_409(client: TestClient):
+    """Reassigning an existing patient's device_uid to a tag owned by another
+    patient is rejected with 409, not 500."""
+    a = _sync_patient(client, payload=MOCK_PATIENT_PAYLOAD)
+    assert a.status_code == 201
+    b = _sync_patient(client, payload=MOCK_PATIENT_WITH_VISIT)
+    assert b.status_code == 201
+
+    # Re-sync patient B, but point its tag at patient A's device_uid.
+    collide = {
+        **MOCK_PATIENT_WITH_VISIT,
+        "device_uid": MOCK_PATIENT_PAYLOAD["device_uid"],
+    }
+    response = _sync_patient(client, payload=collide)
+    _clear_overrides()
+
+    assert response.status_code == 409
+
+
+def _payload_with(payload=None, **patient_info):
+    """A copy of a sync payload with ``patientInfo`` fields overridden."""
+    base = deepcopy(payload or MOCK_PATIENT_PAYLOAD)
+    base["patientInfo"].update(patient_info)
+    return base
+
+
+def test_sync_same_document_new_device_uid_returns_409(client: TestClient, db_session):
+    """The same person re-registered from scratch — new bracelet, new
+    frontend patientId — is rejected with 409 instead of creating a second
+    record and splitting the clinical history."""
+    first = _sync_patient(client)
+    assert first.status_code == 201
+
+    duplicate = {
+        **deepcopy(MOCK_PATIENT_PAYLOAD),
+        "patientId": "TEST-UNIT-REREG",
+        "device_uid": "04:A2:TEST:OTHERUID",
+    }
+    response = _sync_patient(client, payload=duplicate)
+    _clear_overrides()
+
+    assert response.status_code == 409
+    assert "identity document" in response.json()["detail"]
+    # Nothing was persisted for the duplicate registration.
+    assert (
+        db_session.query(Patient)
+        .filter(Patient.frontend_patient_id == "TEST-UNIT-REREG")
+        .first()
+        is None
+    )
+    assert db_session.query(Patient).count() == 1
+
+
+def test_sync_same_document_different_formatting_returns_409(client: TestClient):
+    """Document numbers are compared in canonical form, so re-typing
+    "VZ-9876543" as "vz 987.6543" is still the same person."""
+    assert _sync_patient(client).status_code == 201
+
+    duplicate = _payload_with(
+        {
+            **deepcopy(MOCK_PATIENT_PAYLOAD),
+            "patientId": "TEST-UNIT-REREG-FMT",
+            "device_uid": "04:A2:TEST:OTHERUID2",
+        },
+        identification={"documentType": "PT", "documentNumber": "vz 987.6543"},
+    )
+    response = _sync_patient(client, payload=duplicate)
+    _clear_overrides()
+
+    assert response.status_code == 409
+
+
+def test_sync_same_number_different_document_type_is_allowed(client: TestClient):
+    """Uniqueness is on type + number: the same digits under another document
+    type are a different identity and must still register."""
+    assert _sync_patient(client).status_code == 201
+
+    other = _payload_with(
+        {
+            **deepcopy(MOCK_PATIENT_PAYLOAD),
+            "patientId": "TEST-UNIT-OTHERTYPE",
+            "device_uid": "04:A2:TEST:OTHERUID3",
+        },
+        identification={"documentType": "CC", "documentNumber": "VZ-9876543"},
+    )
+    response = _sync_patient(client, payload=other)
+    _clear_overrides()
+
+    assert response.status_code == 201
+
+
+def test_sync_unidentified_document_types_are_exempt(client: TestClient, db_session):
+    """AS/MS/SI numbers are placeholders assigned at registration, so two
+    unnamed patients sharing one must not block each other."""
+    first = _payload_with(
+        {**deepcopy(MOCK_PATIENT_PAYLOAD), "patientId": "TEST-UNIT-MS-1"},
+        identification={"documentType": "MS", "documentNumber": "SIN-ID"},
+    )
+    second = _payload_with(
+        {
+            **deepcopy(MOCK_PATIENT_PAYLOAD),
+            "patientId": "TEST-UNIT-MS-2",
+            "device_uid": "04:A2:TEST:UID-MS2",
+        },
+        identification={"documentType": "MS", "documentNumber": "SIN-ID"},
+    )
+    assert _sync_patient(client, payload=first).status_code == 201
+    response = _sync_patient(client, payload=second)
+    _clear_overrides()
+
+    assert response.status_code == 201
+    assert db_session.query(Patient).count() == 2
+
+
+def test_resync_same_patient_is_not_a_duplicate(client: TestClient, db_session):
+    """The guard only runs on creation: re-syncing an existing record (same
+    frontend patientId and document) still updates it in place."""
+    assert _sync_patient(client).status_code == 201
+    response = _sync_patient(client)
+    _clear_overrides()
+
+    assert response.status_code == 201
+    assert db_session.query(Patient).count() == 1
+
+
+def test_bracelet_replacement_is_not_a_duplicate(client: TestClient, db_session):
+    """A legitimate bracelet replacement keeps the document and changes only
+    the tag — it must not trip the duplicate-identity guard."""
+    assert _sync_patient(client).status_code == 201
+
+    replaced = {
+        **deepcopy(MOCK_PATIENT_PAYLOAD),
+        "device_uid": "04:A2:TEST:REPLACEMENT",
+        "retiredDeviceReason": "lost",
+    }
+    response = _sync_patient(client, payload=replaced)
+    _clear_overrides()
+
+    assert response.status_code == 201
+    assert db_session.query(Patient).count() == 1
+    assert (
+        db_session.query(Patient).one().device_uid == "04:A2:TEST:REPLACEMENT"
+    )
+
+
+def test_create_duplicate_identity_raises_domain_error(db_session):
+    """Service-level contract: the second registration of one document raises
+    DuplicateIdentityError, distinct from a device tag conflict."""
+    create_or_update_patient(
+        db_session,
+        PatientFullRecord.model_validate(MOCK_PATIENT_PAYLOAD),
+        org_id="org-123",
+    )
+    duplicate = PatientFullRecord.model_validate(
+        {
+            **deepcopy(MOCK_PATIENT_PAYLOAD),
+            "patientId": "TEST-UNIT-REREG-SVC",
+            "device_uid": "04:A2:TEST:SVCUID",
+        }
+    )
+
+    with pytest.raises(DuplicateIdentityError):
+        create_or_update_patient(db_session, duplicate, org_id="org-999")
+
+
+def _raise_integrity_error(*args, **kwargs):
+    raise IntegrityError("commit", {}, Exception("UNIQUE constraint failed"))
+
+
+def test_create_patient_integrity_error_maps_to_conflict(db_session, monkeypatch):
+    """If the device_uid uniqueness check passes but the commit still races into
+    an IntegrityError, the create path maps it to a domain conflict (not a 500)."""
+    record = PatientFullRecord.model_validate(MOCK_PATIENT_PAYLOAD)
+
+    # Force the safety net: pre-check sees no owner, but the commit blows up.
+    monkeypatch.setattr(db_session, "commit", _raise_integrity_error)
+
+    with pytest.raises(DeviceUidConflictError):
+        create_or_update_patient(db_session, record, org_id="org-123")
+
+
+def test_bracelet_replacement_integrity_error_maps_to_conflict(
+    db_session, monkeypatch
+):
+    """Same race safety net, but on the bracelet-replacement (update) path."""
+    # First create the patient with a real commit.
+    record = PatientFullRecord.model_validate(MOCK_PATIENT_PAYLOAD)
+    create_or_update_patient(db_session, record, org_id="org-123")
+
+    # Re-sync the same patient with a new, unused tag → bracelet replacement.
+    updated = PatientFullRecord.model_validate(
+        {**MOCK_PATIENT_PAYLOAD, "device_uid": "04:A2:TEST:NEWUID"}
+    )
+    monkeypatch.setattr(db_session, "commit", _raise_integrity_error)
+
+    with pytest.raises(DeviceUidConflictError):
+        create_or_update_patient(db_session, updated, org_id="org-123")
 
 
 def test_sync_patient_with_visit_generates_multiple_bundles(client: TestClient):
@@ -202,12 +494,38 @@ def test_sync_nurse_cannot_add_medical_history(client: TestClient):
         "medicalHistory": [
             {
                 "type": "Consultation",
+                "encounterIdentifier": "enc-nurse-attempt-001",
                 "startDateTime": "2026-02-01T10:00:00",
+                "endDateTime": None,
                 "careModality": "01",
                 "serviceGroup": "01",
                 "careEnvironment": "05",
-                "clinicalEvaluation": {"historyOfCurrentIllness": "Fiebre"},
+                "provider": {
+                    "repsCode": "540015400101",
+                    "name": "Hospital Erasmo Meoz",
+                    "nitNumber": "890500600",
+                    "locationSeatCode": "540015400101-01",
+                },
+                "practitioner": {
+                    "documentType": "CC",
+                    "documentNumber": "88001234",
+                    "name": "GOMEZ, ANDREA",
+                    "firstName": "Andrea",
+                    "secondName": None,
+                    "firstLastName": "Gomez",
+                    "secondLastName": None,
+                },
+                "clinicalEvaluation": {
+                    "historyOfCurrentIllness": "Fiebre",
+                    "generalPhysicalExamination": None,
+                    "systemsExamination": None,
+                    "treatmentPlanObservations": None,
+                },
                 "diagnosis": [],
+                "diagnosisType": "01",
+                "riskFactors": [],
+                "incapacity": None,
+                "payer": None,
             }
         ],
     }
@@ -220,6 +538,75 @@ def test_sync_nurse_cannot_add_medical_history(client: TestClient):
     assert "Nurses can only add vaccines" in response.json()["detail"]
 
 
+def test_sync_nurse_history_rejected_before_llm(client: TestClient):
+    """A nurse adding history is rejected before any LLM call is made."""
+    _sync_patient(client)
+    _clear_overrides()
+
+    _override_nurse()
+    payload_with_visit = {
+        **MOCK_PATIENT_PAYLOAD,
+        "medicalHistory": [
+            {
+                "type": "Consultation",
+                "encounterIdentifier": "enc-nurse-attempt-002",
+                "startDateTime": "2026-02-01T10:00:00",
+                "endDateTime": None,
+                "careModality": "01",
+                "serviceGroup": "01",
+                "careEnvironment": "05",
+                "provider": {
+                    "repsCode": "540015400101",
+                    "name": "Hospital Erasmo Meoz",
+                    "nitNumber": "890500600",
+                    "locationSeatCode": "540015400101-01",
+                },
+                "practitioner": {
+                    "documentType": "CC",
+                    "documentNumber": "88001234",
+                    "name": "GOMEZ, ANDREA",
+                    "firstName": "Andrea",
+                    "secondName": None,
+                    "firstLastName": "Gomez",
+                    "secondLastName": None,
+                },
+                "clinicalEvaluation": {
+                    "historyOfCurrentIllness": "Fiebre",
+                    "generalPhysicalExamination": None,
+                    "systemsExamination": None,
+                    "treatmentPlanObservations": None,
+                },
+                "diagnosis": [],
+                "diagnosisType": "01",
+                "riskFactors": [],
+                "incapacity": None,
+                "payer": None,
+            }
+        ],
+    }
+    with patch("app.api.v1.endpoints.patients.medical_llm_processor") as mock_llm:
+        response = client.post("/api/v1/patients/sync", json=payload_with_visit)
+
+    _clear_overrides()
+    assert response.status_code == 403
+    mock_llm.extract_diagnoses.assert_not_called()
+
+
+def test_sync_nurse_can_create_new_patient(client: TestClient):
+    """A nurse may create a brand-new patient.
+
+    The history restriction only applies when a record already exists, so on a
+    first sync there is no prior history to guard against.
+    """
+    _override_nurse()
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=MOCK_PATIENT_PAYLOAD)
+
+    _clear_overrides()
+    assert response.status_code == 201
+
+
 def test_sync_stores_rda_columns_in_db(client: TestClient, db_session):
     """New RDA columns and sync tracking columns are persisted correctly."""
     from app.db.models import Patient
@@ -227,7 +614,11 @@ def test_sync_stores_rda_columns_in_db(client: TestClient, db_session):
     _sync_patient(client)
     _clear_overrides()
 
-    patient = db_session.query(Patient).filter(Patient.id == "TEST-UNIT-001").first()
+    # H3: Lookup by frontend_patient_id + organization_id
+    patient = db_session.query(Patient).filter(
+        Patient.frontend_patient_id == "TEST-UNIT-001",
+        Patient.organization_id == "org-123",
+    ).first()
     assert patient is not None
     assert patient.document_type == "PT"
     assert patient.document_number == "VZ-9876543"
@@ -236,15 +627,21 @@ def test_sync_stores_rda_columns_in_db(client: TestClient, db_session):
     assert patient.last_name == "Rodríguez"
     assert patient.second_last_name == "Pérez"
     assert patient.first_name == "Santiago"
-    # Sync tracking: no visits, but RDA-Paciente was sent
-    assert patient.synced_visit_count == 0
+    # H3: Server-generated PK is different from the frontend ID
+    assert patient.id != "TEST-UNIT-001"
+    assert len(patient.id) > 0
+    # H7: Synced encounters is a list, not a count
+    assert patient.synced_encounter_ids == []
+    # H1: Background hash is computed
+    assert patient.background_data_hash is not None
+    assert len(patient.background_data_hash) == 64  # SHA-256 hex digest
     assert patient.rda_paciente_sent is True
 
 
 def test_sync_delta_only_sends_new_bundles(client: TestClient, db_session):
     """
-    Second sync with 1 new visit should only generate 2 bundles
-    (1 RDA-Paciente + 1 RDA-Consulta for the new visit), not re-send old visits.
+    H7: Second sync with 1 new visit should only generate bundles for the
+    NEW encounter (identified by encounterIdentifier UUID), not re-send old ones.
     """
     from app.db.models import Patient
 
@@ -255,28 +652,17 @@ def test_sync_delta_only_sends_new_bundles(client: TestClient, db_session):
         client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
         first_call_count = mock_gcp.call_count
 
-    # Verify DB tracking after first sync
-    patient = db_session.query(Patient).filter(Patient.id == "TEST-UNIT-002").first()
-    assert patient.synced_visit_count == 1
+    # H7: Verify synced_encounter_ids contains the encounter UUID
+    patient = db_session.query(Patient).filter(
+        Patient.frontend_patient_id == "TEST-UNIT-002",
+    ).first()
+    assert "enc-visit-001" in patient.synced_encounter_ids
     assert patient.rda_paciente_sent is True
 
     # Second sync: same patient, now with 2 visits (1 old + 1 new)
     payload_two_visits = {
         **MOCK_PATIENT_WITH_VISIT,
-        "medicalHistory": MOCK_PATIENT_WITH_VISIT["medicalHistory"] + [
-            {
-                "type": "Consultation",
-                "startDateTime": "2026-04-10T09:00:00",
-                "careModality": "01",
-                "serviceGroup": "01",
-                "careEnvironment": "05",
-                "clinicalEvaluation": {
-                    "historyOfCurrentIllness": "Control post-infección respiratoria.",
-                },
-                "diagnosis": [{"icd10Code": "Z09", "description": "Examen de seguimiento"}],
-                "diagnosisType": "02",
-            }
-        ],
+        "medicalHistory": [VISIT_1, VISIT_2],
     }
     with patch.object(fhir_backend, "send_bundle") as mock_gcp2:
         mock_gcp2.return_value = {"status": "success", "google_response": {}}
@@ -287,11 +673,16 @@ def test_sync_delta_only_sends_new_bundles(client: TestClient, db_session):
 
     assert response.status_code == 201
     assert first_call_count == 2   # RDA-Paciente + 1 RDA-Consulta
-    assert second_call_count == 2  # RDA-Paciente (refreshed) + 1 NEW RDA-Consulta only
+    # H7+H1: Only 1 new RDA-Consulta (background unchanged → no RDA-Paciente)
+    assert second_call_count == 1
 
-    # Verify DB tracking updated — re-query to get fresh data from DB
-    patient = db_session.query(Patient).filter(Patient.id == "TEST-UNIT-002").first()
-    assert patient.synced_visit_count == 2
+    # Verify both encounters are now tracked
+    db_session.expire_all()
+    patient = db_session.query(Patient).filter(
+        Patient.frontend_patient_id == "TEST-UNIT-002",
+    ).first()
+    assert "enc-visit-001" in patient.synced_encounter_ids
+    assert "enc-visit-002" in patient.synced_encounter_ids
 
 
 def test_sync_no_new_visits_skips_all_bundles(client: TestClient):
@@ -303,7 +694,7 @@ def test_sync_no_new_visits_skips_all_bundles(client: TestClient):
         mock_gcp.return_value = {"status": "success", "google_response": {}}
         client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
 
-    # Second sync with SAME data (no new visits)
+    # Second sync with SAME data (no new visits, no background change)
     with patch.object(fhir_backend, "send_bundle") as mock_gcp2:
         mock_gcp2.return_value = {"status": "success", "google_response": {}}
         response = client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
@@ -312,7 +703,7 @@ def test_sync_no_new_visits_skips_all_bundles(client: TestClient):
     _clear_overrides()
 
     assert response.status_code == 201
-    # No new visits + RDA-Paciente already sent → 0 bundles (nothing to do)
+    # H1+H7: No new visits + background unchanged → 0 bundles
     assert resync_call_count == 0
 
 
@@ -330,10 +721,158 @@ def test_sync_gcp_failure_does_not_update_tracking(client: TestClient, db_sessio
     assert response.status_code == 201
     assert response.json()["fhir_status"] == "error"
 
-    # Tracking should NOT have been updated
-    patient = db_session.query(Patient).filter(Patient.id == "TEST-UNIT-002").first()
-    assert patient.synced_visit_count == 0
+    # H7: Tracking should NOT have been updated
+    patient = db_session.query(Patient).filter(
+        Patient.frontend_patient_id == "TEST-UNIT-002",
+    ).first()
+    assert patient.synced_encounter_ids == []
     assert patient.rda_paciente_sent is False
+
+
+# ============================================================================
+# H1: BACKGROUND DATA HASH TESTS
+# ============================================================================
+
+
+def test_h1_background_change_triggers_rda_paciente(client: TestClient, db_session):
+    """
+    H1: When background data changes (e.g., new allergy added), the
+    RDA-Paciente bundle should be regenerated even if there are no new visits.
+    """
+    # First sync: patient with 1 visit
+    _override_doctor()
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        client.post("/api/v1/patients/sync", json=MOCK_PATIENT_WITH_VISIT)
+
+    # Second sync: same visits, but a NEW allergy was added
+    payload_new_allergy = {
+        **MOCK_PATIENT_WITH_VISIT,
+        "allergies": MOCK_PATIENT_WITH_VISIT["allergies"] + [
+            {
+                "category": "02",  # AllergyCategory.ALIMENTO
+                "allergen": "Maní",
+                "reaction": "Angioedema",
+                "notes": "Reacción severa",
+            }
+        ],
+    }
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp2:
+        mock_gcp2.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload_new_allergy)
+        bundle_count = mock_gcp2.call_count
+
+    _clear_overrides()
+
+    assert response.status_code == 201
+    # H1: Background changed → RDA-Paciente regenerated, no new visits → just 1 bundle
+    assert bundle_count == 1
+
+
+# ============================================================================
+# GLOBAL PATIENT TESTS — one shared record across organizations
+# ============================================================================
+
+
+def test_global_patient_same_tag_across_orgs_merges(
+    client: TestClient, db_session
+):
+    """
+    Patients are global: a second organization scanning the same child's
+    bracelet merges its visit into the existing record instead of colliding
+    on the unique device_uid (409) or creating a duplicate. The server-side
+    merge preserves the first organization's visit as well.
+    """
+    from app.db.models import Patient
+
+    # Org A registers the child and records the first visit.
+    first = _sync_patient(client, payload=MOCK_PATIENT_WITH_VISIT)
+    _clear_overrides()
+    assert first.status_code == 201
+
+    # Org B scans the SAME bracelet (same device_uid, same identity document)
+    # with its own app-generated patientId and records a different visit.
+    class MockDoctorOrgB:
+        email = "doctor.b@ngo-b.org"
+        id = "user-org-b-001"
+        role = UserRole.doctor
+        organization_id = "org-456"
+
+    app.dependency_overrides[get_current_user] = lambda: MockDoctorOrgB()
+    org_b_visit = {**VISIT_1, "encounterIdentifier": "enc-org-b-visit"}
+    payload_org_b = {
+        **MOCK_PATIENT_WITH_VISIT,
+        "patientId": "ORG-B-APP-UUID",  # org B's app generated its own id
+        "medicalHistory": [org_b_visit],
+    }
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload_org_b)
+    _clear_overrides()
+
+    assert response.status_code == 201
+
+    # Exactly one record exists for that bracelet...
+    rows = (
+        db_session.query(Patient)
+        .filter(Patient.device_uid == MOCK_PATIENT_WITH_VISIT["device_uid"])
+        .all()
+    )
+    assert len(rows) == 1
+    # ...and it holds BOTH organizations' visits.
+    encounter_ids = {
+        v.get("encounterIdentifier")
+        for v in rows[0].full_record_json.get("medicalHistory", [])
+    }
+    assert "enc-visit-001" in encounter_ids
+    assert "enc-org-b-visit" in encounter_ids
+
+
+def test_global_patient_same_tag_different_identity_rejected(
+    client: TestClient, db_session
+):
+    """
+    The cross-org merge is identity-guarded: a bracelet presenting a
+    different identity document is refused with 409, never silently merged
+    into the wrong child's record.
+    """
+    from app.db.models import Patient
+
+    first = _sync_patient(client)
+    _clear_overrides()
+    assert first.status_code == 201
+
+    class MockDoctorOrgB:
+        email = "doctor.b@ngo-b.org"
+        id = "user-org-b-002"
+        role = UserRole.doctor
+        organization_id = "org-456"
+
+    app.dependency_overrides[get_current_user] = lambda: MockDoctorOrgB()
+    different_child = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "ORG-B-OTHER-CHILD",
+        "patientInfo": {
+            **MOCK_PATIENT_PAYLOAD["patientInfo"],
+            "identification": {
+                "documentType": "TI",
+                "documentNumber": "1122334455",
+            },
+        },
+    }
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=different_child)
+    _clear_overrides()
+
+    assert response.status_code == 409
+    # Only the original record exists for that tag.
+    assert (
+        db_session.query(Patient)
+        .filter(Patient.device_uid == MOCK_PATIENT_PAYLOAD["device_uid"])
+        .count()
+        == 1
+    )
 
 
 # ============================================================================
@@ -347,7 +886,7 @@ def test_scan_success(client: TestClient):
 
     response = client.get(
         f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}",
-        params={"guardian_device_uid": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]},
+        headers={"X-Guardian-Device-UID": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]},
     )
     _clear_overrides()
 
@@ -366,7 +905,7 @@ def test_scan_not_found(client: TestClient):
     _clear_overrides()
 
     assert response.status_code == 404
-    assert "not registered" in response.json()["detail"]
+    assert "not found" in response.json()["detail"].lower()
 
 
 def test_scan_minor_requires_guardian(client: TestClient):
@@ -388,7 +927,7 @@ def test_scan_minor_wrong_guardian(client: TestClient):
 
     response = client.get(
         f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}",
-        params={"guardian_device_uid": "WRONG-GUARDIAN-UID"},
+        headers={"X-Guardian-Device-UID": "WRONG-GUARDIAN-UID"},
     )
     _clear_overrides()
 
@@ -396,6 +935,95 @@ def test_scan_minor_wrong_guardian(client: TestClient):
     assert "Guardian tag mismatch" in response.json()["detail"]
 
 
+def test_scan_minor_accepts_guardian2_uid(client: TestClient):
+    """Scanning a minor's bracelet with guardian2's UID should succeed."""
+    payload_with_g2 = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "TEST-UNIT-G2-001",
+        "device_uid": "04:A2:G2:UID",
+        "guardian2Info": {
+            "name": "Carlos Pérez",
+            "relationship": "Padre",
+            "phone": "+573009876543",
+            "device_uid": "GUARDIAN2-UID-001",
+        },
+    }
+    _override_doctor()
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        client.post("/api/v1/patients/sync", json=payload_with_g2)
+
+    # Scan using guardian2's UID
+    response = client.get(
+        f"/api/v1/patients/scan/{payload_with_g2['device_uid']}",
+        headers={"X-Guardian-Device-UID": "GUARDIAN2-UID-001"},
+    )
+    _clear_overrides()
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-G2-001"
+
+
+def test_sync_persists_guardian_consent_and_guardian2(client: TestClient):
+    """Guardian consent, document info, and guardian2 are persisted in full_record_json."""
+    payload = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "TEST-UNIT-CONSENT-001",
+        "device_uid": "04:A2:CONSENT:UID",
+        "guardianInfo": {
+            **MOCK_PATIENT_PAYLOAD["guardianInfo"],
+            "documentType": "CC",
+            "documentNumber": "52456789",
+            "consent": {
+                "accepted": True,
+                "acceptedAt": "2026-05-20T10:30:00",
+                "email": "guardian@example.com",
+                "signatureBase64": "iVBORw0KGgoAAAANSUhEUg==",
+            },
+        },
+        "guardian2Info": {
+            "name": "Pedro López",
+            "relationship": "Tío",
+            "phone": "+573005555555",
+            "device_uid": "GUARDIAN2-CONSENT-UID",
+            "documentType": "CE",
+            "documentNumber": "E-123456",
+        },
+    }
+
+    _override_doctor()
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload)
+    _clear_overrides()
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "success"
+
+def test_update_patient_persists_guardian2_name(client: TestClient):
+    """Updating an existing patient with guardian2Info covers the update branch."""
+    # First sync — create patient without guardian2
+    _sync_patient(client)
+
+    # Second sync — same patient, now with guardian2Info
+    payload_with_g2 = {
+        **MOCK_PATIENT_PAYLOAD,
+        "guardian2Info": {
+            "name": "Carlos Pérez",
+            "relationship": "Padre",
+            "phone": "+573009876543",
+            "device_uid": "GUARDIAN2-UID-UPDATE",
+        },
+    }
+    _override_doctor()
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload_with_g2)
+    _clear_overrides()
+
+    assert response.status_code == 201
+    
 # ============================================================================
 # SEARCH (STRICT LOOKUP) ENDPOINT TESTS
 # ============================================================================
@@ -411,7 +1039,7 @@ def test_search_exact_match_returns_patient(client: TestClient):
         "first_name": "Santiago",
         "last_name": "Rodríguez",
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 200
@@ -430,7 +1058,7 @@ def test_search_by_second_last_name(client: TestClient):
         "first_name": "Santiago",
         "last_name": "Pérez",  # second last name
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 200
@@ -447,7 +1075,7 @@ def test_search_case_insensitive(client: TestClient):
         "first_name": "santiago",           # lowercase
         "last_name": "rodríguez",           # lowercase
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 200
@@ -465,7 +1093,7 @@ def test_search_with_guardian_name(client: TestClient):
         "last_name": "Rodríguez",
         "guardian_name": "María",  # partial match
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 200
@@ -482,7 +1110,7 @@ def test_search_wrong_document_returns_404(client: TestClient):
         "first_name": "Santiago",
         "last_name": "Rodríguez",
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 404
@@ -499,7 +1127,7 @@ def test_search_wrong_name_returns_404(client: TestClient):
         "first_name": "Carlos",  # wrong name
         "last_name": "Rodríguez",
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 404
@@ -515,7 +1143,7 @@ def test_search_wrong_dob_returns_404(client: TestClient):
         "first_name": "Santiago",
         "last_name": "Rodríguez",
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 404
@@ -532,10 +1160,266 @@ def test_search_wrong_guardian_returns_404(client: TestClient):
         "last_name": "Rodríguez",
         "guardian_name": "Pedro González",  # wrong guardian
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 404
+
+
+def test_search_ignores_accents_on_names(client: TestClient):
+    """
+    The case partial matching exists for: the record says "Rodríguez" but the
+    clinician in the next clinic types it without accents — and vice versa.
+    """
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Rodriguez",  # stored as "Rodríguez"
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_ignores_accents_the_other_way_around(client: TestClient):
+    """An accent typed where the record has none also matches."""
+    payload = _payload_with_names(first_name="Andres", first_last_name="Guerrero")
+    _sync_patient(client, payload)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Andrés",   # stored as "Andres"
+        "last_name": "guerrero",  # stored as "Guerrero"
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_ignores_surrounding_and_repeated_whitespace(client: TestClient):
+    """Names pasted or typed with stray spacing still match."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "  Santiago  ",
+        "last_name": " Rodríguez   Pérez ",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_by_both_last_names(client: TestClient):
+    """The field asks for the patient's last names — both together match."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Rodríguez Pérez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_by_both_last_names_in_reverse_order(client: TestClient):
+    """Order is not part of the comparison — staff do not always know it."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Pérez Rodríguez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_by_single_last_name_patient(client: TestClient):
+    """A patient with only one last name is found by that one last name."""
+    payload = _payload_with_names(first_last_name="Guerrero", second_last_name=None)
+    _sync_patient(client, payload)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Guerrero",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_accepts_the_last_names_field_alias(client: TestClient):
+    """Clients may send the field under its plural name."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_names": "Rodríguez Pérez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_by_both_given_names(client: TestClient):
+    """
+    The second given name lives only in the stored payload, but clinicians type
+    what the identity document shows.
+    """
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago Andres",  # stored: Santiago + "Andrés"
+        "last_name": "Rodríguez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_by_truncated_name(client: TestClient):
+    """A name cut short still matches — comparison is partial, not exact."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santi",
+        "last_name": "Rodrig",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_ignores_document_number_separators(client: TestClient):
+    """"vz 987.6543" is the same document as "VZ-9876543"."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "vz 987.6543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Rodríguez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_guardian_name_ignores_accents(client: TestClient):
+    """Guardian verification is standardized the same way as patient names."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Rodríguez",
+        "guardian_name": "maria perez",  # stored as "María Pérez"
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["patientId"] == "TEST-UNIT-001"
+
+
+def test_search_wrong_last_name_returns_404(client: TestClient):
+    """Partial matching does not mean any last name will do."""
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Gómez",  # neither last name
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 404
+
+
+def test_search_extra_last_name_returns_404(client: TestClient):
+    """
+    Every word typed must be accounted for, so a third last name the patient
+    does not have is a mismatch rather than a looser match.
+    """
+    _sync_patient(client)
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Rodríguez Gómez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 404
+
+
+def test_search_ambiguous_duplicate_registration_returns_404(
+    client: TestClient, db_session
+):
+    """
+    Two records sharing document, birth date and names (a duplicate
+    registration) are never disclosed — neither record is returned.
+    """
+    _sync_patient(client)
+
+    db_session.add(
+        Patient(
+            frontend_patient_id="TEST-UNIT-DUPLICATE",
+            organization_id="org-123",
+            device_uid="04:A2:DUPLICATE:UID",
+            document_type="PT",
+            document_number="VZ-9876543",
+            first_name="Santiago",
+            last_name="Rodríguez",
+            second_last_name="Pérez",
+            birth_date=date(2020, 1, 1),
+            guardian_name="María Pérez",
+            full_record_json={},
+        )
+    )
+    db_session.commit()
+
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Rodríguez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+
+    assert response.status_code == 404
+    assert "No patient found" in response.json()["detail"]
 
 
 def test_search_missing_mandatory_params_returns_422(client: TestClient):
@@ -548,7 +1432,196 @@ def test_search_missing_mandatory_params_returns_422(client: TestClient):
         "first_name": "Santiago",
         "last_name": "Rodríguez",
     }
-    response = client.get("/api/v1/patients/search", params=params)
+    response = client.post("/api/v1/patients/search", json=params)
     _clear_overrides()
 
     assert response.status_code == 422
+
+
+def test_sync_llm_codes_chronic_conditions(client: TestClient):
+    """
+    When a chronic condition lacks ICD codes, the LLM codes it.
+    """
+    payload_with_chronic = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "TEST-UNIT-CHRONIC-001",
+        "device_uid": "04:A2:CHRONIC:UID",
+        "backgroundHistory": {
+            **MOCK_PATIENT_PAYLOAD["backgroundHistory"],
+            "chronicConditions": [
+                {
+                    "chronicDescription": "Diabetes mellitus tipo 2",
+                    "chronicCie10Code": None,
+                    "chronicCie11Code": None,
+                }
+            ],
+        },
+    }
+ 
+    _override_doctor()
+    with (
+        patch(
+            "app.api.v1.endpoints.patients.medical_llm_processor.code_chronic_condition",
+            return_value={
+                "icd10Code": "E11",
+                "icd11Code": "5A11",
+                "description": "Diabetes mellitus tipo 2",
+            },
+        ) as mock_code_chronic,
+        patch.object(fhir_backend, "send_bundle") as mock_gcp,
+    ):
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload_with_chronic)
+ 
+    _clear_overrides()
+ 
+    assert response.status_code == 201
+    mock_code_chronic.assert_called_once_with("Diabetes mellitus tipo 2")
+ 
+ 
+def test_sync_skips_chronic_coding_when_code_already_present(client: TestClient):
+    """
+    If a chronic condition already has an ICD-10 code, the LLM must NOT
+    be called for that item (idempotent re-sync).
+    """
+    payload_already_coded = {
+        **MOCK_PATIENT_PAYLOAD,
+        "patientId": "TEST-UNIT-CHRONIC-002",
+        "device_uid": "04:A2:CHRONIC:UID2",
+        "backgroundHistory": {
+            **MOCK_PATIENT_PAYLOAD["backgroundHistory"],
+            "chronicConditions": [
+                {
+                    "chronicDescription": "Diabetes mellitus tipo 2",
+                    "chronicCie10Code": "E11",
+                    "chronicCie11Code": "5A11",
+                }
+            ],
+        },
+    }
+ 
+    _override_doctor()
+    with (
+        patch(
+            "app.api.v1.endpoints.patients.medical_llm_processor.code_chronic_condition"
+        ) as mock_code_chronic,
+        patch.object(fhir_backend, "send_bundle") as mock_gcp,
+    ):
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload_already_coded)
+ 
+    _clear_overrides()
+ 
+    assert response.status_code == 201
+    mock_code_chronic.assert_not_called()
+
+
+def test_scan_patient_from_different_org(client: TestClient):
+    """A doctor from Org B can scan a patient registered by Org A (via device_uid)."""
+    # First, sync patient as Org A doctor
+    _sync_patient(client)
+
+    # Now, scan as a doctor from a DIFFERENT organization
+    class MockDoctorOrgB:
+        email = "doctor.b@another-ngo.org"
+        id = "user-org-b-001"
+        role = UserRole.doctor
+        organization_id = "org-different-456"  # Different from org-123
+
+    app.dependency_overrides[get_current_user] = lambda: MockDoctorOrgB()
+
+    response = client.get(
+        f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}",
+        headers={"X-Guardian-Device-UID": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]},
+    )
+    _clear_overrides()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["patientId"] == "TEST-UNIT-001"
+
+# ============================================================================
+# COVERAGE: Patient.__repr__ (models.py)
+# ============================================================================
+
+
+def test_patient_repr(client: TestClient, db_session):
+    """Exercise Patient.__repr__ to cover the repr line in models.py."""
+    from app.db.models import Patient
+
+    _sync_patient(client)
+    _clear_overrides()
+
+    patient = db_session.query(Patient).first()
+    text = repr(patient)
+    assert "Patient" in text
+    assert patient.frontend_patient_id in text
+
+
+# ============================================================================
+# COVERAGE: _get_real_client_ip (rate_limit.py)
+# ============================================================================
+
+
+def test_rate_limit_uses_trusted_proxy_ip():
+    """The IP appended by the trusted proxy is used, not the spoofable leftmost."""
+    from unittest.mock import MagicMock
+
+    from app.core.rate_limit import _get_real_client_ip
+
+    request = MagicMock()
+    # Attacker prepends a fake IP; the single trusted proxy appends the real one.
+    request.headers = {"x-forwarded-for": "1.2.3.4, 200.115.50.10"}
+    # Default TRUSTED_PROXY_HOPS = 1 -> rightmost (trusted) entry, not "1.2.3.4".
+    assert _get_real_client_ip(request) == "200.115.50.10"
+
+
+def test_rate_limit_respects_trusted_proxy_hops():
+    """With N trusted hops, the client IP is the N-th entry counted from the right."""
+    from unittest.mock import MagicMock
+
+    from app.core import rate_limit
+
+    request = MagicMock()
+    request.headers = {"x-forwarded-for": "1.2.3.4, 200.115.50.10, 10.0.0.1"}
+    original = rate_limit.settings.TRUSTED_PROXY_HOPS
+    try:
+        rate_limit.settings.TRUSTED_PROXY_HOPS = 2
+        assert rate_limit._get_real_client_ip(request) == "200.115.50.10"
+    finally:
+        rate_limit.settings.TRUSTED_PROXY_HOPS = original
+
+
+def test_rate_limit_short_chain_falls_back_to_first():
+    """If the chain is shorter than the configured hops, fall back to the first entry."""
+    from unittest.mock import MagicMock
+
+    from app.core.rate_limit import _get_real_client_ip
+
+    request = MagicMock()
+    request.headers = {"x-forwarded-for": "200.115.50.10"}
+    assert _get_real_client_ip(request) == "200.115.50.10"
+
+
+def test_rate_limit_no_forwarded_uses_peer():
+    """Without X-Forwarded-For, the direct peer address is used."""
+    from unittest.mock import MagicMock
+
+    from app.core.rate_limit import _get_real_client_ip
+
+    request = MagicMock()
+    request.headers = {}
+    request.client.host = "203.0.113.5"
+    assert _get_real_client_ip(request) == "203.0.113.5"
+
+
+def test_rate_limit_redis_branch():
+    """When REDIS_URL is set, the limiter uses Redis storage."""
+    from unittest.mock import patch
+
+    from app.core.rate_limit import _build_limiter
+
+    with patch("app.core.rate_limit.settings") as mock_settings:
+        mock_settings.REDIS_URL = "redis://fake:6379/0"
+        limiter = _build_limiter()
+        assert limiter is not None

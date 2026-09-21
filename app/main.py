@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -7,16 +9,39 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.logging import setup_logging
+from app.core.nfc_startup import prepare_nfc_keyring_at_startup
 from app.core.rate_limit import limiter
+from app.services.terminology import terminology
 
 setup_logging()
 
+_nfc_keyring_errors = settings.nfc_keyring_errors()
+if _nfc_keyring_errors:
+    # Fail fast rather than serve a keyring that disables NFC on every device.
+    # The messages never contain key material, only which variable is at fault.
+    raise RuntimeError(
+        "Invalid NFC key configuration:\n  - "
+        + "\n  - ".join(_nfc_keyring_errors)
+    )
+
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Prepare the NFC keyring before serving traffic."""
+    prepare_nfc_keyring_at_startup()
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title=settings.PROJECT_NAME,
     version="1.0.0",
     description="Backend Health Without Borders Project - Open Source",
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
+
+terminology.load()
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)

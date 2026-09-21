@@ -1,13 +1,13 @@
 import logging
-import sys
 import os
+import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from app.db.session import SessionLocal
-from app.db.models import User, Organization
-from app.core.security import get_password_hash
 from app.core.config import settings
+from app.core.security import get_password_hash
+from app.db.models import Organization, User
+from app.db.session import SessionLocal
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("CreateUser")
@@ -37,15 +37,12 @@ def create_superadmin():
             db.refresh(master_org)
             logger.info(f"Root Organization created with ID: {master_org.id}")
 
-        # Check if the superadmin user already exists, if so, update password and role
+        # If the superadmin user already exists, do nothing. Re-running the
+        # seed must never reset an existing account's password or re-elevate
+        # its role — that would silently undo any later administrative change.
         user = db.query(User).filter(User.email == email).first()
         if user:
-            logger.info(f"User {email} already exists.")
-            user.hashed_password = get_password_hash(password)
-            user.role = "superadmin"
-            user.organization_id = master_org.id
-            db.commit()
-            logger.info(f"Password and roles updated for existing user: {email}")
+            logger.info(f"User {email} already exists — leaving it untouched.")
             return
 
         # Create the superadmin user

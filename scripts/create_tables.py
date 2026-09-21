@@ -1,12 +1,12 @@
 import logging
-import sys
 import os
+import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from app.db.session import engine
-from app.db.base import Base
 import app.db.models  # noqa: F401
+from app.db.base import Base
+from app.db.session import engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("DB_Setup")

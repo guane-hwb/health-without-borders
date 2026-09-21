@@ -3,39 +3,65 @@ import logging
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.config import settings
+from app.core.phi_sanitizer import mask_id
 from app.core.rate_limit import limiter
 from app.db.models import User, UserRole
 from app.db.session import get_db
-from app.schemas.patient import PatientFullRecord, PatientSyncResponse
+from app.schemas.emergency_access import (
+    EmergencyAccessSyncRequest,
+    EmergencyAccessSyncResponse,
+)
+from app.schemas.nfc_key_version import (
+    NfcKeyRevokeRequest,
+    NfcKeyRevokeResponse,
+    NfcKeyringStatusResponse,
+    NfcKeyRotateRequest,
+    NfcKeyRotateResponse,
+    NfcKeyVersionSyncRequest,
+    NfcKeyVersionSyncResponse,
+    NfcKeyVersionUsageResponse,
+)
+from app.schemas.patient import (
+    PatientFullRecord,
+    PatientSearchRequest,
+    PatientSyncResponse,
+)
+from app.services.emergency_access_service import store_emergency_access_entries
 from app.services.fhir import fhir_backend
 from app.services.fhir_service import convert_to_fhir_rda
 from app.services.llm import medical_llm_processor
+from app.services.nfc_key_service import (
+    keyring_status,
+    revoke_version,
+    rotate_to_new_version,
+)
+from app.services.nfc_key_version_service import (
+    store_key_version_observations,
+    summarize_key_version_usage,
+)
 from app.services.patient_service import (
+    DeviceUidConflictError,
+    DuplicateIdentityError,
     create_or_update_patient,
     find_patient_strict,
+    get_existing_history_count,
     get_patient_by_device_uid,
+    get_retired_device_uid,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-def _mask_identifier(value: Optional[str]) -> str:
-    if not value:
-        return "unknown"
-    if len(value) <= 6:
-        return "***"
-    return f"{value[:3]}***{value[-3:]}"
-
 @router.get("/scan/{device_uid}", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
-def get_patient_by_device_uid_scan(
+async def get_patient_by_device_uid_scan(
     device_uid: str, 
-    guardian_device_uid: Optional[str] = Query(None, description="Scanned ID from guardian's bracelet"),
+    guardian_device_uid: Optional[str] = Header(None, alias="X-Guardian-Device-UID", description="Scanned ID from guardian's bracelet"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -43,22 +69,25 @@ def get_patient_by_device_uid_scan(
     Retrieve a patient's full medical record by scanning their NFC tag or barcode.
 
     **Guardian 2FA for minors:**
-    If the patient is under 18 years old, the `guardian_device_uid` query parameter
+    If the patient is under 18 years old, the `X-Guardian-Device-UID` header
     becomes mandatory. The scanned guardian tag must match the one registered in the
-    patient's record. Access is denied if they do not match.
+    patient's record. Access is denied if they do not match. The value travels in a
+    header (not the URL) so it does not leak into access logs, proxies, or browser history.
 
     **Parameters:**
     - `device_uid` (path): The hardware identifier scanned from the patient's bracelet.
-    - `guardian_device_uid` (query, conditional): Required only if patient is a minor.
+    - `X-Guardian-Device-UID` (header, conditional): Required only if patient is a minor.
 
     **Allowed roles:** `doctor`, `nurse`.
 
     **Responses:**
     - `200`: Full patient record returned.
     - `403`: Caller is not `doctor` or `nurse`.
-    - `403`: Patient is a minor and `guardian_device_uid` was not provided.
+    - `403`: Patient is a minor and the `X-Guardian-Device-UID` header was not provided.
     - `403`: Patient is a minor and guardian tag does not match.
-    - `404`: No patient registered with that device UID in this organization.
+    - `404`: No patient registered with that device UID.
+    - `410`: The tag was retired (lost/damaged/replaced) and no longer belongs to
+      HWB. Body: `{"code": "device_retired", "reason": ..., "message": ...}`.
     """
 
     if current_user.role not in {UserRole.doctor, UserRole.nurse, UserRole.org_admin}:
@@ -71,21 +100,43 @@ def get_patient_by_device_uid_scan(
         "Patient scan request actor_id=%s org_id=%s device_ref=%s",
         current_user.id,
         current_user.organization_id,
-        _mask_identifier(device_uid),
+        mask_id(device_uid),
     )
     
-    # Delegate database lookup to the service layer
-    patient_db = get_patient_by_device_uid(db, device_uid, current_user.organization_id)
+    # Wrap synchronous DB call in to_thread to avoid blocking the event loop
+    patient_db = await asyncio.to_thread(get_patient_by_device_uid, db, device_uid)
     
     if not patient_db:
+        # Distinguish a retired bracelet (lost/damaged/replaced) from a genuinely
+        # unknown tag, so the app can tell the user the bracelet was retired
+        # instead of showing a blank/unknown-chip error.
+        retired = await asyncio.to_thread(get_retired_device_uid, db, device_uid)
+        if retired is not None:
+            logger.info(
+                "Scan of retired device tag org_id=%s device_ref=%s reason=%s",
+                current_user.organization_id,
+                mask_id(device_uid),
+                retired.reason,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail={
+                    "code": "device_retired",
+                    "reason": retired.reason,
+                    "message": (
+                        "This bracelet has been retired and no longer "
+                        "belongs to HWB."
+                    ),
+                },
+            )
         logger.warning(
             "Patient scan not found org_id=%s device_ref=%s",
             current_user.organization_id,
-            _mask_identifier(device_uid),
+            mask_id(device_uid),
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Patient not found. This tag is not registered in your organization."
+            detail="Patient not found."
         )
     
     # Calculate patient's age to determine if guardian authentication is required
@@ -101,15 +152,18 @@ def get_patient_by_device_uid_scan(
                 detail="Guardian bracelet scan required for minors."
             )
         
-        # Extract the stored guardian device UID from the patient's full record JSON
+        # Extract the stored guardian device UIDs from the patient's full record JSON
         stored_guardian_uid = patient_db.full_record_json.get("guardianInfo", {}).get("device_uid")
-        
-        if guardian_device_uid != stored_guardian_uid:
+        stored_guardian2_uid = patient_db.full_record_json.get("guardian2Info", {}).get("device_uid") if patient_db.full_record_json.get("guardian2Info") else None
+
+        # Accept either guardian's tag
+        valid_uids = {uid for uid in [stored_guardian_uid, stored_guardian2_uid] if uid}
+        if guardian_device_uid not in valid_uids:
             logger.warning(
                 "Guardian validation failed actor_id=%s org_id=%s patient_ref=%s",
                 current_user.id,
                 current_user.organization_id,
-                _mask_identifier(patient_db.id),
+                mask_id(patient_db.id),
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -135,12 +189,22 @@ async def sync_patient(
     3. The record is persisted or updated in PostgreSQL.
     4. Only NEW FHIR RDA Bundles are generated (delta logic):
        - RDA-Paciente: on first sync or when background data changes.
-       - RDA-Consulta: only for visits not previously sent.
+       - RDA-Consulta: only for visits not previously sent, identified by
+         encounterIdentifier UUID.
     5. Bundles are transmitted to the Google Cloud Healthcare API.
-    6. Sync tracking counters are updated in the database.
+    6. Sync tracking is updated in the database.
 
     **Nurse restriction:** A `nurse` may call this endpoint to append vaccination records,
     but cannot add new entries to `medicalHistory`. Attempts to do so will return `403`.
+
+    **Device tag conflict:** If the record's `device_uid` is already registered to a
+    different patient, the endpoint returns `409` and no record is created or modified.
+
+    **Duplicate identity:** If the record would create a NEW patient whose identity
+    document (`documentType` + `documentNumber`) already belongs to another record,
+    the endpoint returns `409` and nothing is created — the same person must not be
+    registered twice under two different `device_uid`s. Unidentified document types
+    (`AS`, `MS`, `SI`) are exempt, since their numbers are local placeholders.
 
     **Allowed roles:** `doctor`, `nurse`.
     """
@@ -157,6 +221,31 @@ async def sync_patient(
         )
     
     try:
+        # A nurse may append vaccines but must not add new medical-history
+        # entries. Enforce this BEFORE any LLM processing so an unauthorized
+        # request never triggers diagnosis extraction.
+        if current_user.role == UserRole.nurse:
+            existing_history_count = await asyncio.to_thread(
+                get_existing_history_count,
+                db,
+                patient_data.patientId,
+                patient_data.device_uid,
+            )
+            if (
+                existing_history_count is not None
+                and len(patient_data.medicalHistory) > existing_history_count
+            ):
+                logger.warning(
+                    "Nurse attempted to add medical history actor_id=%s org_id=%s patient_ref=%s",
+                    current_user.id,
+                    current_user.organization_id,
+                    mask_id(patient_data.patientId),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access Denied: Nurses can only add vaccines, not medical history.",
+                )
+
         # --- LLM PROCESSING: Only for visits that don't have diagnoses yet ---
         for visit in patient_data.medicalHistory:
             if not visit.diagnosis:
@@ -183,25 +272,48 @@ async def sync_patient(
                     if coded.get("description"):
                         fh_item.conditionDescription = coded["description"]
 
-        # 1. Save to DB — returns (patient, previous_visit_count)
+        # --- LLM PROCESSING: Chronic conditions ICD coding ---
+        if patient_data.backgroundHistory and patient_data.backgroundHistory.chronicConditions:
+            for cc_item in patient_data.backgroundHistory.chronicConditions:
+                if cc_item.chronicDescription and not cc_item.chronicCie10Code:
+                    coded = await asyncio.to_thread(
+                        medical_llm_processor.code_chronic_condition,
+                        cc_item.chronicDescription
+                    )
+                    cc_item.chronicCie10Code = coded.get("icd10Code")
+                    cc_item.chronicCie11Code = coded.get("icd11Code")
+                    if coded.get("description"):
+                        cc_item.chronicDescription = coded["description"]
+
+        # 1. Save to DB (wrapped in to_thread to avoid blocking the event loop)
         logger.info(
             "Patient sync started actor_id=%s role=%s org_id=%s patient_ref=%s",
             current_user.id,
             current_user.role,
             current_user.organization_id,
-            _mask_identifier(patient_data.patientId),
+            mask_id(patient_data.patientId),
         )
-        saved_patient, previous_visit_count = create_or_update_patient(
-            db, patient_data, current_user.organization_id, current_user.role
+        saved_patient, synced_encounter_ids, old_bg_hash, rda_paciente_sent = (
+            await asyncio.to_thread(
+                create_or_update_patient,
+                db, patient_data, current_user.organization_id,
+                current_user.id,
+            )
         )
         
-        # 2. FHIR RDA Conversion — DELTA: only new bundles
-        fhir_bundles = convert_to_fhir_rda(
-            patient_data,
-            previous_visit_count=previous_visit_count,
-            rda_paciente_already_sent=saved_patient.rda_paciente_sent,
+        # Determine if background data changed by comparing hashes
+        background_data_changed = (
+            rda_paciente_sent and old_bg_hash != saved_patient.background_data_hash
         )
-        logger.debug(f"Generated {len(fhir_bundles)} FHIR RDA Bundle(s) (delta)")
+
+        # 2. FHIR RDA Conversion — DELTA by encounter UUID + background hash
+        fhir_bundles, new_encounter_ids = convert_to_fhir_rda(
+            patient_data,
+            synced_encounter_ids=synced_encounter_ids,
+            rda_paciente_already_sent=rda_paciente_sent,
+            background_data_changed=background_data_changed,
+        )
+        logger.debug("Generated %d FHIR RDA Bundle(s) (delta)", len(fhir_bundles))
 
         # 3. Send each Bundle to the configured FHIR Store
         fhir_status = "success" if not fhir_bundles else "unknown"
@@ -213,7 +325,7 @@ async def sync_patient(
             if bundle_status != "success":
                 logger.warning(
                     "Patient sync FHIR warning patient_ref=%s bundle=%d status=%s",
-                    _mask_identifier(str(saved_patient.id)),
+                    mask_id(str(saved_patient.id)),
                     i,
                     bundle_status,
                 )
@@ -224,18 +336,20 @@ async def sync_patient(
                     fhir_status = "success"
                 logger.info(
                     "Patient sync FHIR success patient_ref=%s bundle=%d",
-                    _mask_identifier(str(saved_patient.id)), i
+                    mask_id(str(saved_patient.id)), i
                 )
 
         # 4. Update sync tracking ONLY if FHIR upload succeeded
         if all_success and fhir_bundles:
-            saved_patient.synced_visit_count = len(patient_data.medicalHistory)
+            # Append new encounter IDs to the synced set
+            updated_ids = list(set(synced_encounter_ids + new_encounter_ids))
+            saved_patient.synced_encounter_ids = updated_ids
             saved_patient.rda_paciente_sent = True
-            db.commit()
+            await asyncio.to_thread(db.commit)
             logger.info(
-                "Sync tracking updated patient_ref=%s visits=%d",
-                _mask_identifier(str(saved_patient.id)),
-                saved_patient.synced_visit_count
+                "Sync tracking updated patient_ref=%s encounters=%d",
+                mask_id(str(saved_patient.id)),
+                len(updated_ids),
             )
 
         return PatientSyncResponse(
@@ -249,6 +363,28 @@ async def sync_patient(
     except HTTPException:
         raise
 
+    except DeviceUidConflictError:
+        logger.warning(
+            "Patient sync device tag conflict actor_id=%s org_id=%s",
+            current_user.id,
+            current_user.organization_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A patient is already registered with this device tag.",
+        )
+
+    except DuplicateIdentityError:
+        logger.warning(
+            "Patient sync duplicate identity document actor_id=%s org_id=%s",
+            current_user.id,
+            current_user.organization_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A patient is already registered with this identity document.",
+        )
+
     except Exception:
         logger.exception(
             "Critical error during patient sync actor_id=%s org_id=%s",
@@ -261,15 +397,11 @@ async def sync_patient(
             detail="Internal Server Error processing patient data."
         )
 
-@router.get("/search", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
+@router.post("/search", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
 @limiter.limit(settings.RATE_LIMIT_PATIENT_SEARCH)
-def search_patient(
+async def search_patient(
     request: Request,
-    document_number: str = Query(..., min_length=3, description="Número de documento de identidad del paciente (Res. 866 Elem. 2.2)"),
-    birth_date: date = Query(..., description="Fecha de nacimiento del paciente (YYYY-MM-DD)"),
-    first_name: str = Query(..., min_length=2, description="Primer nombre del paciente"),
-    last_name: str = Query(..., min_length=2, description="Primer o segundo apellido del paciente"),
-    guardian_name: Optional[str] = Query(None, min_length=3, description="Nombre completo del acudiente (obligatorio si el paciente tiene guardián registrado)"),
+    criteria: PatientSearchRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -280,20 +412,31 @@ def search_patient(
     in compliance with Ley 1581 de 2012 (Habeas Data) and Ley 1751 de 2015.
     It will **never** return a list of patients.
 
-    **All four parameters are mandatory:**
-    - `document_number`: Exact match against the patient's identity document.
-    - `birth_date`: Exact match (YYYY-MM-DD).
-    - `first_name`: Exact match (case-insensitive).
-    - `last_name`: Exact match against first OR second last name (case-insensitive).
+    Identity criteria are sent in the **request body** (not the query string) so
+    that the document number, names and birth date never leak into access logs,
+    proxies or browser history.
 
-    **Conditional parameter:**
-    - `guardian_name`: If the patient has a registered guardian, providing this 
-      adds an extra layer of verification. Partial match is allowed.
+    Identity is pinned by `document_number` + `birth_date`. The names confirm
+    that identity, so they are compared on **standardized text** — accents,
+    letter case and extra spacing are ignored, and a partial entry is enough.
+    A child registered as "Andrés Guerrero" is therefore still found when a
+    clinician in the next clinic types "andres guerrero".
+
+    **Body fields (`PatientSearchRequest`):**
+    - `document_number`: Exact match against the patient's identity document,
+      ignoring case and optional separators (`vz 987.6543` finds `VZ-9876543`).
+    - `birth_date`: Exact match (YYYY-MM-DD).
+    - `first_name`: Partial match against the patient's given names (first and
+      second), accent- and case-insensitive.
+    - `last_name`: Partial match against the patient's last names — send one if
+      the patient has one, both if they have two, in any order. Accepted as
+      `last_names` too.
+    - `guardian_name` (optional): If the patient has a registered guardian,
+      providing this adds an extra layer of verification. Partial match is allowed.
 
     **Security:**
     - If the criteria match more than one patient (ambiguous), the endpoint 
       returns 404 — it will not expose either record.
-    - Results are strictly scoped to the caller's organization (multi-tenant).
 
     **Allowed roles:** `doctor`, `nurse`, `org_admin`.
 
@@ -301,7 +444,7 @@ def search_patient(
     - `200`: Patient record found and returned.
     - `403`: Caller is not authorized.
     - `404`: No patient found matching the provided criteria.
-    - `422`: Missing or malformed mandatory parameters.
+    - `422`: Missing or malformed body fields.
     """
     if current_user.role not in {UserRole.doctor, UserRole.nurse, UserRole.org_admin}:
         raise HTTPException(
@@ -314,17 +457,18 @@ def search_patient(
         current_user.id,
         current_user.role,
         current_user.organization_id,
-        _mask_identifier(document_number),
+        mask_id(criteria.document_number),
     )
 
-    patient = find_patient_strict(
+    # Wrap synchronous DB call in to_thread to avoid blocking the event loop
+    patient = await asyncio.to_thread(
+        find_patient_strict,
         db=db,
-        org_id=current_user.organization_id,
-        document_number=document_number,
-        birth_date=birth_date,
-        first_name=first_name,
-        last_name=last_name,
-        guardian_name=guardian_name,
+        document_number=criteria.document_number,
+        birth_date=criteria.birth_date,
+        first_name=criteria.first_name,
+        last_name=criteria.last_name,
+        guardian_name=criteria.guardian_name,
     )
 
     if not patient:
@@ -334,3 +478,339 @@ def search_patient(
         )
 
     return patient.full_record_json
+
+
+@router.post(
+    "/emergency-access",
+    response_model=EmergencyAccessSyncResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def sync_emergency_access(
+    payload: EmergencyAccessSyncRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Sync break-glass (emergency access) audit entries from the mobile app.
+
+    When a clinician opens a minor's record through the offline emergency path
+    (without the guardian's second factor), the app records the access locally
+    and syncs the pending entries here into a central, append-only audit ledger.
+    This is the compensating control for `/search` access to minors' records.
+
+    **Idempotent:** each entry carries a client-generated `client_event_id`.
+    Re-sending the same entry (the local queue may retry) is a no-op — the
+    server de-duplicates on that id and reports it under `duplicates`.
+
+    **Allowed roles:** `doctor`, `nurse` (the point-of-care staff whose devices
+    hold the local log).
+
+    **Responses:**
+    - `200`: Batch processed. Body reports `received`, `stored`, `duplicates`.
+    - `403`: Caller is not `doctor` or `nurse`.
+    - `422`: Missing or malformed body fields (e.g. empty `entries`).
+    """
+    if current_user.role not in {UserRole.doctor, UserRole.nurse}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only doctors and nurses can sync emergency access logs.",
+        )
+
+    logger.info(
+        "Emergency access sync request actor_id=%s org_id=%s entries=%d",
+        current_user.id,
+        current_user.organization_id,
+        len(payload.entries),
+    )
+
+    stored, duplicates = await asyncio.to_thread(
+        store_emergency_access_entries,
+        db,
+        payload.entries,
+        current_user.organization_id,
+    )
+
+    return EmergencyAccessSyncResponse(
+        status="success",
+        received=len(payload.entries),
+        stored=stored,
+        duplicates=duplicates,
+    )
+
+
+@router.post(
+    "/nfc-key-versions",
+    response_model=NfcKeyVersionSyncResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def sync_nfc_key_versions(
+    payload: NfcKeyVersionSyncRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Report which NFC key version each scanned chip was found on.
+
+    A chip gives no readable hint of which key encrypted it, so this is the only
+    way to learn how far a key rotation has drained. Retiring a version makes
+    every chip still on it unreadable offline; without these counts that number
+    is unknowable and the decision is a guess.
+
+    **Not idempotent, by design.** Every sighting is appended. The device
+    already collapses repeat reads of one chip into a single pending row, and
+    the interval between sightings is what a retention period has to be sized
+    from — de-duplicating here would discard exactly that.
+
+    **Allowed roles:** `doctor`, `nurse`, `org_admin` — everyone whose device
+    holds the keyring and can therefore read a chip. `org_admin` is included
+    because it reaches the patient profile through the lost-wristband flow and
+    receives keys; excluding it would silently drop its observations.
+
+    **Privacy:** entries carry a device UID, a role, a key version and a
+    timestamp. No patient identifier, no clinical data, no key material.
+
+    **Responses:**
+    - `202`: Batch accepted. Body reports `received` and `stored`.
+    - `403`: Caller is not `doctor` or `nurse`.
+    - `422`: Missing or malformed body fields (e.g. empty `entries`).
+    """
+    if current_user.role not in {
+        UserRole.doctor,
+        UserRole.nurse,
+        UserRole.org_admin,
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Access Denied: Only clinical staff and organization admins "
+                "can report NFC key versions."
+            ),
+        )
+
+    stored = store_key_version_observations(db, payload.entries, current_user)
+    return NfcKeyVersionSyncResponse(
+        received=len(payload.entries), stored=stored
+    )
+
+
+@router.get(
+    "/nfc-key-versions/usage",
+    response_model=NfcKeyVersionUsageResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_nfc_key_version_usage(
+    window_days: int = 90,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Summarise which key versions are still in circulation.
+
+    Each chip is counted once, under the version of its most recent sighting —
+    the version it is on now. `retirable_versions` lists versions with no
+    sighting inside `window_days`.
+
+    **Read that list as a veto, not a clearance.** A version missing from the
+    telemetry may still have chips in the field whose patients have not come
+    back; absence of sightings is not evidence of absence of chips. It can tell
+    you a retirement is obviously unsafe. It cannot tell you one is safe.
+
+    **Allowed roles:** `org_admin`, `superadmin` — this is an operational
+    question, not a point-of-care one.
+
+    **Responses:**
+    - `200`: Summary returned.
+    - `403`: Caller is not an administrator.
+    - `422`: `window_days` out of range.
+    """
+    if current_user.role not in {UserRole.org_admin, UserRole.superadmin}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only administrators can read NFC key version usage.",
+        )
+    if window_days < 1 or window_days > 3650:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="window_days must be between 1 and 3650.",
+        )
+
+    return summarize_key_version_usage(db, window_days=window_days)
+
+
+@router.post(
+    "/nfc-keys/revoke",
+    response_model=NfcKeyRevokeResponse,
+    status_code=status.HTTP_200_OK,
+)
+def revoke_nfc_key(
+    payload: NfcKeyRevokeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Stop serving an NFC key version. **Emergency operation.**
+
+    Use this when a key is believed to be compromised — an extracted device, a
+    leaked value. The version stops being delivered to any device, for reading
+    as well as writing; anything less is useless against a leak, since the
+    leaked key is precisely the one that reads.
+
+    **What it costs.** Chips written under the revoked version become
+    *online-only* until they are rewritten. No data is lost: the chip UID is
+    unencrypted, resolves the patient through `/patients/scan`, and the next
+    save migrates the chip to the current version. If the revoked version was
+    the current one, a replacement is generated and becomes current.
+
+    **What it does not do.** Revocation stops *delivery*. A device that already
+    holds the ring keeps it until its next refresh — up to an hour online, and
+    up to the refresh-token window (7 days) if it is offline. There is no way
+    to reach an offline device sooner.
+
+    **Before advancing the current version**, every device must be running a
+    build that understands the keyring. An older build takes the current key,
+    ignores the ring, and loses the ability to read everything written under the
+    previous version. `acknowledge_chip_impact` exists so this is a deliberate
+    choice rather than a surprise.
+
+    **Allowed roles:** `superadmin`.
+
+    **Responses:**
+    - `200`: Revoked. Body reports the replacement version, if one was created.
+    - `400`: Already revoked, or the keyring is served from the environment
+      (no `NFC_KEK` configured, so there is nothing to change at runtime).
+    - `403`: Caller is not a `superadmin`.
+    - `404`: No such key version.
+    - `422`: Malformed body, or `acknowledge_chip_impact` not set.
+    """
+    if current_user.role != UserRole.superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only superadmins can revoke NFC keys.",
+        )
+    if not payload.acknowledge_chip_impact:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "acknowledge_chip_impact must be true: revoking makes chips on "
+                "this version online-only until they are rewritten."
+            ),
+        )
+
+    try:
+        result = revoke_version(
+            db,
+            version=payload.version,
+            actor_id=current_user.id,
+            reason=payload.reason,
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    return NfcKeyRevokeResponse(**result)
+
+
+@router.get(
+    "/nfc-keys",
+    response_model=NfcKeyringStatusResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_nfc_keyring_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    The state of the keyring: which versions exist, which is current, which are
+    revoked.
+
+    **Never returns key material** — only version numbers, status, the
+    fingerprint of the KEK that wrapped each row, and timestamps.
+
+    `source` reports where the ring comes from: `database` once `NFC_KEK` is
+    configured, `environment` otherwise.
+
+    **Allowed roles:** `superadmin`.
+
+    **Responses:**
+    - `200`: Status returned.
+    - `403`: Caller is not a `superadmin`.
+    """
+    if current_user.role != UserRole.superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only superadmins can read the NFC keyring state.",
+        )
+    return NfcKeyringStatusResponse(**keyring_status(db))
+
+
+@router.post(
+    "/nfc-keys/rotate",
+    response_model=NfcKeyRotateResponse,
+    status_code=status.HTTP_200_OK,
+)
+def rotate_nfc_key(
+    payload: NfcKeyRotateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Generate a new key version and make it current.
+
+    Rotation limits how long a leaked key stays useful. It does **not**
+    re-encrypt existing chips: older versions keep being delivered, so chips
+    written under them stay readable offline, and they migrate to the new
+    version as they are rewritten.
+
+    This is the manual trigger. The same thing happens on its own once
+    `NFC_AUTO_ROTATE` is enabled and the current key reaches
+    `NFC_ROTATION_PERIOD_DAYS`.
+
+    **The fleet must be ready.** Advancing the current version breaks reads on
+    any device still running a build that predates the keyring: it takes the
+    current key, ignores the ring, and can no longer read anything written
+    under the previous version. `acknowledge_fleet_updated` exists so this is a
+    deliberate act by someone who has checked.
+
+    **Allowed roles:** `superadmin`.
+
+    **Responses:**
+    - `200`: Rotated. `new_version` is null when another instance rotated
+      first, which is not an error.
+    - `400`: The keyring is served from the environment (no `NFC_KEK`), it has
+      not been initialised, or version 255 has been reached.
+    - `403`: Caller is not a `superadmin`.
+    - `422`: Malformed body, or `acknowledge_fleet_updated` not set.
+    """
+    if current_user.role != UserRole.superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only superadmins can rotate NFC keys.",
+        )
+    if not payload.acknowledge_fleet_updated:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "acknowledge_fleet_updated must be true: advancing the current "
+                "version breaks reads on devices running an older build."
+            ),
+        )
+
+    state = keyring_status(db)
+    previous = state["current_version"]
+    try:
+        new_version = rotate_to_new_version(
+            db, actor_id=current_user.id, reason=payload.reason
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    return NfcKeyRotateResponse(
+        new_version=new_version, previous_version=previous
+    )

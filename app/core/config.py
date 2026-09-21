@@ -1,6 +1,23 @@
+import os
+import re
 from typing import Optional
 
+from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Highest key version representable in the one-byte NFC payload header.
+NFC_MAX_KEY_VERSION = 255
+
+_HEX_KEY_RE = re.compile(r"[0-9a-fA-F]{64}")
+
+#: Matches the per-version NFC key variables, e.g. ``NFC_KEY_V1``.
+_NFC_KEY_VAR_RE = re.compile(r"^NFC_KEY_V(\d+)$")
+
+#: Env file location. Declared here rather than read back out of
+#: ``model_config`` so the value has a concrete ``str`` type and the two cannot
+#: drift apart.
+_ENV_FILE = ".env"
+_ENV_FILE_ENCODING = "utf-8"
 
 
 class Settings(BaseSettings):
@@ -43,21 +60,169 @@ class Settings(BaseSettings):
     GCP_DATASET_ID: Optional[str] = None
     GCP_FHIR_STORE_ID: Optional[str] = None
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None
-    LLM_MODEL_NAME: str = "gemini-2.5-pro"
+    LLM_MODEL_NAME: str = "gemini-3-flash-preview"
     
     # --- SECURITY ---
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200 # 30 days
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour
+    REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days
     
+    # --- NFC ---
+    # Version 0 is reserved for this legacy single key. Tags written before key
+    # versioning carry no version header and are decrypted with version 0.
+    NFC_MASTER_KEY: str = ""  # Hex-encoded 32-byte AES-256 key (key version 0)
+    # Version that new writes are encrypted with. Clients pick the key with this
+    # version from the keyring and stamp it into the NFC payload header.
+    # Defaults to 0 (the legacy NFC_MASTER_KEY) so existing deployments keep
+    # working unchanged. A rotated deployment adds NFC_KEY_V<n> secrets and
+    # bumps this to the highest live version.
+    NFC_CURRENT_KEY_VERSION: int = 0
+    # Key Encryption Key: wraps the NFC keys stored in the database, so they
+    # can be created and revoked without a redeploy. Its only job is to encrypt
+    # other keys; it never touches patient data. When empty the backend behaves
+    # exactly as before, serving the ring straight from the environment, so no
+    # existing deployment changes on upgrade.
+    NFC_KEK: str = ""  # Hex-encoded 32-byte AES-256 key
+    # Fleet gate for automatic rotation. Rotating advances the current version,
+    # and a device running a build that predates the keyring takes the current
+    # key, ignores the ring, and loses the ability to read everything written
+    # under the previous version. Operations flips this to true only after
+    # confirming every device runs a keyring-aware build — which is why it can
+    # never default to true.
+    NFC_AUTO_ROTATE: bool = False
+    # How old the current key may get before automatic rotation replaces it.
+    NFC_ROTATION_PERIOD_DAYS: int = 90
+
+    # --- REPORTING ---
+    # Calendar dates and month boundaries in aggregated statistics are resolved
+    # in this zone. Reporting in UTC would push the last five hours of every
+    # Colombian month into the next one.
+    STATS_TIMEZONE: str = "America/Bogota"
+    # Slim container images do not always ship the IANA tz database. When the
+    # zone above cannot be loaded, this fixed offset is used instead. Colombia
+    # has observed no daylight saving since 1993, so -5 is exact year-round.
+    STATS_TIMEZONE_FALLBACK_OFFSET_HOURS: int = -5
+
     DEBUG: bool = False
     BACKEND_CORS_ORIGINS: str = ""
     RATE_LIMIT_LOGIN: str = "10/minute"
     RATE_LIMIT_PATIENT_SEARCH: str = "30/minute"
+    # Number of trusted reverse proxies that append to X-Forwarded-For.
+    # The client IP is read from the entry these proxies added, never from
+    # the client-controlled leftmost value. Set to match the deployment
+    # (1 = single trusted front proxy, e.g. Cloud Run / a load balancer).
+    TRUSTED_PROXY_HOPS: int = 1
+
+    # --- REDIS (for rate limiting and token revocation) ---
+    # Optional: falls back to in-memory storage when not set (local dev)
+    REDIS_URL: Optional[str] = None
+
+    def nfc_keyring(self) -> dict[int, str]:
+        """
+        Build the ``{version: hex_key}`` map of every live NFC key.
+
+        Sources, merged in this order (later wins on a version clash):
+          - ``NFC_MASTER_KEY``, when set, is registered as version 0 (the
+            legacy key; tags written before versioning decrypt with it).
+          - Every ``NFC_KEY_V<n>`` entry in the ``.env`` file, if present.
+          - Every ``NFC_KEY_V<n>`` environment variable. These are meant to be
+            mounted one secret per key from a secret manager, so rotation is
+            "add a secret and bump NFC_CURRENT_KEY_VERSION" with no code or
+            JSON edits.
+
+        The ``.env`` file is read explicitly because these names are dynamic:
+        pydantic-settings only loads it into declared fields, and ``NFC_KEY_V1``
+        is not one, so a rotated key in a developer's ``.env`` would otherwise
+        be silently ignored while the same name works in production. The
+        process environment is applied last so a real environment variable
+        still wins, matching how every other setting behaves.
+
+        Blank values are skipped. Returns an empty dict when nothing is set.
+        """
+        ring: dict[int, str] = {}
+        if self.NFC_MASTER_KEY.strip():
+            ring[0] = self.NFC_MASTER_KEY.strip()
+
+        for source in (self._dotenv_values(), os.environ):
+            for name, value in source.items():
+                match = _NFC_KEY_VAR_RE.match(name)
+                if match and value and value.strip():
+                    ring[int(match.group(1))] = value.strip()
+        return ring
+
+    @staticmethod
+    def _dotenv_values() -> dict[str, str | None]:
+        """Read the ``.env`` file, or an empty mapping when there is none."""
+        if not os.path.exists(_ENV_FILE):
+            return {}
+        try:
+            return dotenv_values(_ENV_FILE, encoding=_ENV_FILE_ENCODING)
+        except OSError:
+            # An unreadable .env must not stop the app: the process
+            # environment is the authoritative source in deployments.
+            return {}
+
+    def nfc_keyring_errors(self) -> list[str]:
+        """
+        Describe everything wrong with the configured NFC keyring.
+
+        A malformed key is not a local problem: it is served to every device,
+        and a client that cannot parse it loses NFC entirely. Checking at
+        startup turns a fleet-wide outage discovered when someone taps a
+        wristband into a deployment that refuses to boot.
+
+        Returns an empty list when the configuration is usable. A deployment
+        with no NFC key at all is valid (NFC is simply unavailable).
+        """
+        errors: list[str] = []
+        ring = self.nfc_keyring()
+        if not ring:
+            # No key in the environment is valid: either NFC is unused, or the
+            # ring lives in the database behind the KEK.
+            if self.NFC_KEK.strip() and not _HEX_KEY_RE.fullmatch(
+                self.NFC_KEK.strip()
+            ):
+                errors.append(
+                    "NFC_KEK: must be exactly 64 hexadecimal characters "
+                    "(a 32-byte AES-256 key)."
+                )
+            return errors
+
+        for version, key in sorted(ring.items()):
+            source = (
+                "NFC_MASTER_KEY"
+                if version == 0 and key == self.NFC_MASTER_KEY.strip()
+                else f"NFC_KEY_V{version}"
+            )
+            if not 0 <= version <= NFC_MAX_KEY_VERSION:
+                errors.append(
+                    f"{source}: version must be between 0 and "
+                    f"{NFC_MAX_KEY_VERSION} to fit the NFC payload header."
+                )
+            if not _HEX_KEY_RE.fullmatch(key):
+                # Never include the value itself in the message.
+                errors.append(
+                    f"{source}: must be exactly 64 hexadecimal characters "
+                    "(a 32-byte AES-256 key)."
+                )
+
+        if self.NFC_KEK.strip() and not _HEX_KEY_RE.fullmatch(self.NFC_KEK.strip()):
+            errors.append(
+                "NFC_KEK: must be exactly 64 hexadecimal characters "
+                "(a 32-byte AES-256 key)."
+            )
+
+        if self.NFC_CURRENT_KEY_VERSION not in ring:
+            errors.append(
+                f"NFC_CURRENT_KEY_VERSION={self.NFC_CURRENT_KEY_VERSION} has no "
+                f"matching key. Versions configured: {sorted(ring)}."
+            )
+        return errors
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
+        env_file=_ENV_FILE,
+        env_file_encoding=_ENV_FILE_ENCODING,
         extra="ignore",
         case_sensitive=True
     )

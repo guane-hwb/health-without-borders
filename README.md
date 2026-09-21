@@ -137,6 +137,19 @@ The project maintains **≥ 75% code coverage**. Coverage is enforced automatica
 
 ---
 
+## 💬 Community
+
+Questions, ideas, or feedback? Join the conversation in our public
+[GitHub Discussions](https://github.com/guane-hwb/health-without-borders/discussions).
+
+- **Announcements** — project news and releases
+- **Q&A** — ask the development team
+- **Ideas** — propose features and improvements
+
+Please review our [Code of Conduct](CODE_OF_CONDUCT.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before participating.
+
+---
+
 ## Contributing
 
 We welcome contributions from the community! Before submitting a Pull Request, please read [CONTRIBUTING.md](CONTRIBUTING.md) and review the [QA & PR Workflow](docs/development/qa-plan.md).

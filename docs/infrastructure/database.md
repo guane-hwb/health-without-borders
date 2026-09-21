@@ -39,12 +39,13 @@ This table manages access credentials and roles. Users are strictly bound to an 
 
 ### 2.3. Patient Demographics (`patients`)
 
-Stores the core identity data of migrant children. Data is strictly scoped by `organization_id`. Relational columns mirror the most-queried RDA elements (Resolution 866/2021) so the database can filter without scanning JSON.
+Stores the core identity data of migrant children. Relational columns mirror the most-queried RDA elements (Resolution 866/2021) so the database can filter without scanning JSON. The `organization_id` tracks which organization originally registered the patient (traceability), but patient records are globally accessible by any authenticated professional.
 
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
-| `id` | Varchar | PK | Unique ID (generated UUID v4 from frontend). |
-| `organization_id`| Varchar | FK, Not Null | Ensures patients are only visible to their registering NGO. |
+| `id` | Varchar | PK, UUID v4 | Server-generated unique identifier. The authoritative patient ID. |
+| `frontend_patient_id` | Varchar | Not Null, Index | Frontend-generated UUID sent during first sync. Used for sync correlation. |
+| `organization_id`| Varchar | FK, Not Null | Organization that originally registered this patient. |
 | `device_uid` | Varchar | Unique, Not Null, Index | Hardware ID (NFC Bracelet/Tag) for physical 2FA. |
 | `document_type` | Varchar(5) | Index | Identity document type — CC, CE, TI, RC, PT, PE, etc. (Res. 866 Elem. 2.1). |
 | `document_number`| Varchar | Index | Identity document number (Res. 866 Elem. 2.2). |
@@ -57,13 +58,66 @@ Stores the core identity data of migrant children. Data is strictly scoped by `o
 | `nationality_code`| Varchar(3) | Index | ISO 3166-1 country code (Res. 866 Elems. 1.1, 1.2). Critical for migrant population filtering. |
 | `guardian_name` | Varchar | Nullable | Name of the legal guardian or companion. |
 | `guardian_phone` | Varchar | Nullable | Contact number for the guardian. |
+| `guardian2_name` | Varchar | Nullable | Name of the second guardian (optional). |
+| `guardian2_phone` | Varchar | Nullable | Contact phone of the second guardian (optional). |
 | `full_record_json`| JSON | Nullable | Authoritative source for the complete patient payload (clinical evaluations, diagnoses, allergies, vaccinations, family history). |
-| `synced_visit_count`| Integer | Default: 0 | Number of `medicalHistory` entries already sent to the FHIR Store. Used for delta sync logic. |
+| `synced_encounter_ids`| JSON | Default: [] | List of `encounterIdentifier` UUIDs already sent to the FHIR Store. Used for encounter-based delta sync. |
+| `background_data_hash`| Varchar(64) | Nullable | SHA-256 hash of background data fields (demographics, guardians, allergies, chronic conditions). Used to detect changes for RDA-Paciente regeneration. |
 | `rda_paciente_sent`| Boolean | Default: false | Whether the RDA-Paciente bundle has been sent to the FHIR Store at least once. |
 | `created_at` | DateTime | Default: now() | Audit metadata — record creation timestamp. |
 | `updated_at` | DateTime | Default: now(), onupdate | Audit metadata — last modification timestamp. |
 
-### 2.4. Standard Clinical Catalogs
+**Constraints:**
+
+- `UNIQUE(device_uid)` — A hardware bracelet is linked to exactly one patient globally. This is the primary identity key for cross-organization sync (see § 3.1).
+- `UNIQUE(frontend_patient_id, organization_id)` — A residual constraint from the earlier org-scoped model. It is no longer the sync identity mechanism (sync now resolves and merges globally) and remains only as a defensive guard against a single organization's device double-inserting the same frontend-generated ID.
+
+### 2.4. Token Revocation (`revoked_tokens`)
+
+Stores the JTI (JWT ID) of tokens that have been explicitly revoked via logout or refresh token rotation. Checked on every authenticated request. Entries whose `expires_at` has passed can be safely deleted (the token would be invalid anyway).
+
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `jti` | Varchar | PK | JWT ID claim from the revoked token. |
+| `revoked_at` | DateTime | Default: now() | When the token was revoked. |
+| `expires_at` | DateTime | Not Null | Original token expiry — safe to delete this row after this time. |
+
+### 2.5. NFC Keyring (`nfc_keys`, `nfc_keyring_state`, `nfc_key_events`)
+
+Holds the AES keys that encrypt NFC chip payloads, so a version can be created
+or revoked at runtime instead of through a redeploy.
+
+| Table | Purpose |
+| :--- | :--- |
+| `nfc_keys` | One row per key version. `wrapped_key` is the key **sealed under the KEK**, never the key itself; `kek_id` is a fingerprint of the KEK that sealed it. |
+| `nfc_keyring_state` | Single row naming the version new writes use. Advanced with a conditional update so two instances cannot both move it. |
+| `nfc_key_events` | Append-only record of every generation, rotation and revocation, with actor and reason. |
+
+> ### ⚠️ A database backup of these tables is useless on its own
+>
+> `nfc_keys` stores **wrapped** key material. Unwrapping it requires `NFC_KEK`,
+> which lives in Secret Manager and **is not part of any database backup**.
+>
+> Restoring the database without also holding the KEK yields rows nobody can
+> open. Chips on those versions become readable only online, until each one is
+> rewritten. No patient data is lost — the chip UID resolves the patient
+> through the backend — but offline reads stop working across the fleet.
+>
+> **Before relying on a database backup, confirm the KEK backup is available
+> and matches.** The `kek_id` column is what makes that check cheap: compare it
+> against the fingerprint of the backed-up KEK without unwrapping anything.
+>
+> Custody, the backup procedure and the fingerprint check are documented in
+> [NFC Key Management](nfc-key-management.md).
+
+### 2.6. NFC Key Version Telemetry (`nfc_key_version_observations`)
+
+Append-only record of which key version each chip was last seen on, used to
+decide whether a version can be retired without leaving chips unreadable
+offline. Holds a device UID, a role, a version and timestamps — no patient
+identifier, no clinical data, no key material.
+
+### 2.7. Standard Clinical Catalogs
 
 #### Vaccines Catalog (`catalog_vaccines`)
 Based on the **CVX** (Code for Vaccine Administered) standard.
@@ -81,8 +135,23 @@ Based on the **CVX** (Code for Vaccine Administered) standard.
 
 ## 3. Architecture & Design Decisions
 
-### 3.1. Strict Multi-Tenancy
-The database enforces tenant isolation at the schema level. Every `Patient` and `User` must belong to an `Organization`. Queries at the service layer automatically inject the `organization_id` of the requesting user, making it structurally impossible for a doctor in NGO "A" to query or modify a patient from NGO "B".
+### 3.1. Global Patients (Shared Across Organizations)
+Every `User` belongs to an `Organization`, but **patient records do not**. A patient is a single global record shared by every organization — by design for humanitarian settings where a child registered by NGO "A" in Cúcuta may later be seen by NGO "B" in Bogotá. The `organization_id` on a patient records only who *first* registered them (traceability); per-visit attribution lives on the FHIR `Encounter.serviceProvider`, not on the patient row.
+
+**Sync identity resolution.** `POST /patients/sync` resolves the single global record a payload belongs to (`_find_patient_for_sync`):
+
+1. `frontend_patient_id` — this device's own prior record. Covers re-syncs and bracelet replacement (where the incoming `device_uid` is new).
+2. `device_uid` — the hardware tag. A different organization scanning the same child's bracelet resolves to the existing record and **merges** into it, instead of colliding on the unique `device_uid`. Visits are combined by `encounterIdentifier`, so neither organization's visits are lost.
+
+**Identity guard.** When the match comes from the tag (a cross-organization merge) and the incoming identity document differs from the stored one, the sync is refused with `409` rather than silently mixing two children onto one record. Same-child cross-org syncs (matching document, or a missing document) merge normally. This relies on the operating assumption that **a physical bracelet is never reassigned from one child to another**.
+
+**Duplicate-identity guard (new bracelet, same person).** `device_uid` alone cannot stop a "false split": if a second organization attends the child with a *new* tag (neither `device_uid` nor `frontend_patient_id` matches — e.g. the first bracelet was lost and the second organization issues its own), nothing collides and a second global record would be created for the same person. Before creating a record, the sync therefore also checks the identity document: if `documentType` + `documentNumber` already belong to another patient, the sync is refused with `409` (`DuplicateIdentityError`) and nothing is written, so the app keeps the record pending instead of splitting the clinical history.
+
+* The number is compared in canonical form (lowercased, separators removed — see `normalize_document_number`), so `VZ-9876543` and `vz 987.6543` are the same document.
+* Uniqueness is on **type + number**, so the same digits under a different `documentType` are a different identity. A child whose `RC` is later re-issued as a `TI` with the same number is therefore *not* recognised as a duplicate — reconciling that transition still needs the planned search-and-relink flow.
+* Placeholder types `AS`, `MS` and `SI` (adulto/menor sin identificar, sin identificación) are exempt: their numbers are assigned locally at registration, so enforcing uniqueness would block every unnamed patient after the first.
+* The guard runs on the **creation path only**. Re-syncs and bracelet replacements target an existing record, whose identification block is immutable, so they can never take over another patient's document.
+* Enforcement is at application level; there is no `UNIQUE(document_type, document_number)` constraint, since existing data may already contain duplicates and the exempt types would violate it.
 
 ### 3.2. Hybrid Relational-Document Model (JSON)
 Migrant populations often have unstructured or transient data.
@@ -91,14 +160,14 @@ Migrant populations often have unstructured or transient data.
 * **FHIR Source:** The JSON is the source of truth used to build FHIR R4 RDA bundles for interoperability.
 
 ### 3.3. Delta Sync Tracking
-Two columns (`synced_visit_count`, `rda_paciente_sent`) track which data has already been sent to the FHIR Store. This prevents duplicate bundle transmissions and enables automatic retry: if GCP fails, the tracking is not updated, so the next sync retries the failed bundles.
+Three columns track sync state: `synced_encounter_ids` (JSON list of encounter UUIDs already sent), `rda_paciente_sent` (boolean), and `background_data_hash` (SHA-256). Visits are identified by their `encounterIdentifier` UUID rather than list index, preventing duplicates when records are merged from multiple devices. The background hash detects changes in demographics, allergies, and chronic conditions to avoid unnecessary RDA-Paciente retransmission. Tracking is updated **only after successful FHIR Store upload** — if GCP fails, the next sync retries automatically.
 
 ### 3.4. Soft Deletion (`is_active`)
 Rows in critical tables (Users, Organizations) are never physically deleted. This preserves historical integrity for future audits.
 
 ### 3.5. Indexing Strategy
-* **Search Optimization:** B-Tree indexes on `first_name`, `last_name`, `document_number`, and `nationality_code` for fast patient lookups.
-* **Data Integrity:** Unique constraints on `users.email`, `patients.id`, and `patients.device_uid` to prevent duplicates during network sync anomalies.
+* **Search Optimization:** B-Tree indexes on `first_name`, `last_name`, `document_number`, and `nationality_code` for fast patient lookups. Sync identity now resolves by `device_uid` (unique) and `frontend_patient_id` (indexed); the composite `(organization_id, frontend_patient_id)` index is retained but no longer on the sync path.
+* **Data Integrity:** Unique constraints on `users.email` and `patients.device_uid`. The composite `(frontend_patient_id, organization_id)` constraint is retained from the org-scoped model as a defensive guard (see § 2.3).
 
 ---
 
@@ -122,14 +191,16 @@ Rows in critical tables (Users, Organizations) are never physically deleted. Thi
 
 | Endpoint | `superadmin` | `org_admin` | `doctor` | `nurse` |
 |---|---|---|---|---|
-| `GET /patients/scan/{device_uid}` | ❌ | ✅ | ✅ Own org | ✅ Own org |
+| `GET /patients/scan/{device_uid}` | ❌ | ✅ | ✅ Global | ✅ Global |
 | `POST /patients/sync` | ❌ | ❌ | ✅ Full record | ✅ Vaccines only¹ |
-| `GET /patients/search` | ❌ | ✅ | ✅ Own org | ✅ Own org |
+| `GET /patients/search` | ❌ | ✅ | ✅ Global | ✅ Global |
 
-> ¹ A `nurse` can call `POST /patients/sync` but the service layer blocks any attempt to add or modify `medicalHistory`. Only vaccine records can be appended.
+> Patients are global — any authenticated professional from any organization
+> can read and update any patient. The `organization_id` on the patient record
+> tracks who originally registered them (traceability), not access control.
 
 ### 4.4. Design Rationale
 
 - **`superadmin` has zero clinical access.** It is a platform administrator role. It cannot read, create, or modify any patient record.
-- **`org_admin` manages staff, not patients.** It can provision and list users within its organization but has no access to clinical data.
-- **Multi-tenancy is enforced at the query level**, not just the role check. Every database query is automatically scoped to `current_user.organization_id`.
+- **`org_admin` manages staff.** It provisions and lists `doctor`/`nurse` users within its organization and has no access to the `sync` (write) path. Per § 4.3, the current code does grant `org_admin` read access to patients via `scan` and `search`.
+- **Patient data is global, not tenant-scoped.** Patient reads and writes (`scan`, `search`, `sync`) are intentionally *not* filtered by `current_user.organization_id` — any authenticated clinician can reach any patient. Tenant scoping applies only to the **Organizations** and **Users** administration endpoints, where each `org_admin` is confined to its own organization. Cross-organization access to a patient record is therefore expected behavior, not a vulnerability.
