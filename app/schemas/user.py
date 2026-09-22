@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field
 
 from app.db.models import UserRole
 
@@ -10,14 +10,6 @@ class UserBase(BaseModel):
     full_name: str = Field(..., min_length=3, description="Full name of the user")
     role: UserRole = Field(default=UserRole.doctor, description="Role of the user")
     is_active: Optional[bool] = True
-
-    @field_validator('role')
-    @classmethod
-    def validate_role(cls, v: str) -> str:
-        allowed_roles = {UserRole.superadmin, UserRole.org_admin, UserRole.doctor, UserRole.nurse}
-        if v not in allowed_roles:
-            raise ValueError(f"Role must be one of {allowed_roles}")
-        return v
 
 class UserCreate(UserBase):
     """

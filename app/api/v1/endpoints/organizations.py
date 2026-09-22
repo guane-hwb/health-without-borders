@@ -109,8 +109,6 @@ def create_organization(
 
         # Single commit: org + admin succeed or fail together.
         db.commit()
-    except HTTPException:
-        raise
     except Exception:
         db.rollback()
         logger.exception(

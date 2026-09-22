@@ -72,6 +72,9 @@ def clean_nfc_env(monkeypatch):
             monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(settings, "NFC_MASTER_KEY", "")
     monkeypatch.setattr(settings, "NFC_CURRENT_KEY_VERSION", 0)
+    # These tests cover the environment-backed ring; a KEK would serve it from
+    # the database instead, so a developer's .env must not decide which path runs.
+    monkeypatch.setattr(settings, "NFC_KEK", "")
     yield monkeypatch
 
 

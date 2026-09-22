@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from app.api.deps import get_current_user
 from app.db.models import Patient, UserRole
 from app.main import app
-from app.schemas.patient import PatientFullRecord
+from app.schemas.patient import DiagnosisItem, PatientFullRecord
 from app.services.fhir import fhir_backend
 from app.services.patient_service import (
     DeviceUidConflictError,
@@ -1625,3 +1625,99 @@ def test_rate_limit_redis_branch():
         mock_settings.REDIS_URL = "redis://fake:6379/0"
         limiter = _build_limiter()
         assert limiter is not None
+
+
+# ============================================================================
+# ROLE GUARDS, LLM DIAGNOSIS EXTRACTION AND UNEXPECTED ERRORS
+# ============================================================================
+
+
+class MockSuperAdmin:
+    email = "sa@hwb.org"
+    id = "test-superadmin-id"
+    role = UserRole.superadmin
+    organization_id = "org-hq"
+
+
+def test_scan_forbidden_for_superadmin(client: TestClient):
+    """Superadmins manage tenants; they never read clinical records."""
+    app.dependency_overrides[get_current_user] = lambda: MockSuperAdmin()
+    response = client.get(f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}")
+    _clear_overrides()
+
+    assert response.status_code == 403
+    assert "Only medical staff" in response.json()["detail"]
+
+
+def test_search_forbidden_for_superadmin(client: TestClient):
+    app.dependency_overrides[get_current_user] = lambda: MockSuperAdmin()
+    params = {
+        "document_number": "VZ-9876543",
+        "birth_date": "2020-01-01",
+        "first_name": "Santiago",
+        "last_name": "Rodríguez",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+    _clear_overrides()
+
+    assert response.status_code == 403
+
+
+def test_sync_forbidden_for_org_admin(client: TestClient, db_session):
+    """org_admin can look patients up but cannot create or update records."""
+    app.dependency_overrides[get_current_user] = lambda: MockUnauthorized()
+    with patch.object(fhir_backend, "send_bundle") as mock_gcp:
+        response = client.post("/api/v1/patients/sync", json=MOCK_PATIENT_PAYLOAD)
+    _clear_overrides()
+
+    assert response.status_code == 403
+    assert "Only doctors and nurses" in response.json()["detail"]
+    mock_gcp.assert_not_called()
+    assert db_session.query(Patient).count() == 0
+
+
+def test_sync_visit_without_diagnosis_uses_llm(client: TestClient, db_session):
+    """A visit synced without diagnoses gets them from the LLM before persisting."""
+    payload = deepcopy(MOCK_PATIENT_WITH_VISIT)
+    payload["medicalHistory"][0]["diagnosis"] = []
+    evaluation = payload["medicalHistory"][0]["clinicalEvaluation"]
+
+    _override_doctor()
+    with (
+        patch(
+            "app.api.v1.endpoints.patients.medical_llm_processor.extract_diagnoses",
+            return_value=[
+                DiagnosisItem(icd10Code="J069", description="Infección respiratoria aguda")
+            ],
+        ) as mock_extract,
+        patch.object(fhir_backend, "send_bundle") as mock_gcp,
+    ):
+        mock_gcp.return_value = {"status": "success", "google_response": {}}
+        response = client.post("/api/v1/patients/sync", json=payload)
+    _clear_overrides()
+
+    assert response.status_code == 201, response.text
+    mock_extract.assert_called_once_with(
+        history=evaluation["historyOfCurrentIllness"],
+        physical=evaluation["generalPhysicalExamination"],
+        systems=evaluation["systemsExamination"],
+        plan=evaluation["treatmentPlanObservations"],
+    )
+    saved = db_session.query(Patient).filter(Patient.frontend_patient_id == "TEST-UNIT-002").one()
+    diagnosis = saved.full_record_json["medicalHistory"][0]["diagnosis"]
+    assert [d["icd10Code"] for d in diagnosis] == ["J069"]
+
+
+def test_sync_unexpected_error_returns_500(client: TestClient):
+    """Any unforeseen failure is logged and surfaced as a generic 500."""
+    _override_doctor()
+    with patch(
+        "app.api.v1.endpoints.patients.create_or_update_patient",
+        side_effect=RuntimeError("database exploded"),
+    ):
+        response = client.post("/api/v1/patients/sync", json=MOCK_PATIENT_PAYLOAD)
+    _clear_overrides()
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Internal Server Error processing patient data."
+    assert "exploded" not in response.text

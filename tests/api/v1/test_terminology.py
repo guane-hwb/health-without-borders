@@ -139,6 +139,9 @@ class TestICD11:
         ):
             self.svc.load()
 
+    def test_counts_loaded_codes(self):
+        assert self.svc.icd11_count == 1
+
     def test_null_passes(self):
         assert self.svc.validate_icd11(None) is True
         assert self.svc.validate_icd11("") is True
@@ -155,6 +158,7 @@ class TestICD11:
 class TestNoFilesLoaded:
     def test_format_validation_still_works(self, tmp_path):
         svc = TerminologyService()
+        assert svc.is_loaded is False
         with (
             patch("app.services.terminology.ICD10_FILE", tmp_path / "nope.json"),
             patch("app.services.terminology.ICD11_FILE", tmp_path / "nope.json"),
@@ -164,6 +168,8 @@ class TestNoFilesLoaded:
         assert svc.validate_icd10("A099") is True   # Valid format
         assert svc.validate_icd10("ZZZZZ") is False  # Invalid format
         assert svc.icd10_count == 0
+        assert svc.icd11_count == 0
+        assert svc.is_loaded is True
 
 class TestTerminologyEdgeCases:
     """Cover error handling and display methods."""

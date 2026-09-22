@@ -294,3 +294,160 @@ def test_delete_organization_rolls_back_on_error(client, db_session, monkeypatch
     assert (
         db_session.query(User).filter(User.organization_id == org_id).count() == 1
     )
+
+
+def _seed_org_admin(db, org_name="Clinic Org"):
+    """Create an organization + a real org_admin bound to it."""
+    org = Organization(name=org_name, is_active=True)
+    db.add(org)
+    db.flush()
+    admin = User(
+        email=f"admin@{org_name.lower().replace(' ', '-')}.org",
+        full_name="Org Admin",
+        hashed_password=get_password_hash("password123"),
+        role=UserRole.org_admin,
+        is_active=True,
+        organization_id=org.id,
+    )
+    db.add(admin)
+    db.commit()
+    db.refresh(admin)
+    return admin
+
+
+def test_create_organization_duplicate_name_returns_400(client, db_session):
+    sa = _seed_superadmin(db_session)
+    app.dependency_overrides[get_current_user] = lambda: sa
+
+    resp = client.post("/api/v1/organizations/", json={"name": "HQ Global"})
+    assert resp.status_code == 400, resp.text
+    assert "already exists" in resp.json()["detail"]
+    assert db_session.query(Organization).filter(Organization.name == "HQ Global").count() == 1
+
+
+def test_create_organization_rolls_back_on_commit_error(client, db_session, monkeypatch):
+    """An unexpected failure while persisting returns 500 and leaves nothing behind."""
+    sa = _seed_superadmin(db_session)
+    app.dependency_overrides[get_current_user] = lambda: sa
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(db_session, "commit", _boom)
+
+    resp = client.post("/api/v1/organizations/", json={"name": "Doomed Org"})
+    assert resp.status_code == 500, resp.text
+    assert resp.json()["detail"] == "Failed to create the organization."
+    assert db_session.query(Organization).filter(Organization.name == "Doomed Org").first() is None
+
+
+# ---------------------------------------------------------------------------
+# GET /organizations/ — role-scoped listing with membership counts
+# ---------------------------------------------------------------------------
+
+
+def test_list_organizations_superadmin_sees_all_with_counts(client, db_session):
+    sa = _seed_superadmin(db_session)
+    clinic = Organization(name="Clinic A", is_active=True)
+    empty = Organization(name="Empty B", is_active=False)
+    db_session.add_all([clinic, empty])
+    db_session.flush()
+    db_session.add(
+        User(
+            email="doc@clinic-a.org",
+            full_name="Doctor A",
+            hashed_password=get_password_hash("password123"),
+            role=UserRole.doctor,
+            is_active=True,
+            organization_id=clinic.id,
+        )
+    )
+    db_session.add_all(
+        [
+            Patient(frontend_patient_id="fp-a1", organization_id=clinic.id, device_uid="uid-a1"),
+            Patient(frontend_patient_id="fp-a2", organization_id=clinic.id, device_uid="uid-a2"),
+        ]
+    )
+    db_session.commit()
+    app.dependency_overrides[get_current_user] = lambda: sa
+
+    resp = client.get("/api/v1/organizations/")
+    assert resp.status_code == 200, resp.text
+    by_name = {o["name"]: o for o in resp.json()}
+    assert set(by_name) == {"HQ Global", "Clinic A", "Empty B"}
+    assert by_name["HQ Global"]["user_count"] == 1
+    assert by_name["Clinic A"]["user_count"] == 1
+    assert by_name["Clinic A"]["patient_count"] == 2
+    assert by_name["Empty B"]["user_count"] == 0
+    assert by_name["Empty B"]["patient_count"] == 0
+    assert by_name["Empty B"]["is_active"] is False
+
+
+def test_list_organizations_org_admin_sees_only_own(client, db_session):
+    admin = _seed_org_admin(db_session, "Own Org")
+    db_session.add(Organization(name="Other Org", is_active=True))
+    db_session.commit()
+    app.dependency_overrides[get_current_user] = lambda: admin
+
+    resp = client.get("/api/v1/organizations/")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [o["name"] for o in body] == ["Own Org"]
+    assert body[0]["id"] == admin.organization_id
+    assert body[0]["user_count"] == 1
+
+
+def test_list_organizations_forbidden_for_clinical_roles(client, db_session):
+    class MockDoctor:
+        id = "mock-doctor"
+        role = UserRole.doctor
+        organization_id = "org-x"
+
+    app.dependency_overrides[get_current_user] = lambda: MockDoctor()
+
+    resp = client.get("/api/v1/organizations/")
+    assert resp.status_code == 403, resp.text
+
+
+# ---------------------------------------------------------------------------
+# PATCH / DELETE guards
+# ---------------------------------------------------------------------------
+
+
+def test_update_organization_forbidden_for_org_admin(client, db_session):
+    admin = _seed_org_admin(db_session)
+    app.dependency_overrides[get_current_user] = lambda: admin
+
+    resp = client.patch(
+        f"/api/v1/organizations/{admin.organization_id}", json={"is_active": False}
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_update_organization_not_found(client, db_session):
+    sa = _seed_superadmin(db_session)
+    app.dependency_overrides[get_current_user] = lambda: sa
+
+    resp = client.patch("/api/v1/organizations/does-not-exist", json={"is_active": False})
+    assert resp.status_code == 404, resp.text
+
+
+def test_deactivate_own_organization_forbidden(client, db_session):
+    sa = _seed_superadmin(db_session)
+    app.dependency_overrides[get_current_user] = lambda: sa
+
+    resp = client.patch(
+        f"/api/v1/organizations/{sa.organization_id}", json={"is_active": False}
+    )
+    assert resp.status_code == 400, resp.text
+    db_session.expire_all()
+    org = db_session.query(Organization).filter(Organization.id == sa.organization_id).first()
+    assert org.is_active is True
+
+
+def test_delete_organization_not_found(client, db_session):
+    sa = _seed_superadmin(db_session)
+    app.dependency_overrides[get_current_user] = lambda: sa
+
+    resp = client.delete("/api/v1/organizations/does-not-exist")
+    assert resp.status_code == 404, resp.text

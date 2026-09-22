@@ -178,6 +178,21 @@ class TestGeminiHappyPathValidation:
             )
             return svc
 
+    def test_call_sends_prompt_and_returns_text(self, gemini_service):
+        """_call forwards the prompt, model and config to Vertex and returns the text."""
+        generate = gemini_service.client.models.generate_content
+        generate.return_value.text = '{"icd10Code": "E11"}'
+        config = MagicMock()
+
+        result = gemini_service._call("clinical prompt", config)
+
+        assert result == '{"icd10Code": "E11"}'
+        kwargs = generate.call_args.kwargs
+        assert kwargs["model"] == "test-model"
+        assert kwargs["config"] is config
+        assert kwargs["contents"][0].role == "user"
+        assert kwargs["contents"][0].parts[0].text == "clinical prompt"
+
     def test_family_history_happy_path_with_validation(self, gemini_service):
         """Covers code_family_history_item happy path + validation."""
         gemini_service._call = MagicMock(return_value=json.dumps({

@@ -580,7 +580,7 @@ def test_a_concurrent_change_during_revocation_is_reported(
             db_session, version=0, actor_id=None, reason="x"
         )
 
-def test_lifespan_runs_without_a_kek(db_session):
+def test_lifespan_runs_without_a_kek(db_session, monkeypatch):
     """
     The app must boot with no KEK configured, which is how every environment
     starts out — merging this feature changes nothing until it is enabled.
@@ -588,6 +588,9 @@ def test_lifespan_runs_without_a_kek(db_session):
     from fastapi.testclient import TestClient
 
     from app.main import app
+
+    # Explicit, so the real lifespan runs here regardless of the local .env.
+    monkeypatch.setattr(settings, "NFC_KEK", "")
 
     with TestClient(app) as c:
         assert c.get("/api/v1/patients/nonexistent-route").status_code == 404

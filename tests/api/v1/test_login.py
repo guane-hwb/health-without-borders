@@ -452,3 +452,65 @@ class TestJWTProtection:
             headers={"Authorization": f"Bearer {tokens['refresh_token']}"},
         )
         assert response.status_code == 401
+
+    def _encode(self, claims: dict) -> str:
+        from datetime import datetime, timedelta, timezone
+
+        from jose import jwt
+
+        from app.core.config import settings
+
+        return jwt.encode(
+            {"exp": datetime.now(timezone.utc) + timedelta(hours=1), **claims},
+            settings.SECRET_KEY,
+            algorithm=settings.ALGORITHM,
+        )
+
+    def test_token_without_subject_returns_401(self, client: TestClient, db_session):
+        token = self._encode({"type": "access", "jti": "no-sub-jti"})
+
+        response = client.get(
+            "/api/v1/users/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 401
+
+    def test_token_for_unknown_user_returns_401(self, client: TestClient, db_session):
+        from app.core.security import create_access_token
+
+        token = create_access_token("ghost@hwb.org")
+
+        response = client.get(
+            "/api/v1/users/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Could not validate credentials"
+
+    def test_token_for_inactive_user_returns_400(self, client: TestClient, db_session):
+        """A user deactivated after login can no longer use their access token."""
+        from app.core.security import create_access_token
+
+        org = _create_org(db_session)
+        _create_user(db_session, org.id, "inactive@hwb.org", "ValidPass123", is_active=False)
+        token = create_access_token("inactive@hwb.org")
+
+        response = client.get(
+            "/api/v1/users/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Inactive user"
+
+    def test_token_without_jti_skips_revocation_check(self, client: TestClient, db_session):
+        """Tokens minted before JTI support still authenticate an active user."""
+        org = _create_org(db_session)
+        _create_user(db_session, org.id, "legacy@hwb.org", "ValidPass123")
+        token = self._encode({"sub": "legacy@hwb.org", "type": "access"})
+
+        response = client.get(
+            "/api/v1/users/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+        assert response.json()["email"] == "legacy@hwb.org"
