@@ -34,8 +34,11 @@ from app.schemas.patient import (
     ClinicalEvaluation,
     DiagnosisItem,
     DiagnosisType,
+    DisabilityCategory,
+    Ethnicity,
     FamilyHistoryItem,
     FamilyRelationship,
+    GenderIdentity,
     GuardianInfo,
     IncapacityInfo,
     IncapacityScope,
@@ -441,6 +444,24 @@ class TestBuildPatientResource:
         r = _build_patient_resource(patient)
         assert "line" not in r["address"][0]
 
+    def test_optional_identity_extensions(self):
+        patient = _make_patient()
+        patient.patientInfo.ethnicity = Ethnicity.INDIGENA
+        patient.patientInfo.disabilityCategory = DisabilityCategory.VISUAL
+        patient.patientInfo.genderIdentity = GenderIdentity.NO_DECLARA
+        r = _build_patient_resource(patient)
+        codes = {e["url"].rsplit("/", 1)[-1]: e["valueCoding"]["code"] for e in r["extension"]}
+        assert codes["ExtensionPatientEthnicity"] == "1"
+        assert codes["ExtensionPatientDisability"] == "02"
+        assert codes["ExtensionPatientGenderIdentity"] == "05"
+
+    def test_identity_extensions_omitted_when_absent(self):
+        r = _build_patient_resource(_make_patient())
+        urls = [e["url"] for e in r["extension"]]
+        assert not any(
+            u.endswith(("Ethnicity", "Disability", "GenderIdentity")) for u in urls
+        )
+
 
 class TestBuildOrganizationIps:
     def test_returns_none_if_no_provider(self):
@@ -542,6 +563,36 @@ class TestBuildEncounter:
         visit.physician = "Dr. Fallback"
         r = _build_encounter(visit, "PT-VZ-001", None, None, None, "Encounter-0")
         assert r["participant"][0]["individual"]["display"] == "Dr. Fallback"
+
+    def test_service_cups_and_external_cause_codings(self):
+        visit = _make_visit()
+        visit.healthcareServiceCode = "328"
+        visit.healthcareServiceDisplay = "Medicina general"
+        visit.cupsCode = "890201"
+        visit.externalCause = "38"
+        r = _build_encounter(visit, "PT-VZ-001", None, None, None, "Encounter-0")
+
+        service = next(t["coding"][0] for t in r["type"]
+                       if t["coding"][0]["system"].endswith("REPShealthcareServices"))
+        assert service["code"] == "328"
+        assert service["display"] == "Medicina general"
+        # Display fields are optional and fall back to an empty string.
+        assert r["serviceType"]["coding"][0]["code"] == "890201"
+        assert r["serviceType"]["coding"][0]["display"] == ""
+        assert r["reasonCode"][0]["coding"][0]["code"] == "38"
+        assert r["reasonCode"][0]["coding"][0]["display"] == ""
+
+    def test_optional_codings_omitted_when_absent(self):
+        r = _build_encounter(_make_visit(), "PT-VZ-001", None, None, None, "Encounter-0")
+        assert len(r["type"]) == 3
+        assert "serviceType" not in r
+        assert "reasonCode" not in r
+
+    def test_no_location_id_uses_location_display(self):
+        visit = _make_visit()
+        visit.location = "Puesto de salud La Parada"
+        r = _build_encounter(visit, "PT-VZ-001", None, None, None, "Encounter-0")
+        assert r["location"] == [{"location": {"display": "Puesto de salud La Parada"}}]
 
 
 class TestBuildCondition:
@@ -650,6 +701,13 @@ class TestBuildMedicationStatement:
         med = MedicationStatementItem(medicationName="Medicamento genérico")
         r = _build_medication_statement(med, "PT-VZ-001", "MedStmt-0")
         assert r["medicationCodeableConcept"]["text"] == "Medicamento genérico"
+        assert "dosage" not in r
+        assert "note" not in r
+
+    def test_notes_included(self):
+        med = MedicationStatementItem(medicationName="Metformina", notes="Tomar con comida")
+        r = _build_medication_statement(med, "PT-VZ-001", "MedStmt-0")
+        assert r["note"] == [{"text": "Tomar con comida"}]
 
 
 class TestBuildMedicationRequest:
@@ -767,6 +825,31 @@ class TestBuildRdaPaciente:
         bundle = build_rda_paciente(patient)
         comp = bundle["entry"][0]["resource"]
         assert "event" in comp
+
+    @staticmethod
+    def _medication_section(bundle):
+        comp = bundle["entry"][0]["resource"]
+        return next(s for s in comp["section"] if s["title"] == "Historial de medicamentos")
+
+    def test_includes_background_medications(self):
+        patient = _make_patient()
+        patient.backgroundHistory.medications = [
+            MedicationStatementItem(medicationName="Metformina", dciCode="A10BA02"),
+            MedicationStatementItem(medicationName="Losartán"),
+        ]
+        bundle = build_rda_paciente(patient)
+
+        meds = [e for e in bundle["entry"]
+                if e["resource"]["resourceType"] == "MedicationStatement"]
+        assert len(meds) == 2
+        section = self._medication_section(bundle)
+        assert [r["reference"] for r in section["entry"]] == [m["fullUrl"] for m in meds]
+
+    def test_no_medications_marks_section_empty(self):
+        bundle = build_rda_paciente(_make_patient())
+        section = self._medication_section(bundle)
+        assert "entry" not in section
+        assert section["emptyReason"]["coding"][0]["code"] == "nilknown"
 
 
 class TestBuildRdaConsulta:

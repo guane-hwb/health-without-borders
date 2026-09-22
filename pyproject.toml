@@ -41,3 +41,9 @@ line-length = 88
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 ignore = ["E501"]
+
+[tool.coverage.report]
+# Entry-point guards only run when a module is executed as a script.
+exclude_also = [
+    'if __name__ == "__main__":',
+]

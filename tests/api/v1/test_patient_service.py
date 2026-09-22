@@ -18,6 +18,7 @@ from app.db.models import Patient
 from app.services.patient_service import (
     _find_patient_for_sync,
     compute_background_hash,
+    get_patient_by_document,
 )
 
 
@@ -161,3 +162,29 @@ def test_find_for_sync_returns_none_for_new_patient_without_tag(db_session):
 def test_find_for_sync_returns_none_when_tag_unknown(db_session):
     _persist(db_session, frontend_id="APP-A", device_uid="TAG-A")
     assert _find_patient_for_sync(db_session, "APP-UNKNOWN", "TAG-UNKNOWN") is None
+
+
+# ---------------------------------------------------------------------------
+# get_patient_by_document — identity lookup
+# ---------------------------------------------------------------------------
+
+
+def test_get_by_document_ignores_number_formatting(db_session):
+    p = _persist(db_session, frontend_id="APP-DOC", device_uid="TAG-DOC", doc="VZ-9876543")
+    p.document_type = "PT"
+    db_session.commit()
+
+    found = get_patient_by_document(db_session, "PT", "vz 987.6543")
+    assert found is not None and found.id == p.id
+
+
+def test_get_by_document_without_type_or_number_returns_none(db_session):
+    """An incomplete identity never matches, even if a record would."""
+    p = _persist(db_session, frontend_id="APP-DOC", device_uid="TAG-DOC", doc="VZ-9876543")
+    p.document_type = "PT"
+    db_session.commit()
+
+    assert get_patient_by_document(db_session, None, "VZ-9876543") is None
+    assert get_patient_by_document(db_session, "PT", None) is None
+    # Only separators: normalizes to an empty number.
+    assert get_patient_by_document(db_session, "PT", " - . ") is None

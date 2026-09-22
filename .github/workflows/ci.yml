@@ -48,7 +48,7 @@ jobs:
           DATABASE_URL: "sqlite:///./test.db"
           FHIR_BACKEND: "noop"
           LLM_BACKEND: "noop"
-        run: uv run pytest --cov=app --cov-report=term-missing --cov-report=html --cov-report=xml --cov-fail-under=60
+        run: uv run pytest --cov=app --cov-report=term-missing --cov-report=html --cov-report=xml --cov-fail-under=100
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

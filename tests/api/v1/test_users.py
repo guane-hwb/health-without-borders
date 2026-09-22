@@ -240,3 +240,133 @@ def test_delete_superadmin_forbidden(client, db_session):
 
     resp = client.delete(f"/api/v1/users/{sa2.id}")
     assert resp.status_code == 403, resp.text
+
+
+# ---------------------------------------------------------------------------
+# POST /users/ — superadmin tenancy + duplicate email
+# ---------------------------------------------------------------------------
+
+
+def _new_user_payload(email="new@clinic.org", role="doctor", **extra):
+    return {
+        "email": email,
+        "full_name": "New Person",
+        "password": "SecurePassword123!",
+        "role": role,
+        **extra,
+    }
+
+
+def test_create_user_duplicate_email_returns_400(client, db_session):
+    org = _seed_org(db_session)
+    admin = _mk_user(db_session, org.id, "admin@clinic.org", UserRole.org_admin)
+    _mk_user(db_session, org.id, "taken@clinic.org", UserRole.doctor)
+    app.dependency_overrides[get_current_user] = lambda: admin
+
+    resp = client.post("/api/v1/users/", json=_new_user_payload("taken@clinic.org"))
+    assert resp.status_code == 400, resp.text
+    assert "already exists" in resp.json()["detail"]
+
+
+def test_create_user_superadmin_requires_organization_id(client, db_session):
+    hq = _seed_org(db_session, "HQ")
+    sa = _mk_user(db_session, hq.id, "sa@hq.org", UserRole.superadmin)
+    app.dependency_overrides[get_current_user] = lambda: sa
+
+    resp = client.post("/api/v1/users/", json=_new_user_payload(role="org_admin"))
+    assert resp.status_code == 400, resp.text
+    assert "organization_id" in resp.json()["detail"]
+    assert db_session.query(User).filter(User.email == "new@clinic.org").first() is None
+
+
+def test_create_user_superadmin_in_target_organization(client, db_session):
+    hq = _seed_org(db_session, "HQ")
+    sa = _mk_user(db_session, hq.id, "sa@hq.org", UserRole.superadmin)
+    target_id = _seed_org(db_session, "Target Clinic").id
+    db_session.commit()
+    app.dependency_overrides[get_current_user] = lambda: sa
+
+    resp = client.post(
+        "/api/v1/users/",
+        json=_new_user_payload(role="org_admin", organization_id=target_id),
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["organization_id"] == target_id
+    assert body["role"] == "org_admin"
+
+
+# ---------------------------------------------------------------------------
+# GET /users/ — role-scoped listing
+# ---------------------------------------------------------------------------
+
+
+def test_list_users_superadmin_sees_all_organizations(client, db_session):
+    hq = _seed_org(db_session, "HQ")
+    sa = _mk_user(db_session, hq.id, "sa@hq.org", UserRole.superadmin)
+    org_a = _seed_org(db_session, "Org A")
+    _mk_user(db_session, org_a.id, "doc@a.org", UserRole.doctor)
+    org_b = _seed_org(db_session, "Org B")
+    _mk_user(db_session, org_b.id, "nurse@b.org", UserRole.nurse)
+    app.dependency_overrides[get_current_user] = lambda: sa
+
+    resp = client.get("/api/v1/users/")
+    assert resp.status_code == 200, resp.text
+    assert {u["email"] for u in resp.json()} == {"sa@hq.org", "doc@a.org", "nurse@b.org"}
+
+
+def test_list_users_org_admin_sees_only_own_organization(client, db_session):
+    org_a = _seed_org(db_session, "Org A")
+    admin_a = _mk_user(db_session, org_a.id, "admin@a.org", UserRole.org_admin)
+    _mk_user(db_session, org_a.id, "doc@a.org", UserRole.doctor)
+    org_b = _seed_org(db_session, "Org B")
+    _mk_user(db_session, org_b.id, "doc@b.org", UserRole.doctor)
+    app.dependency_overrides[get_current_user] = lambda: admin_a
+
+    resp = client.get("/api/v1/users/")
+    assert resp.status_code == 200, resp.text
+    assert {u["email"] for u in resp.json()} == {"admin@a.org", "doc@a.org"}
+
+
+def test_list_users_forbidden_for_clinical_roles(client, db_session):
+    org = _seed_org(db_session)
+    doctor = _mk_user(db_session, org.id, "doc@clinic.org", UserRole.doctor)
+    app.dependency_overrides[get_current_user] = lambda: doctor
+
+    resp = client.get("/api/v1/users/")
+    assert resp.status_code == 403, resp.text
+
+
+# ---------------------------------------------------------------------------
+# PATCH / DELETE /users/{id} — shared management guards
+# ---------------------------------------------------------------------------
+
+
+def test_manage_user_forbidden_for_clinical_roles(client, db_session):
+    org = _seed_org(db_session)
+    doctor = _mk_user(db_session, org.id, "doc@clinic.org", UserRole.doctor)
+    nurse = _mk_user(db_session, org.id, "nurse@clinic.org", UserRole.nurse)
+    app.dependency_overrides[get_current_user] = lambda: doctor
+
+    resp = client.patch(f"/api/v1/users/{nurse.id}", json={"is_active": False})
+    assert resp.status_code == 403, resp.text
+
+
+def test_manage_user_not_found(client, db_session):
+    org = _seed_org(db_session)
+    admin = _mk_user(db_session, org.id, "admin@clinic.org", UserRole.org_admin)
+    app.dependency_overrides[get_current_user] = lambda: admin
+
+    resp = client.delete("/api/v1/users/does-not-exist")
+    assert resp.status_code == 404, resp.text
+
+
+def test_org_admin_cannot_manage_another_org_admin(client, db_session):
+    org = _seed_org(db_session)
+    admin1 = _mk_user(db_session, org.id, "a1@clinic.org", UserRole.org_admin)
+    admin2 = _mk_user(db_session, org.id, "a2@clinic.org", UserRole.org_admin)
+    app.dependency_overrides[get_current_user] = lambda: admin1
+
+    resp = client.patch(f"/api/v1/users/{admin2.id}", json={"is_active": False})
+    assert resp.status_code == 403, resp.text
+    assert "doctor' or 'nurse'" in resp.json()["detail"]
