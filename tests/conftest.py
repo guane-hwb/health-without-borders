@@ -49,11 +49,19 @@ def db_session() -> Generator[Session, None, None]:
         Base.metadata.drop_all(bind=engine)
 
 @pytest.fixture(scope="function")
-def client(db_session: Session) -> Generator[TestClient, None, None]:
+def client(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> Generator[TestClient, None, None]:
     """
     Fixture that returns a FastAPI TestClient with the database dependency
     overridden and rate limiter reset for test isolation.
     """
+    # Startup seeds the NFC keyring through SessionLocal — the REAL database
+    # from the developer's .env, not the in-memory one below. Tests must never
+    # depend on it being reachable, so the step is skipped here; it is covered
+    # directly in test_nfc_keys.py.
+    monkeypatch.setattr("app.main.prepare_nfc_keyring_at_startup", lambda: None)
+
     def override_get_db():
         try:
             yield db_session
