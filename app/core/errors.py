@@ -27,3 +27,9 @@ class ApiError(HTTPException):
 
 USER_INACTIVE = "user_inactive"
 ORGANIZATION_INACTIVE = "organization_inactive"
+GUARDIAN_REQUIRED = "guardian_required"
+GUARDIAN_MISMATCH = "guardian_mismatch"
+DEVICE_UID_CONFLICT = "device_uid_conflict"
+DEVICE_RETIRED = "device_retired"
+DUPLICATE_IDENTITY = "duplicate_identity"
+IDENTITY_MISMATCH = "identity_mismatch"
