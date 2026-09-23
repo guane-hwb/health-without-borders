@@ -3,6 +3,8 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -14,6 +16,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.nfc_startup import prepare_nfc_keyring_at_startup
 from app.core.rate_limit import limiter
+from app.core.request_limits import BodySizeLimitMiddleware
 from app.services.terminology import terminology
 
 setup_logging()
@@ -71,6 +74,22 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """
+    FastAPI's default 422 echoes the offending ``input`` — for a model-level
+    check on /sync that is the entire patient record. Keep type, location and
+    message; drop the echoed data.
+    """
+    errors = [
+        {key: value for key, value in error.items() if key not in {"input", "ctx", "url"}}
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
+
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
@@ -84,6 +103,10 @@ if cors_origins:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
+
+# Added last so it is the outermost user middleware: oversized bodies are
+# refused before rate limiting, CORS or any body parsing.
+app.add_middleware(BodySizeLimitMiddleware)
 
 # Include all API routers
 app.include_router(api_router, prefix=settings.API_V1_STR)

@@ -26,7 +26,8 @@ class NfcKeyVersionEntry(BaseModel):
 
 
 class NfcKeyVersionSyncRequest(BaseModel):
-    entries: List[NfcKeyVersionEntry] = Field(..., min_length=1)
+    # The app uploads every pending sighting at once; the cap only bounds a request.
+    entries: List[NfcKeyVersionEntry] = Field(..., min_length=1, max_length=5000)
 
 
 class NfcKeyVersionSyncResponse(BaseModel):

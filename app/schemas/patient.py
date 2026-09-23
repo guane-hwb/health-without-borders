@@ -17,12 +17,17 @@ CHANGELOG v3.0 (Postman-verified full conformity):
   - All existing fields, enums, and models are preserved for backward compat.
 """
 
+import logging
 import uuid as _uuid
 from datetime import date, datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+
+from app.services.iso3166 import to_numeric as _iso_to_numeric
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # ENUMS — Resolution 866/2021 coded domains
@@ -559,6 +564,127 @@ class PatientFullRecord(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ============================================================================
+# SYNC INPUT — stricter than the stored/returned record
+# ============================================================================
+
+#: Nationality the app sends for "Otro"; it has no ISO meaning and does not fit
+#: the 3-character column, so it is stored as the reserved "unknown" value.
+UNKNOWN_NATIONALITY_CODE = "UNK"
+_NATIONALITY_ALIASES = {"OTHER": UNKNOWN_NATIONALITY_CODE, "": UNKNOWN_NATIONALITY_CODE}
+
+#: Size limits for one /sync payload. Generous for any real patient, but they
+#: bound what a single request can make the server (and the LLM) process.
+MAX_SYNC_LIST_ITEMS = {
+    "medicalHistory": 1000,
+    "vaccinationRecord": 1000,
+    "allergies": 200,
+}
+MAX_BACKGROUND_LIST_ITEMS = 200
+MAX_TEXT_LENGTH = 20_000
+MAX_SIGNATURE_LENGTH = 2_000_000
+MAX_ID_LENGTH = 128
+MAX_BLOOD_TYPE_LENGTH = 5  # patients.blood_type is VARCHAR(5)
+
+_GUARDIAN_KEY_ALIASES = {"docType": "documentType", "docNumber": "documentNumber"}
+
+
+def _walk_strings(value: Any, path: str = ""):
+    """Yield (path, string) for every string inside a dumped model."""
+    if isinstance(value, str):
+        yield path, value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _walk_strings(item, f"{path}.{key}" if path else key)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _walk_strings(item, f"{path}[{index}]")
+
+
+class PatientSyncRecord(PatientFullRecord):
+    """
+    Body of ``POST /patients/sync``.
+
+    Same shape as :class:`PatientFullRecord`, plus the checks that belong to
+    *writing*: normalisation of values older apps send, and limits that keep a
+    value from failing in PostgreSQL (a 500 the app would retry forever) or a
+    single request from fanning out into unbounded work. They live here and not
+    on ``PatientFullRecord`` because that model also validates what ``/scan`` and
+    ``/search`` return — tightening it would make historical records unreadable.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise_legacy_values(cls, data):
+        if not isinstance(data, dict):
+            return data
+
+        info = data.get("patientInfo")
+        if isinstance(info, dict) and isinstance(info.get("nationalityCode"), str):
+            code = info["nationalityCode"].strip().upper()
+            if code in _NATIONALITY_ALIASES:
+                logger.warning(
+                    "Sync nationalityCode %r stored as %s", code, UNKNOWN_NATIONALITY_CODE
+                )
+                code = _NATIONALITY_ALIASES[code]
+            info["nationalityCode"] = code
+
+        # Older app builds edit the guardian with docType/docNumber. Unknown keys
+        # are dropped by the model, which silently erased the guardian document.
+        for key in ("guardianInfo", "guardian2Info"):
+            guardian = data.get(key)
+            if not isinstance(guardian, dict):
+                continue
+            for alias, canonical in _GUARDIAN_KEY_ALIASES.items():
+                if alias in guardian:
+                    value = guardian.pop(alias)
+                    if not guardian.get(canonical):
+                        guardian[canonical] = value
+        return data
+
+    @model_validator(mode="after")
+    def _enforce_write_limits(self):
+        if not self.patientId.strip():
+            raise ValueError("patientId must not be empty.")
+        if not self.device_uid.strip():
+            raise ValueError("device_uid must not be empty.")
+        for name in ("patientId", "device_uid"):
+            if len(getattr(self, name)) > MAX_ID_LENGTH:
+                raise ValueError(f"{name} is longer than {MAX_ID_LENGTH} characters.")
+
+        code = self.patientInfo.nationalityCode
+        if code != UNKNOWN_NATIONALITY_CODE and _iso_to_numeric(code) is None:
+            raise ValueError(
+                "patientInfo.nationalityCode must be an ISO 3166-1 code "
+                f"(alpha-3, alpha-2 or numeric) or '{UNKNOWN_NATIONALITY_CODE}'."
+            )
+        blood = self.patientInfo.bloodType
+        if blood is not None and len(blood) > MAX_BLOOD_TYPE_LENGTH:
+            raise ValueError(
+                f"patientInfo.bloodType is longer than {MAX_BLOOD_TYPE_LENGTH} characters."
+            )
+
+        for name, limit in MAX_SYNC_LIST_ITEMS.items():
+            if len(getattr(self, name)) > limit:
+                raise ValueError(f"{name} has more than {limit} items.")
+        background = self.backgroundHistory
+        if background is not None:
+            for name in ("chronicConditions", "familyHistory", "medications"):
+                if len(getattr(background, name)) > MAX_BACKGROUND_LIST_ITEMS:
+                    raise ValueError(
+                        f"backgroundHistory.{name} has more than "
+                        f"{MAX_BACKGROUND_LIST_ITEMS} items."
+                    )
+
+        for path, text in _walk_strings(self.model_dump(mode="json")):
+            limit = (
+                MAX_SIGNATURE_LENGTH if path.endswith("signatureBase64") else MAX_TEXT_LENGTH
+            )
+            if len(text) > limit:
+                raise ValueError(f"{path} is longer than {limit} characters.")
+        return self
 
 
 # ============================================================================
