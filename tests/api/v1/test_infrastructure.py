@@ -101,13 +101,15 @@ class TestNoOpMedicalCoding:
         )
         assert len(result) == 1
         assert result[0].icd10Code == FALLBACK_ICD10_CODE
-        assert "LLM deshabilitado" in result[0].description
+        # The reason is logged; the clinical field holds only the R69 display.
+        assert result[0].description == "Causas de morbilidad desconocidas y no especificadas"
+        assert result[0].source == "ai_fallback"
 
     def test_code_family_history_returns_fallback(self):
         result = NoOpMedicalCodingService().code_family_history_item("Hipertensión")
         assert result["icd10Code"] == FALLBACK_ICD10_CODE
         assert result["icd11Code"] is None
-        assert result["description"].startswith("Hipertensión — ")
+        assert result["description"] == "Causas de morbilidad desconocidas y no especificadas"
 
 
 # ---------------------------------------------------------------------------

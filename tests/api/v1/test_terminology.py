@@ -120,7 +120,7 @@ class TestFragmentValidation:
     def test_invalid_format_rejected(self):
         assert self.svc.validate_icd10("ZZZZZ") is False
         assert self.svc.validate_icd10("123") is False
-        assert self.svc.validate_icd10("A09.9") is False  # Dot not allowed
+        assert self.svc.validate_icd10("A09.9") is True  # dots are normalised away
 
     def test_display_from_fragment(self):
         assert self.svc.get_icd10_display("A099") is not None

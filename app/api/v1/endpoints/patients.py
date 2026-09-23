@@ -27,6 +27,7 @@ from app.schemas.nfc_key_version import (
     NfcKeyVersionUsageResponse,
 )
 from app.schemas.patient import (
+    CodeSource,
     PatientFullRecord,
     PatientSearchRequest,
     PatientSyncRecord,
@@ -36,6 +37,7 @@ from app.services.emergency_access_service import store_emergency_access_entries
 from app.services.fhir import fhir_backend
 from app.services.fhir_service import convert_to_fhir_rda
 from app.services.llm import medical_llm_processor
+from app.services.llm.base import ai_code_source, mark_ai_diagnoses
 from app.services.nfc_key_service import (
     keyring_status,
     revoke_version,
@@ -51,9 +53,9 @@ from app.services.patient_service import (
     InvalidPatientDataError,
     create_or_update_patient,
     find_patient_strict,
-    get_existing_history_count,
     get_patient_by_device_uid,
     get_retired_device_uid,
+    get_stored_record_for_sync,
 )
 
 logger = logging.getLogger(__name__)
@@ -175,6 +177,105 @@ async def get_patient_by_device_uid_scan(
     return patient_db.full_record_json
 
 
+def _normalized_text(value: Optional[str]) -> str:
+    return " ".join((value or "").split()).casefold()
+
+
+def _code_source(value: Optional[str]) -> Optional[CodeSource]:
+    """Stored JSON holds the enum's value; legacy items have none."""
+    return CodeSource(value) if value else None
+
+
+async def _apply_llm_coding(
+    patient_data: PatientFullRecord,
+    new_visits: list,
+    stored_record: Optional[dict],
+) -> None:
+    """
+    Fill in the codes the app does not send, without touching what it did send.
+
+    - Diagnoses: only NEW visits without a diagnosis go to the LLM; visits the
+      server already holds keep their stored diagnosis in the merge, so asking
+      again only re-sent clinical notes to Vertex and threw the answer away.
+      Every AI diagnosis is stamped with its provenance; a diagnosis the client
+      sent on a new visit is the clinician's.
+    - Background (family history, chronic conditions): the clinician's text is
+      never replaced. The code and its display go to separate fields. An item
+      whose text is already coded on the server reuses that coding instead of
+      calling the LLM again.
+    """
+    model = getattr(medical_llm_processor, "model_name", "unknown")
+
+    for visit in new_visits:
+        if visit.diagnosis:
+            for diagnosis in visit.diagnosis:
+                if diagnosis.source is None:
+                    diagnosis.source = CodeSource.CLINICIAN
+            continue
+        evaluation = visit.clinicalEvaluation
+        diagnoses = await asyncio.to_thread(
+            medical_llm_processor.extract_diagnoses,
+            history=evaluation.historyOfCurrentIllness,
+            physical=evaluation.generalPhysicalExamination,
+            systems=evaluation.systemsExamination,
+            plan=evaluation.treatmentPlanObservations,
+        )
+        visit.diagnosis = mark_ai_diagnoses(diagnoses, model)
+
+    background = patient_data.backgroundHistory
+    if background is None:
+        return
+    stored_background = (stored_record or {}).get("backgroundHistory") or {}
+
+    stored_family = {
+        (_normalized_text(item.get("conditionDescription")), item.get("relationship")): item
+        for item in stored_background.get("familyHistory") or []
+        if item.get("conditionCie10Code")
+    }
+    for item in background.familyHistory:
+        if not item.conditionDescription or item.conditionCie10Code:
+            continue
+        known = stored_family.get(
+            (_normalized_text(item.conditionDescription), item.relationship.value)
+        )
+        if known is not None:
+            item.conditionCie10Code = known.get("conditionCie10Code")
+            item.conditionCie11Code = known.get("conditionCie11Code")
+            item.conditionCodedDisplay = known.get("conditionCodedDisplay")
+            item.codingSource = _code_source(known.get("codingSource"))
+            continue
+        coded = await asyncio.to_thread(
+            medical_llm_processor.code_family_history_item, item.conditionDescription
+        )
+        item.conditionCie10Code = coded.get("icd10Code")
+        item.conditionCie11Code = coded.get("icd11Code")
+        item.conditionCodedDisplay = coded.get("description")
+        item.codingSource = ai_code_source(item.conditionCie10Code)
+
+    stored_chronic = {
+        _normalized_text(item.get("chronicDescription")): item
+        for item in stored_background.get("chronicConditions") or []
+        if item.get("chronicCie10Code")
+    }
+    for cc_item in background.chronicConditions:
+        if not cc_item.chronicDescription or cc_item.chronicCie10Code:
+            continue
+        known = stored_chronic.get(_normalized_text(cc_item.chronicDescription))
+        if known is not None:
+            cc_item.chronicCie10Code = known.get("chronicCie10Code")
+            cc_item.chronicCie11Code = known.get("chronicCie11Code")
+            cc_item.chronicCodedDisplay = known.get("chronicCodedDisplay")
+            cc_item.codingSource = _code_source(known.get("codingSource"))
+            continue
+        coded = await asyncio.to_thread(
+            medical_llm_processor.code_chronic_condition, cc_item.chronicDescription
+        )
+        cc_item.chronicCie10Code = coded.get("icd10Code")
+        cc_item.chronicCie11Code = coded.get("icd11Code")
+        cc_item.chronicCodedDisplay = coded.get("description")
+        cc_item.codingSource = ai_code_source(cc_item.chronicCie10Code)
+
+
 @router.post("/sync", response_model=PatientSyncResponse, status_code=status.HTTP_201_CREATED)
 async def sync_patient(
     patient_data: PatientSyncRecord, 
@@ -185,9 +286,14 @@ async def sync_patient(
     Synchronize a patient record from the mobile app to the cloud.
 
     **Process flow:**
-    1. If any NEW visit in `medicalHistory` is missing a diagnosis, the clinical 
+    1. If any visit NEW to the server is missing a diagnosis, the clinical
        evaluation text is analyzed by a medical LLM (Gemini) to suggest one.
-    2. If any `familyHistory` item lacks ICD codes, the LLM resolves them.
+       AI diagnoses carry `source`, `model` and `generatedAt` and go to the
+       RDA as `provisional`.
+    2. If a `familyHistory` / `chronicConditions` item lacks ICD codes, the
+       server reuses the coding it already stored for the same text or asks the
+       LLM. The professional's text is never replaced: the code's name goes to
+       `conditionCodedDisplay` / `chronicCodedDisplay`.
     3. The record is persisted or updated in PostgreSQL.
     4. Only NEW FHIR RDA Bundles are generated (delta logic):
        - RDA-Paciente: on first sync or when background data changes.
@@ -197,7 +303,8 @@ async def sync_patient(
     6. Sync tracking is updated in the database.
 
     **Nurse restriction:** A `nurse` may call this endpoint to append vaccination records,
-    but cannot add new entries to `medicalHistory`. Attempts to do so will return `403`.
+    but cannot add visits the server does not already hold — neither to an
+    existing patient nor when creating one. Attempts to do so return `403`.
 
     **Device tag conflict:** If the record's `device_uid` is already registered to a
     different patient, the endpoint returns `409` and no record is created or modified.
@@ -230,69 +337,47 @@ async def sync_patient(
         )
     
     try:
-        # A nurse may append vaccines but must not add new medical-history
-        # entries. Enforce this BEFORE any LLM processing so an unauthorized
-        # request never triggers diagnosis extraction.
-        if actor_role == UserRole.nurse:
-            existing_history_count = await asyncio.to_thread(
-                get_existing_history_count,
-                db,
-                patient_data.patientId,
-                patient_data.device_uid,
+        # Look at the record this sync will merge into BEFORE any LLM work:
+        # only visits and background items the server does not have yet are
+        # new, and the check below and the LLM calls must use that, not the
+        # size of the payload.
+        stored_record = await asyncio.to_thread(
+            get_stored_record_for_sync,
+            db,
+            patient_data.patientId,
+            patient_data.device_uid,
+        )
+        # Release the connection: the LLM calls below can take seconds each and
+        # must not hold a pooled connection "idle in transaction".
+        await asyncio.to_thread(db.rollback)
+
+        stored_visit_ids = {
+            visit.get("encounterIdentifier")
+            for visit in (stored_record or {}).get("medicalHistory") or []
+        }
+        new_visits = [
+            visit
+            for visit in patient_data.medicalHistory
+            if visit.encounterIdentifier not in stored_visit_ids
+        ]
+
+        # A nurse may append vaccines but must not add medical history. What
+        # counts is whether any visit is new to the server — comparing list
+        # sizes let a nurse add a visit by sending only that one, or create a
+        # patient that already had visits.
+        if actor_role == UserRole.nurse and new_visits:
+            logger.warning(
+                "Nurse attempted to add medical history actor_id=%s org_id=%s patient_ref=%s",
+                actor_id,
+                actor_org_id,
+                mask_id(patient_data.patientId),
             )
-            if (
-                existing_history_count is not None
-                and len(patient_data.medicalHistory) > existing_history_count
-            ):
-                logger.warning(
-                    "Nurse attempted to add medical history actor_id=%s org_id=%s patient_ref=%s",
-                    actor_id,
-                    actor_org_id,
-                    mask_id(patient_data.patientId),
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access Denied: Nurses can only add vaccines, not medical history.",
-                )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access Denied: Nurses can only add vaccines, not medical history.",
+            )
 
-        # --- LLM PROCESSING: Only for visits that don't have diagnoses yet ---
-        for visit in patient_data.medicalHistory:
-            if not visit.diagnosis:
-                eval_data = visit.clinicalEvaluation
-                ai_diagnoses = await asyncio.to_thread(
-                    medical_llm_processor.extract_diagnoses,
-                    history=eval_data.historyOfCurrentIllness,
-                    physical=eval_data.generalPhysicalExamination,
-                    systems=eval_data.systemsExamination,
-                    plan=eval_data.treatmentPlanObservations
-                )
-                visit.diagnosis = ai_diagnoses
-
-        # --- LLM PROCESSING: Family history ICD coding ---
-        if patient_data.backgroundHistory and patient_data.backgroundHistory.familyHistory:
-            for fh_item in patient_data.backgroundHistory.familyHistory:
-                if fh_item.conditionDescription and not fh_item.conditionCie10Code:
-                    coded = await asyncio.to_thread(
-                        medical_llm_processor.code_family_history_item,
-                        fh_item.conditionDescription
-                    )
-                    fh_item.conditionCie10Code = coded.get("icd10Code")
-                    fh_item.conditionCie11Code = coded.get("icd11Code")
-                    if coded.get("description"):
-                        fh_item.conditionDescription = coded["description"]
-
-        # --- LLM PROCESSING: Chronic conditions ICD coding ---
-        if patient_data.backgroundHistory and patient_data.backgroundHistory.chronicConditions:
-            for cc_item in patient_data.backgroundHistory.chronicConditions:
-                if cc_item.chronicDescription and not cc_item.chronicCie10Code:
-                    coded = await asyncio.to_thread(
-                        medical_llm_processor.code_chronic_condition,
-                        cc_item.chronicDescription
-                    )
-                    cc_item.chronicCie10Code = coded.get("icd10Code")
-                    cc_item.chronicCie11Code = coded.get("icd11Code")
-                    if coded.get("description"):
-                        cc_item.chronicDescription = coded["description"]
+        await _apply_llm_coding(patient_data, new_visits, stored_record)
 
         # 1. Save to DB (wrapped in to_thread to avoid blocking the event loop)
         logger.info(

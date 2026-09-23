@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     GCP_FHIR_STORE_ID: Optional[str] = None
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None
     LLM_MODEL_NAME: str = "gemini-3-flash-preview"
+    # Vertex AI region that processes the clinical notes sent to the LLM.
+    # "global" keeps the historical behaviour (and is where preview models are
+    # served); set a region to pin where the notes are processed.
+    LLM_LOCATION: str = "global"
     
     # --- SECURITY ---
     SECRET_KEY: str

@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import logging
@@ -436,25 +437,24 @@ def _find_patient_for_sync(
     return None
 
 
-def get_existing_history_count(
+def get_stored_record_for_sync(
     db: Session, frontend_patient_id: str, device_uid: Optional[str]
-) -> Optional[int]:
+) -> Optional[dict]:
     """
-    Return the number of medicalHistory entries already stored for the global
-    patient this sync would target, or None if the patient does not exist yet.
+    Return a copy of the stored record a sync would merge into, or None if the
+    patient does not exist yet.
 
-    Uses the same identity resolution as the sync upsert (see
-    ``_find_patient_for_sync``) so the nurse-restriction check counts against
-    the same record the write will target — including a record first registered
-    by a different organization.
-
-    This is a lightweight lookup used to enforce role-based restrictions
-    before any expensive processing (e.g. LLM diagnosis extraction) runs.
+    Uses the same identity resolution as the upsert (``_find_patient_for_sync``)
+    so the checks that run before any expensive work — which visits are new,
+    whether a nurse is adding clinical history, which background items are
+    already coded — look at the same record the write will target, including
+    one first registered by a different organization.
     """
     existing = _find_patient_for_sync(db, frontend_patient_id, device_uid)
     if not existing:
         return None
-    return len((existing.full_record_json or {}).get("medicalHistory", []) or [])
+    return copy.deepcopy(existing.full_record_json or {})
+
 
 def create_or_update_patient(
     db: Session,
