@@ -8,6 +8,15 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.config import settings
+from app.core.errors import (
+    DEVICE_RETIRED,
+    DEVICE_UID_CONFLICT,
+    DUPLICATE_IDENTITY,
+    GUARDIAN_MISMATCH,
+    GUARDIAN_REQUIRED,
+    IDENTITY_MISMATCH,
+    ApiError,
+)
 from app.core.phi_sanitizer import mask_id
 from app.core.rate_limit import limiter
 from app.db.models import User, UserRole
@@ -48,8 +57,10 @@ from app.services.nfc_key_version_service import (
     summarize_key_version_usage,
 )
 from app.services.patient_service import (
+    DeviceRetiredError,
     DeviceUidConflictError,
     DuplicateIdentityError,
+    IdentityMismatchError,
     InvalidPatientDataError,
     create_or_update_patient,
     find_patient_strict,
@@ -57,6 +68,7 @@ from app.services.patient_service import (
     get_retired_device_uid,
     get_stored_record_for_sync,
 )
+from app.services.record_merger import adopt_stored_item_ids
 
 logger = logging.getLogger(__name__)
 
@@ -151,9 +163,10 @@ async def get_patient_by_device_uid_scan(
     # If patient is a minor, require guardian device UID and validate it against the stored guardian info
     if age < 18:
         if not guardian_device_uid:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Guardian bracelet scan required for minors."
+            raise ApiError(
+                status.HTTP_403_FORBIDDEN,
+                "Guardian bracelet scan required for minors.",
+                code=GUARDIAN_REQUIRED,
             )
         
         # Extract the stored guardian device UIDs from the patient's full record JSON
@@ -169,9 +182,10 @@ async def get_patient_by_device_uid_scan(
                 current_user.organization_id,
                 mask_id(patient_db.id),
             )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Guardian tag mismatch. Access denied."
+            raise ApiError(
+                status.HTTP_403_FORBIDDEN,
+                "Guardian tag mismatch. Access denied.",
+                code=GUARDIAN_MISMATCH,
             )
 
     return patient_db.full_record_json
@@ -351,6 +365,10 @@ async def sync_patient(
         # must not hold a pooled connection "idle in transaction".
         await asyncio.to_thread(db.rollback)
 
+        # An item the app re-sent without its id (the edit screens drop it)
+        # takes the id of the stored item it is, so it is not added twice.
+        adopt_stored_item_ids(patient_data, stored_record)
+
         stored_visit_ids = {
             visit.get("encounterIdentifier")
             for visit in (stored_record or {}).get("medicalHistory") or []
@@ -387,11 +405,12 @@ async def sync_patient(
             actor_org_id,
             mask_id(patient_data.patientId),
         )
+        conflicts: list[str] = []
         saved_patient, synced_encounter_ids, old_bg_hash, rda_paciente_sent = (
             await asyncio.to_thread(
                 create_or_update_patient,
                 db, patient_data, actor_org_id,
-                actor_id,
+                actor_id, conflicts,
             )
         )
         
@@ -451,7 +470,8 @@ async def sync_patient(
             internal_id=str(saved_patient.id),
             fhir_status=fhir_status,
             vida_code=None,
-            message="Patient synced and processed successfully"
+            message="Patient synced and processed successfully",
+            conflicts=conflicts,
         )
 
     except HTTPException:
@@ -474,9 +494,34 @@ async def sync_patient(
             actor_id,
             actor_org_id,
         )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A patient is already registered with this device tag.",
+        raise ApiError(
+            status.HTTP_409_CONFLICT,
+            "A patient is already registered with this device tag.",
+            code=DEVICE_UID_CONFLICT,
+        )
+
+    except IdentityMismatchError:
+        logger.warning(
+            "Patient sync identity mismatch on a tag-resolved record actor_id=%s org_id=%s",
+            actor_id,
+            actor_org_id,
+        )
+        raise ApiError(
+            status.HTTP_409_CONFLICT,
+            "This device tag is registered to a patient with a different identity.",
+            code=IDENTITY_MISMATCH,
+        )
+
+    except DeviceRetiredError:
+        logger.warning(
+            "Patient sync on a retired device tag actor_id=%s org_id=%s",
+            actor_id,
+            actor_org_id,
+        )
+        raise ApiError(
+            status.HTTP_409_CONFLICT,
+            "This device tag was retired and cannot identify a new patient.",
+            code=DEVICE_RETIRED,
         )
 
     except DuplicateIdentityError:
@@ -485,9 +530,10 @@ async def sync_patient(
             actor_id,
             actor_org_id,
         )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A patient is already registered with this identity document.",
+        raise ApiError(
+            status.HTTP_409_CONFLICT,
+            "A patient is already registered with this identity document.",
+            code=DUPLICATE_IDENTITY,
         )
 
     except Exception:

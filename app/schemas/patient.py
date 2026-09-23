@@ -29,6 +29,17 @@ from app.services.iso3166 import to_numeric as _iso_to_numeric
 
 logger = logging.getLogger(__name__)
 
+#: Prefix of identifiers the server derives for visits / vaccinations that
+#: arrive without one (see PatientFullRecord._derive_missing_item_ids).
+DERIVED_ID_PREFIX = "hwb-derived-"
+_DERIVED_ID_NAMESPACE = _uuid.UUID("6f1c7d0e-3b7a-4f7e-9a51-2d8f0c4b9e21")
+
+
+def derived_item_id(*parts: Any) -> str:
+    """Stable identifier for an item that came without one."""
+    seed = "|".join("" if part is None else str(part) for part in parts)
+    return DERIVED_ID_PREFIX + str(_uuid.uuid5(_DERIVED_ID_NAMESPACE, seed))
+
 # ============================================================================
 # ENUMS — Resolution 866/2021 coded domains
 # ============================================================================
@@ -603,6 +614,47 @@ class PatientFullRecord(BaseModel):
     class Config:
         from_attributes = True
 
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_missing_item_ids(cls, data):
+        """
+        Give visits and vaccinations that arrive without an identifier a
+        DETERMINISTIC one, derived from the patient and the item's own data.
+
+        The app's edit screens rebuild the last visit without its
+        ``encounterIdentifier``. A random UUID per request made every re-sync of
+        that record look like a brand-new visit: another LLM diagnosis, another
+        RDA-Consulta, another row in the statistics. A derived id is the same on
+        every request, so the item is added at most once — and /sync adopts the
+        stored id of the visit it matches (see record_merger.adopt_stored_item_ids).
+
+        Visits are keyed on their start time only: the staff edit screen changes
+        the practitioner, but keeps the date.
+        """
+        if not isinstance(data, dict):
+            return data
+        patient_id = data.get("patientId")
+        for field, key, parts in (
+            ("medicalHistory", "encounterIdentifier", ("startDateTime",)),
+            ("vaccinationRecord", "vaccinationId", ("date", "vaccineCode", "dose")),
+        ):
+            items = data.get(field)
+            if not isinstance(items, list):
+                continue
+            if all(not isinstance(i, dict) or i.get(key) for i in items):
+                continue
+            filled = []
+            for item in items:
+                if isinstance(item, dict) and not item.get(key):
+                    item = {
+                        **item,
+                        key: derived_item_id(field, patient_id, *(item.get(p) for p in parts)),
+                    }
+                filled.append(item)
+            # Copy instead of mutating: the input may be a stored JSON value.
+            data = {**data, field: filled}
+        return data
+
 
 # ============================================================================
 # SYNC INPUT — stricter than the stored/returned record
@@ -735,6 +787,14 @@ class PatientSyncResponse(BaseModel):
     fhir_status: Optional[str] = "unknown"
     vida_code: Optional[str] = Field(None, description="Código VIDA retornado por IHCE")
     message: str
+    conflicts: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Parts of the payload the server did not apply because they were "
+            "older than what it holds (e.g. a retired bracelet), or not the "
+            "device's to change. The rest of the record was synced."
+        ),
+    )
 
 
 # ============================================================================
