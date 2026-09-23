@@ -19,7 +19,7 @@ from typing import Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.core.config import NFC_MAX_KEY_VERSION, settings
 from app.core.key_wrapper import (
     EnvKekWrapper,
     KeyWrapper,
@@ -49,6 +49,19 @@ def kek_wrapper() -> Optional[KeyWrapper]:
     if not kek:
         return None
     return EnvKekWrapper(kek)
+
+
+def last_known_keyring() -> Optional[dict]:
+    """
+    The most recent ring assembled from the database, however old.
+
+    Used only when reading the database fails: serving a ring that was correct
+    a moment ago is safe, whereas falling back to the environment would hand
+    out whatever NFC_MASTER_KEY holds — a version that may have been revoked
+    precisely because it leaked.
+    """
+    with _cache_lock:
+        return _cached_ring
 
 
 def invalidate_cache() -> None:
@@ -186,9 +199,9 @@ def rotate_to_new_version(
 
     previous = state.current_version
     new_version = _next_version(db)
-    if new_version > 255:
+    if new_version > NFC_MAX_KEY_VERSION:
         raise ValueError(
-            "Key version 255 is the highest the one-byte payload header can "
+            f"Key version {NFC_MAX_KEY_VERSION} is the highest the one-byte payload header can "
             "carry. Retire old versions before rotating again."
         )
 
@@ -359,6 +372,15 @@ def revoke_version(
     if was_current:
         # Something has to be current or nothing can be written at all.
         new_version = _next_version(db)
+        if new_version > NFC_MAX_KEY_VERSION:
+            # Same ceiling as rotation: a version the one-byte payload header
+            # cannot carry would leave the whole fleet without a write key.
+            db.rollback()
+            raise ValueError(
+                f"Key version {NFC_MAX_KEY_VERSION} is the highest the one-byte "
+                "payload header can carry; the current version cannot be revoked "
+                "and replaced. Plan a re-keying of the fleet."
+            )
         _insert_key(db, wrapper, version=new_version, material=generate_key())
         _log_event(
             db,

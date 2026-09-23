@@ -32,6 +32,17 @@ def prepare_nfc_keyring(db: Session) -> None:
     if not settings.NFC_KEK.strip():
         return
 
+    # With a KEK the ring lives in the database; these variables are validated
+    # but never served, which the rotation runbook for environment mode would
+    # otherwise suggest they are.
+    ignored = sorted(v for v in settings.nfc_keyring() if v != 0)
+    if ignored or settings.NFC_CURRENT_KEY_VERSION != 0:
+        logger.warning(
+            "NFC_KEK is set: NFC_KEY_V%s and NFC_CURRENT_KEY_VERSION are ignored; "
+            "manage versions with /patients/nfc-keys/rotate and /revoke.",
+            ",".join(str(v) for v in ignored) or "<none>",
+        )
+
     ensure_initialised(db)
     # load_keyring only returns None without a KEK, already excluded above.
     ring = load_keyring(db) or {"keys": {}, "current": None}
