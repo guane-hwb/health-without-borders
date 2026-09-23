@@ -7,6 +7,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError
 from sqlalchemy.orm import Session
 
+from app.api.deps import ensure_account_is_active
 from app.core import security
 from app.core.config import settings
 from app.core.rate_limit import limiter
@@ -66,8 +67,9 @@ def login_access_token(
     **Responses:**
     - `200`: Login successful. Returns `access_token`, `refresh_token`,
              `token_type`, and `expires_in`.
-    - `400`: Account exists but is deactivated.
     - `401`: Invalid email or password.
+    - `401` with `code` `user_inactive` / `organization_inactive`: the account
+      or its organization is deactivated (only after a correct password).
     - `422`: Missing required form fields.
     """
     # 1. Authenticate User
@@ -81,8 +83,7 @@ def login_access_token(
             detail="Incorrect email or password",
         )
         
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
+    ensure_account_is_active(user, status.HTTP_401_UNAUTHORIZED)
 
     # 2. Create token pair
     access_token = security.create_access_token(subject=user.email)
@@ -112,6 +113,8 @@ def refresh_access_token(
     **Responses:**
     - `200`: New token pair returned.
     - `401`: Refresh token is invalid, expired, or revoked.
+    - `401` with `code` `user_inactive` / `organization_inactive`: the account
+      or its organization was deactivated.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -141,10 +144,11 @@ def refresh_access_token(
         )
         raise credentials_exception
 
-    # Verify user still exists and is active
+    # Verify user still exists and is active (and so is its organization)
     user = db.query(User).filter(User.email == email).first()
-    if not user or not user.is_active:
+    if not user:
         raise credentials_exception
+    ensure_account_is_active(user, status.HTTP_401_UNAUTHORIZED)
 
     # Revoke the old refresh token (rotation)
     expires_at = datetime.fromtimestamp(exp, tz=timezone.utc) if exp else datetime.now(timezone.utc)

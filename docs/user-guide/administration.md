@@ -25,7 +25,9 @@ From an organization's detail you can:
 - **Deactivate** the organization.
 - **Delete** the organization.
 
-**Note:** Deleting an organization **protects patient records** — patient data is never removed. Associated user accounts are deactivated together with the organization.
+**Deactivating** is the way to retire an organization. From that moment none of its users can sign in, renew their session or use the app online, and they stop receiving the NFC keys. Reactivating the organization restores their access. Its patients and their clinical history are kept.
+
+**Deleting** is only possible for an organization that has **no patients**, no super administrator, and whose users have no audit records (for example NFC reads). Its user accounts are deleted together with it. In any other case, deactivate it instead.
 
 ---
 
