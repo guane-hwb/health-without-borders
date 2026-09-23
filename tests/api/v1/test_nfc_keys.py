@@ -874,3 +874,90 @@ class TestRotationFailureModes:
         nfc_key_service.invalidate_cache()
 
         assert nfc_key_service.maybe_auto_rotate(db_session) is None
+
+
+# ---------------------------------------------------------------------------
+# KEK mode never falls back to the environment
+# (audit be-v2-respaldo-anillo-entorno-entrega-llave-revocada, poc13)
+# ---------------------------------------------------------------------------
+
+
+def _revoke_v0_after_rotating(db_session):
+    nfc_key_service.rotate_to_new_version(db_session, actor_id=None, reason="rotate")
+    nfc_key_service.revoke_version(db_session, 0, actor_id=None, reason="leaked")
+
+
+def _failing_load(db):
+    raise RuntimeError("database unavailable")
+
+
+class TestKekModeFallback:
+    def test_db_failure_serves_the_last_ring_read(self, with_kek, db_session, monkeypatch):
+        _revoke_v0_after_rotating(db_session)
+        warm = security.nfc_key_claims(role=UserRole.doctor, db=db_session)
+        assert warm["nfc_key_version"] == 1
+
+        monkeypatch.setattr(nfc_key_service, "load_keyring", _failing_load)
+        claims = security.nfc_key_claims(role=UserRole.doctor, db=db_session)
+
+        assert claims == warm
+        assert "0" not in claims["nfc_keyring"]
+
+    def test_db_failure_with_nothing_cached_serves_no_keys(
+        self, with_kek, db_session, monkeypatch
+    ):
+        """poc13: the revoked v0 from NFC_MASTER_KEY came back as the whole ring."""
+        _revoke_v0_after_rotating(db_session)
+        nfc_key_service.invalidate_cache()
+        monkeypatch.setattr(nfc_key_service, "load_keyring", _failing_load)
+
+        claims = security.nfc_key_claims(role=UserRole.doctor, db=db_session)
+
+        # No keys at all: the app keeps the ring it already holds.
+        assert claims == {
+            "nfc_encryption_key": None, "nfc_key_version": None, "nfc_keyring": None,
+        }
+
+    def test_without_a_session_kek_mode_does_not_use_the_environment(self, with_kek):
+        nfc_key_service.invalidate_cache()
+
+        claims = security.nfc_key_claims(role=UserRole.doctor, db=None)
+
+        assert claims["nfc_keyring"] is None
+
+    def test_without_a_kek_the_environment_is_still_the_source(self):
+        claims = security.nfc_key_claims(role=UserRole.doctor, db=None)
+
+        assert claims["nfc_keyring"] == {"0": MASTER}
+
+
+def test_revoking_current_version_255_is_refused(with_kek, db_session):
+    wrapper = nfc_key_service.kek_wrapper()
+    nfc_key_service._insert_key(db_session, wrapper, version=255, material=generate_key())
+    state = db_session.query(NfcKeyringState).filter(NfcKeyringState.id == 1).one()
+    state.current_version = 255
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="highest the one-byte payload header"):
+        nfc_key_service.revoke_version(db_session, 255, actor_id=None, reason="leaked")
+
+    assert db_session.query(NfcKey).filter(NfcKey.version == 255).one().status == "live"
+    assert db_session.query(NfcKey).filter(NfcKey.version == 256).first() is None
+
+
+def test_kek_mode_warns_about_ignored_environment_versions(
+    monkeypatch, db_session
+):
+    from unittest.mock import patch
+
+    from app.core import nfc_startup
+
+    monkeypatch.setattr(settings, "NFC_KEK", KEK)
+    monkeypatch.setenv("NFC_KEY_V3", "22" * 32)
+    nfc_key_service.invalidate_cache()
+
+    with patch.object(nfc_startup.logger, "warning") as warning:
+        prepare_nfc_keyring(db_session)
+
+    assert "are ignored" in warning.call_args.args[0]
+    assert warning.call_args.args[1] == "3"

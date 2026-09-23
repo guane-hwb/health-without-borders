@@ -156,24 +156,32 @@ def _resolve_keyring(db: Optional[Any]) -> tuple[dict[int, str], Optional[int]]:
     The live ring and the version new writes use.
 
     Prefers the database when a KEK is configured and a session is available,
-    because that is the copy an operator can change at runtime. Falls back to
-    the environment otherwise, which keeps every deployment that has not
-    adopted the KEK working unchanged.
-    """
-    if db is not None:
-        try:
-            from app.services.nfc_key_service import load_keyring
+    because that is the copy an operator can change at runtime. Without a KEK
+    the environment is the only source, exactly as before.
 
-            stored = load_keyring(db)
+    With a KEK, the environment is never used: after a revocation it still
+    holds the revoked version 0 (NFC_MASTER_KEY), and handing that out as the
+    whole ring would make devices write with a leaked key and lose the live
+    ones. If the database read fails, the last ring read from it is served;
+    if there is none, no keys are — the app keeps the ring it already has.
+    """
+    kek_mode = bool(settings.NFC_KEK.strip())
+    if db is not None or kek_mode:
+        from app.services.nfc_key_service import last_known_keyring, load_keyring
+
+        try:
+            stored = load_keyring(db) if db is not None else None
             if stored is not None:
                 return stored["keys"], stored["current"]
-        except Exception:  # pragma: no cover - defensive
-            # Never let a keyring lookup break authentication. Falling back to
-            # the environment is the safe direction: worst case the device gets
-            # the pre-KEK ring.
-            logger.exception(
-                "Could not read the NFC keyring from the database; falling "
-                "back to the environment."
-            )
+        except Exception:
+            # Never let a keyring lookup break authentication.
+            logger.error("Could not read the NFC keyring from the database.")
+            db.rollback()
+        if kek_mode:
+            fallback = last_known_keyring()
+            if fallback is not None:
+                logger.warning("Serving the last NFC keyring read from the database.")
+                return fallback["keys"], fallback["current"]
+            return {}, None
 
     return settings.nfc_keyring(), settings.NFC_CURRENT_KEY_VERSION

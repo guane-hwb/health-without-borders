@@ -116,6 +116,28 @@ migrates the chip.
 keyring-aware build — the same rule as for rotation. `acknowledge_chip_impact`
 exists so this is deliberate.
 
+**If the database cannot be read** during a login or refresh, the backend
+serves the last ring it read from the database, or no keys at all (the app then
+keeps the ring it already has). It never falls back to `NFC_MASTER_KEY`: after
+revoking version 0 that variable still holds the revoked key.
+
+### Compromised device (lost or stolen tablet)
+
+Revoking a key alone does **not** cut the stolen device: its refresh token stays
+valid for up to 7 days and would receive the replacement key. In this order:
+
+1. **Deactivate the user** of that device (`PATCH /users/{id}` with
+   `{"is_active": false}`). Login, refresh and every authenticated call are
+   refused from that moment, so the device stops receiving keys.
+2. **Revoke the key version** the device held, as above.
+3. **Do not simply reactivate the account.** Reactivating revives the refresh
+   tokens issued before the deactivation, including the stolen one. Until
+   per-user session revocation exists, give the person a new account instead of
+   reactivating the old one.
+
+If the whole organization is compromised, deactivate the organization: that
+blocks all its users at once.
+
 ## 5. Generating a key
 
 ```bash
@@ -192,8 +214,15 @@ who never return stay on their original version indefinitely.
 
 ## 7. Retiring a version
 
-Retiring means removing `NFC_KEY_V<n>` from the deployment. From that moment,
-chips still on version `n` **cannot be decrypted offline**.
+With `NFC_KEK` set (the ring lives in the database), retiring a version means
+**revoking** it (`POST /patients/nfc-keys/revoke`, section 4); `NFC_KEY_V<n>`
+and `NFC_CURRENT_KEY_VERSION` are ignored in that mode, and the backend logs a
+warning at startup if they are still set. The rest of this section describes the
+environment mode (no KEK), where retiring means removing `NFC_KEY_V<n>` from the
+deployment.
+
+Either way, from that moment chips still on version `n` **cannot be decrypted
+offline**.
 
 They are not lost: with connectivity the UID still resolves the patient from the
 backend, and the next write migrates the chip. The degradation is "this chip is
@@ -237,8 +266,10 @@ bracelet-only reading is optimistic.
 
 ### Retirement is manual today
 
-Nothing creates or retires versions automatically. Both are human actions
-requiring deploy access. This is a known limitation: a control that depends on
+Nothing retires versions automatically. In environment mode, creating and
+retiring versions are human actions requiring deploy access. With a KEK, they
+are API calls (`/rotate`, `/revoke`) and `NFC_AUTO_ROTATE` can create new
+versions on a schedule, but retiring old ones is still a human decision. This is a known limitation: a control that depends on
 someone remembering a periodic chore is weak, and it is worse for a self-hosting
 adopter who will not administer keys at all. Automating the lifecycle — and the
 retention policy it would need — remains open.
