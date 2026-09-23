@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     # "global" keeps the historical behaviour (and is where preview models are
     # served); set a region to pin where the notes are processed.
     LLM_LOCATION: str = "global"
+    # Upper bounds for the external calls made while serving /sync. Without
+    # them a hung Vertex or Healthcare API call held a worker thread (and a DB
+    # connection) forever.
+    LLM_TIMEOUT_SECONDS: float = 30.0
+    FHIR_CONNECT_TIMEOUT_SECONDS: float = 5.0
+    FHIR_READ_TIMEOUT_SECONDS: float = 30.0
     
     # --- SECURITY ---
     SECRET_KEY: str

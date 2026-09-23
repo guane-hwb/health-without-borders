@@ -540,6 +540,34 @@ def get_stored_record_for_sync(
     return copy.deepcopy(existing.full_record_json or {})
 
 
+def record_fhir_delivery(
+    db: Session,
+    patient_id: str,
+    accepted_encounter_ids: list[str],
+    sent_background_hash: Optional[str],
+) -> None:
+    """
+    Record what the FHIR Store accepted, bundle by bundle.
+
+    Only accepted bundles are recorded, each on its own: a failed RDA-Paciente
+    leaves the hash untouched so the next sync re-sends it, and a failed
+    RDA-Consulta does not force the ones that were accepted to be sent (and
+    stored) again. The row is re-read under a lock and the ids are united with
+    what is stored, so a concurrent sync's deliveries are not overwritten.
+    """
+    if not accepted_encounter_ids and sent_background_hash is None:
+        return
+    patient = db.query(Patient).filter(Patient.id == patient_id).with_for_update().one()
+    if accepted_encounter_ids:
+        patient.synced_encounter_ids = sorted(
+            set(patient.synced_encounter_ids or []) | set(accepted_encounter_ids)
+        )
+    if sent_background_hash is not None:
+        patient.rda_paciente_sent = True
+        patient.background_data_hash = sent_background_hash
+    db.commit()
+
+
 def create_or_update_patient(
     db: Session,
     patient_in: PatientFullRecord,
@@ -671,10 +699,9 @@ def create_or_update_patient(
             keep_server_guardians=keep_guardians,
         )
         existing_patient.full_record_json = merged_record
-
-        # Update background hash
-        # Recompute hash on merged record since immutable fields were restored
-        existing_patient.background_data_hash = compute_background_hash(merged_record)
+        # background_data_hash is NOT updated here: it records what the FHIR
+        # Store last ACCEPTED (see record_fhir_delivery). Updating it on save
+        # meant a failed RDA-Paciente upload was never retried.
 
         # Single retirement reason for this sync — applies to every device UID
         # (patient bracelet and/or guardian cards) that changes in this call.

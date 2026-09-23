@@ -30,6 +30,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.phi_sanitizer import safe_patient_ref
+from app.core.timezone import reporting_timezone
 from app.schemas.patient import (
     AllergyCategory,
     BiologicalSex,
@@ -157,11 +158,21 @@ PROFILE_LOCATION = f"{EXT_BASE}/CareDeliveryLocationRDA"
 # ============================================================================
 
 def _fhir_datetime(dt_obj) -> str:
+    """
+    FHIR ``dateTime`` for a clinical timestamp.
+
+    The app sends local wall-clock time without an offset. Appending "Z" (the
+    previous behaviour) declared a 10:30 visit in Colombia as 10:30 UTC — five
+    hours early, sometimes on the previous day — and turned a value that did
+    carry ``-05:00`` into the invalid ``…-05:00Z``. A naive value is read in
+    the reporting zone (as the statistics already do); an aware one is kept.
+    """
     if not dt_obj:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     if isinstance(dt_obj, datetime):
-        s = dt_obj.isoformat()
-        return s + "Z" if not s.endswith("Z") and "+" not in s else s
+        if dt_obj.tzinfo is None:
+            dt_obj = dt_obj.replace(tzinfo=reporting_timezone())
+        return dt_obj.isoformat()
     if isinstance(dt_obj, date):
         return dt_obj.isoformat()
     return str(dt_obj)
