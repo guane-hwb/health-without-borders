@@ -27,13 +27,14 @@ KEY CHANGES v2.0 → v3.0 (all verified against Postman):
 import logging
 import uuid
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.phi_sanitizer import safe_patient_ref
 from app.schemas.patient import (
     AllergyCategory,
     BiologicalSex,
     ChronicConditionItem,
+    CodeSource,
     ColombianGenderGroup,
     DiagnosisType,
     FamilyRelationship,
@@ -718,10 +719,27 @@ def _build_encounter(
 # RESOURCE BUILDERS — Clinical resources
 # ============================================================================
 
-def _build_condition(diag, patient_id: str, cond_id: str) -> Dict[str, Any]:
+def _diagnosis_verification(diag, diagnosis_type: DiagnosisType) -> Tuple[str, str]:
+    """
+    ``confirmed`` only for a diagnosis a clinician recorded as confirmed
+    (type 02/03). An AI suggestion or fallback — or a legacy diagnosis with no
+    recorded source, which in practice came from the LLM — and any diagnostic
+    impression (type 01) are ``provisional``.
+    """
+    if diag.source == CodeSource.CLINICIAN and diagnosis_type in (
+        DiagnosisType.CONFIRMADO_NUEVO, DiagnosisType.CONFIRMADO_REPETIDO,
+    ):
+        return "confirmed", "Confirmed"
+    return "provisional", "Provisional"
+
+
+def _build_condition(diag, patient_id: str, cond_id: str,
+                     diagnosis_type: DiagnosisType = DiagnosisType.IMPRESION_DIAGNOSTICA,
+                     ) -> Dict[str, Any]:
     coding = [{"system": SYSTEM_CIE10, "code": diag.icd10Code, "display": diag.description}]
     if diag.icd11Code:
         coding.append({"system": SYSTEM_CIE11, "code": diag.icd11Code})
+    status_code, status_display = _diagnosis_verification(diag, diagnosis_type)
     return {
         "resourceType": "Condition",
         "id": cond_id,
@@ -729,7 +747,7 @@ def _build_condition(diag, patient_id: str, cond_id: str) -> Dict[str, Any]:
         "clinicalStatus": {"coding": [{"code": "active", "system": SYSTEM_CONDITION_CLINICAL,
                                         "display": "Active"}]},
         "verificationStatus": {"coding": [{"system": SYSTEM_CONDITION_VER_STATUS,
-                                            "code": "confirmed", "display": "Confirmed"}]},
+                                            "code": status_code, "display": status_display}]},
         "category": [{"coding": [{"system": SYSTEM_CONDITION_CATEGORY,
                                    "code": "encounter-diagnosis",
                                    "display": "Encounter Diagnosis"}]}],
@@ -755,10 +773,12 @@ def _build_condition_statement(cond: ChronicConditionItem, patient_id: str,
     }
     if cond.chronicCie10Code:
         coding = [{"system": SYSTEM_CIE10, "code": cond.chronicCie10Code,
-                   "display": cond.chronicDescription}]
+                   "display": cond.chronicCodedDisplay or cond.chronicDescription}]
         if cond.chronicCie11Code:
             coding.append({"system": SYSTEM_CIE11, "code": cond.chronicCie11Code})
-        resource["code"] = {"coding": coding}
+        # code.text carries what the professional wrote; the coding is the
+        # (possibly AI-suggested) interpretation of it.
+        resource["code"] = {"coding": coding, "text": cond.chronicDescription}
     else:
         resource["code"] = {"text": cond.chronicDescription}
     return resource
@@ -797,11 +817,13 @@ def _build_allergy_encounter(allergy, patient_id: str, encounter_id: str,
 
 
 def _build_family_member_history(fh, patient_id: str, fmh_id: str) -> Dict[str, Any]:
-    coding = [{"system": SYSTEM_CIE10, "code": fh.conditionCie10Code or ""}]
-    if fh.conditionDescription:
-        coding[0]["display"] = fh.conditionDescription
-    if fh.conditionCie11Code:
-        coding.append({"system": SYSTEM_CIE11, "code": fh.conditionCie11Code})
+    condition_code: Dict[str, Any] = {"text": fh.conditionDescription}
+    if fh.conditionCie10Code:
+        coding = [{"system": SYSTEM_CIE10, "code": fh.conditionCie10Code,
+                   "display": fh.conditionCodedDisplay or fh.conditionDescription}]
+        if fh.conditionCie11Code:
+            coding.append({"system": SYSTEM_CIE11, "code": fh.conditionCie11Code})
+        condition_code["coding"] = coding
     return {
         "resourceType": "FamilyMemberHistory",
         "id": fmh_id,
@@ -811,7 +833,7 @@ def _build_family_member_history(fh, patient_id: str, fmh_id: str) -> Dict[str, 
         "relationship": {"coding": [{"system": SYSTEM_FAMILY_REL,
                                       "code": fh.relationship.value,
                                       "display": _family_rel_display(fh.relationship)}]},
-        "condition": [{"code": {"coding": coding}}],
+        "condition": [{"code": condition_code}],
     }
 
 
@@ -1178,7 +1200,7 @@ def build_rda_consulta(patient: PatientFullRecord,
     for i, diag in enumerate(visit.diagnosis):
         cid = f"Condition-{idx['cond']}" 
         idx["cond"] += 1
-        entries.append({"resource": _build_condition(diag, pat_id, cid)})
+        entries.append({"resource": _build_condition(diag, pat_id, cid, visit.diagnosisType)})
         diag_refs.append({"reference": _ref(cid)})
         encounter_diagnoses.append({
             "id": "MainDiagnosis" if i == 0 else f"Diagnosis-{i}",

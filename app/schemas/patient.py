@@ -184,6 +184,19 @@ class FamilyRelationship(str, Enum):
     ABUELOS = "04"
 
 
+class CodeSource(str, Enum):
+    """
+    Who produced a clinical code (diagnosis or background ICD coding).
+
+    Everything the LLM produces is a *suggestion*: it is stored and sent to the
+    RDA as provisional until a clinician confirms it, and it must stay
+    distinguishable from what a professional recorded.
+    """
+    CLINICIAN = "clinician"
+    AI_SUGGESTED = "ai_suggested"
+    AI_FALLBACK = "ai_fallback"  # the LLM failed or gave an invalid code → R69
+
+
 class DiagnosisType(str, Enum):
     """Tipo de diagnóstico — Res. 866/2021 Elem. 37.3."""
     IMPRESION_DIAGNOSTICA = "01"
@@ -337,15 +350,31 @@ class FamilyHistoryItem(BaseModel):
     """Antecedente familiar estructurado — Res. 866/2021 Elems. 47.3, 47.4."""
     conditionCie10Code: Optional[str] = Field(None, description="Código CIE-10")
     conditionCie11Code: Optional[str] = Field(None, description="Código CIE-11 (opcional)")
-    conditionDescription: str = Field(..., description="Descripción de la condición")
+    conditionDescription: str = Field(
+        ..., description="Descripción de la condición, tal como la registró el profesional"
+    )
     relationship: FamilyRelationship = Field(..., description="Parentesco (Elem. 47.4)")
+    conditionCodedDisplay: Optional[str] = Field(
+        None, description="Nombre del código CIE asignado (no reemplaza la descripción)"
+    )
+    codingSource: Optional[CodeSource] = Field(
+        None, description="Origen del código: profesional o sugerencia de IA"
+    )
 
 
 class ChronicConditionItem(BaseModel):
     """Antecedente patológico estructurado — IG RDA v0.8.1 ConditionStatementRDA."""
-    chronicDescription: str = Field(..., description="Descripción de la condición crónica (entrada del frontend)")
+    chronicDescription: str = Field(
+        ..., description="Descripción de la condición crónica, tal como la registró el profesional"
+    )
     chronicCie10Code: Optional[str] = Field(None, description="Código CIE-10 — resuelto por LLM")
     chronicCie11Code: Optional[str] = Field(None, description="Código CIE-11 — resuelto por LLM (opcional)")
+    chronicCodedDisplay: Optional[str] = Field(
+        None, description="Nombre del código CIE asignado (no reemplaza la descripción)"
+    )
+    codingSource: Optional[CodeSource] = Field(
+        None, description="Origen del código: profesional o sugerencia de IA"
+    )
 
 
 class MedicationStatementItem(BaseModel):
@@ -417,6 +446,15 @@ class DiagnosisItem(BaseModel):
     icd10Code: str = Field(..., description="Código CIE-10 (Elem. 37.1)")
     icd11Code: Optional[str] = Field(None, description="Código CIE-11 (opcional)")
     description: str = Field(..., description="Nombre del diagnóstico (Elem. 37.2)")
+    source: Optional[CodeSource] = Field(
+        None,
+        description=(
+            "Origen del diagnóstico. Los generados por IA se envían al RDA como "
+            "provisionales. Ausente en registros anteriores a este campo."
+        ),
+    )
+    model: Optional[str] = Field(None, description="Modelo de IA que lo sugirió")
+    generatedAt: Optional[datetime] = Field(None, description="Momento de la sugerencia de IA")
 
 
 class RiskFactor(BaseModel):

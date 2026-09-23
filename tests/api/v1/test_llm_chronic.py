@@ -101,7 +101,7 @@ class TestCodeChronicConditionHappyPath:
             mock_term.validate_icd11.return_value = True
             result = gemini_service.code_chronic_condition("Asma")
 
-        assert result["icd10Code"] == "J45.9"
+        assert result["icd10Code"] == "J459"  # normalised to the catalog form
         assert result["icd11Code"] is None
 
 
@@ -114,8 +114,8 @@ class TestCodeChronicConditionErrorFallback:
 
         assert result["icd10Code"] == "R69"
         assert result["icd11Code"] is None
-        assert "Glaucoma" in result["description"]
-        assert "Fallo en codificación IA" in result["description"]
+        assert result["description"] == "Causas de morbilidad desconocidas y no especificadas"
+        assert "Fallo" not in result["description"]  # reason is logged, not stored
 
     def test_network_error_returns_fallback(self, gemini_service):
         """If _call raises an exception, the fallback dict is returned (R69)."""
@@ -125,7 +125,7 @@ class TestCodeChronicConditionErrorFallback:
 
         assert result["icd10Code"] == "R69"
         assert result["icd11Code"] is None
-        assert "Epilepsia" in result["description"]
+        assert result["description"] == "Causas de morbilidad desconocidas y no especificadas"
 
     def test_fallback_does_not_raise(self, gemini_service):
         """Error path must never propagate exceptions to the caller."""
@@ -151,4 +151,4 @@ class TestNoOpChronicCondition:
 
         assert result["icd10Code"] == FALLBACK_ICD10_CODE
         assert result["icd11Code"] is None
-        assert "Hipertensión" in result["description"]
+        assert result["description"] == "Causas de morbilidad desconocidas y no especificadas"

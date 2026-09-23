@@ -30,7 +30,8 @@ class TestFallbackCreation:
     def test_fallback_diagnosis_uses_R69(self):
         diag = _make_fallback_diagnosis("test reason")
         assert diag.icd10Code == "R69"
-        assert "test reason" in diag.description
+        assert "test reason" not in diag.description  # logged, not stored
+        assert diag.source == "ai_fallback"
 
     def test_fallback_is_never_Z00(self):
         """C1b: Z00.0 must NEVER appear as a fallback."""
@@ -72,7 +73,8 @@ class TestPostLLMValidation:
             result = _validate_and_fix_diagnosis(diag)
 
             assert result.icd10Code == FALLBACK_ICD10_CODE
-            assert "Z00.129" in result.description  # preserves the failed code for debugging
+            # The rejected code is logged, never written into a clinical field.
+            assert "Z00.129" not in result.description
 
     def test_invalid_icd11_stripped_not_rejected(self):
         """Invalid ICD-11 is stripped (set to None), not the whole diagnosis."""
@@ -98,7 +100,7 @@ class TestPostLLMValidation:
             })
 
             assert result["icd10Code"] == FALLBACK_ICD10_CODE
-            assert "INVENTED" in result["description"]
+            assert "INVENTED" not in result["description"]
 
     def test_dict_validation_passes_valid_code(self):
         with patch("app.services.llm.gemini.terminology") as mock_term:
@@ -143,14 +145,15 @@ class TestGeminiErrorFallback:
         result = gemini_service.code_family_history_item("Diabetes")
         assert result["icd10Code"] == "R69"
         assert result["icd10Code"] != "Z84.8"
-        assert "Diabetes" in result["description"]
+        # The clinician text lives on the item; the fallback carries R69's name.
+        assert result["description"] == "Causas de morbilidad desconocidas y no especificadas"
 
     def test_code_chronic_condition_error_returns_R69(self, gemini_service):
         gemini_service._call = MagicMock(side_effect=RuntimeError("API down"))
         result = gemini_service.code_chronic_condition("Hipertensión")
         assert result["icd10Code"] == "R69"
         assert result["icd10Code"] != "Z84.8"
-        assert "Hipertensión" in result["description"]
+        assert result["description"] == "Causas de morbilidad desconocidas y no especificadas"
 
     def test_extract_diagnoses_validates_codes(self, gemini_service):
         """Valid LLM response gets validated against catalog."""

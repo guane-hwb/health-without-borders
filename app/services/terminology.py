@@ -36,6 +36,17 @@ _MIN_ICD11_EXPECTED = 1000
 _ICD10_PATTERN = re.compile(r"^[A-Z]\d{2,4}$")
 _ICD11_PATTERN = re.compile(r"^[A-Z0-9]{2,5}(\.[A-Z0-9]{1,4})?$")
 
+# Codable concepts only. The catalogs also carry chapters ("I", "XXII", "01"),
+# blocks ("A00-A09") and ICD-11 extension codes ("XN74M"), which are keys of
+# the catalog but never a valid code for a condition.
+_ICD10_CODE_SHAPE = re.compile(r"^[A-Z]\d{2}[0-9A-Z]?$")
+_ICD11_STEM_SHAPE = re.compile(r"^[0-9A-Z][A-Z][0-9][0-9A-Z](\.[0-9A-Z]{1,2})*$")
+
+
+def normalize_icd10(code: Optional[str]) -> str:
+    """'j45.9 ' → 'J459': the catalog stores WHO codes without separators."""
+    return re.sub(r"[\s.]", "", code or "").upper()
+
 
 class TerminologyService:
     """
@@ -123,12 +134,18 @@ class TerminologyService:
         """
         Validate an ICD-10 code.
 
+        The code is normalised first (dots and spaces removed, upper-cased);
+        callers should store ``normalize_icd10(code)``. Chapters and blocks are
+        rejected even though the catalog lists them.
+
         - Full catalog loaded (>5000 codes): exact match against WHO catalog.
         - Fragment or no catalog: format-based validation [A-Z]\\d{2,4}.
         """
         if not code:
             return False
-        normalized = code.strip().upper()
+        normalized = normalize_icd10(code)
+        if not _ICD10_CODE_SHAPE.match(normalized):
+            return False
 
         if self._icd10_full_catalog:
             # Full catalog — exact match
@@ -139,7 +156,7 @@ class TerminologyService:
 
     def get_icd10_display(self, code: str) -> Optional[str]:
         """Get the Spanish display name for an ICD-10 code, or None."""
-        return self._icd10.get(code.strip().upper())
+        return self._icd10.get(normalize_icd10(code))
 
     # --- ICD-11 ---
 
@@ -150,6 +167,8 @@ class TerminologyService:
         if not code:
             return True  # ICD-11 is optional per the IG
         normalized = code.strip()
+        if not _ICD11_STEM_SHAPE.match(normalized):
+            return False
 
         if self._icd11_full_catalog:
             return normalized in self._icd11_set

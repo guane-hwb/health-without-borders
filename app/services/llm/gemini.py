@@ -15,7 +15,8 @@ from typing import List, Optional
 from google import genai
 from google.genai import types
 
-from app.schemas.patient import DiagnosisItem
+from app.core.config import settings
+from app.schemas.patient import CodeSource, DiagnosisItem
 from app.services.llm.base import FALLBACK_ICD10_CODE, FALLBACK_ICD10_DESCRIPTION
 from app.services.llm.prompts import (
     SYSTEM_INSTRUCTION,
@@ -30,41 +31,45 @@ from app.services.llm.schemas import (
     DIAGNOSIS_RESPONSE_SCHEMA,
     FAMILY_HISTORY_RESPONSE_SCHEMA,
 )
-from app.services.terminology import terminology
+from app.services.terminology import normalize_icd10, terminology
 
 logger = logging.getLogger(__name__)
 
 
 def _make_fallback_diagnosis(reason: str) -> DiagnosisItem:
-    """Create an honest fallback diagnosis (R69) with the failure reason."""
+    """
+    Honest fallback diagnosis (R69). The reason goes to the log, not into the
+    clinical description a professional will read.
+    """
+    logger.warning("Diagnosis extraction fell back to %s: %s", FALLBACK_ICD10_CODE, reason)
     return DiagnosisItem(
         icd10Code=FALLBACK_ICD10_CODE,
-        description=f"{FALLBACK_ICD10_DESCRIPTION} ({reason})",
+        description=FALLBACK_ICD10_DESCRIPTION,
+        source=CodeSource.AI_FALLBACK,
     )
 
 
-def _make_fallback_dict(description: str, reason: str) -> dict:
-    """Create an honest fallback dict (R69) for family history / chronic conditions."""
+def _make_fallback_dict(reason: str) -> dict:
+    """Honest fallback (R69) for family history / chronic conditions."""
+    logger.warning("Background coding fell back to %s: %s", FALLBACK_ICD10_CODE, reason)
     return {
         "icd10Code": FALLBACK_ICD10_CODE,
         "icd11Code": None,
-        "description": f"{description} — {FALLBACK_ICD10_DESCRIPTION} ({reason})",
+        "description": FALLBACK_ICD10_DESCRIPTION,
     }
 
 
 def _validate_and_fix_diagnosis(diag: DiagnosisItem) -> DiagnosisItem:
     """
     Validate ICD-10/11 codes against the Vulcano catalog.
-    If ICD-10 is invalid, replace the whole diagnosis with R69.
-    If ICD-11 is invalid, strip it (ICD-11 is optional).
+    ICD-10 is normalised first ('J45.9' → 'J459'); if it is still invalid, the
+    whole diagnosis becomes R69. If ICD-11 is invalid, strip it (ICD-11 is
+    optional).
     """
+    diag.icd10Code = normalize_icd10(diag.icd10Code)
     if not terminology.validate_icd10(diag.icd10Code):
-        logger.warning(
-            "ICD-10 code '%s' not found in Vulcano catalog — replacing with %s",
-            diag.icd10Code, FALLBACK_ICD10_CODE,
-        )
         return _make_fallback_diagnosis(
-            f"Código LLM '{diag.icd10Code}' no válido en catálogo MinSalud"
+            f"LLM ICD-10 code '{diag.icd10Code}' not in the catalog"
         )
 
     # ICD-11 is optional — if invalid, just strip it
@@ -80,17 +85,10 @@ def _validate_and_fix_diagnosis(diag: DiagnosisItem) -> DiagnosisItem:
 
 def _validate_and_fix_dict(result: dict) -> dict:
     """Validate ICD codes in a family history / chronic condition dict."""
-    icd10 = result.get("icd10Code", "")
+    icd10 = normalize_icd10(result.get("icd10Code"))
     if not terminology.validate_icd10(icd10):
-        logger.warning(
-            "ICD-10 code '%s' not found in Vulcano catalog — replacing with %s",
-            icd10, FALLBACK_ICD10_CODE,
-        )
-        result["icd10Code"] = FALLBACK_ICD10_CODE
-        result["description"] = (
-            f"{result.get('description', '')} "
-            f"(Código LLM '{icd10}' no válido en catálogo MinSalud)"
-        )
+        return _make_fallback_dict(f"LLM ICD-10 code '{icd10}' not in the catalog")
+    result["icd10Code"] = icd10
 
     icd11 = result.get("icd11Code")
     if icd11 and not terminology.validate_icd11(icd11):
@@ -108,7 +106,7 @@ class GeminiMedicalCodingService:
 
     def __init__(self, model_name: str, project_id: Optional[str] = None) -> None:
         self.client = genai.Client(
-            vertexai=True, project=project_id, location="global"
+            vertexai=True, project=project_id, location=settings.LLM_LOCATION
         )
         self.model_name = model_name
         logger.info(f"Gemini Medical Coding Service initialized: {model_name}")
@@ -179,7 +177,7 @@ class GeminiMedicalCodingService:
 
         except Exception as e:
             logger.error("Error extracting diagnoses with Gemini: %s", type(e).__name__)
-            return [_make_fallback_diagnosis("Fallo en extracción IA")]
+            return [_make_fallback_diagnosis("Gemini call failed")]
 
     # -----------------------------------------------------------------
     # code_family_history_item
@@ -202,7 +200,7 @@ class GeminiMedicalCodingService:
 
         except Exception as e:
             logger.error("Error coding family history with Gemini: %s", type(e).__name__)
-            return _make_fallback_dict(condition_description, "Fallo en codificación IA")
+            return _make_fallback_dict("Gemini call failed")
 
     # -----------------------------------------------------------------
     # code_chronic_condition
@@ -225,4 +223,4 @@ class GeminiMedicalCodingService:
 
         except Exception as e:
             logger.error("Error coding chronic condition with Gemini: %s", type(e).__name__)
-            return _make_fallback_dict(chronic_description, "Fallo en codificación IA")
+            return _make_fallback_dict("Gemini call failed")
