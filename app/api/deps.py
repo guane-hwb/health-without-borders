@@ -5,8 +5,9 @@ from jose import JWTError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.errors import ORGANIZATION_INACTIVE, USER_INACTIVE, ApiError
 from app.core.security import decode_token
-from app.db.models import RevokedToken, User
+from app.db.models import Organization, RevokedToken, User
 from app.db.session import get_db
 
 # Define where the frontend goes to get the token (the login URL)
@@ -62,7 +63,24 @@ def get_current_user(
     if user is None:
         raise credentials_exception
     
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
-
+    ensure_account_is_active(user, status.HTTP_403_FORBIDDEN)
     return user
+
+
+def ensure_account_is_active(user: User, status_code: int) -> None:
+    """
+    Reject a user who is deactivated or whose organization is deactivated.
+
+    Deactivating an organization is how the platform retires it, and patients
+    are global: without this check its staff kept reading every record and
+    receiving the NFC keyring. It runs on every authenticated request, on login
+    and on refresh, so a deactivation takes effect immediately.
+
+    ``status_code`` is 403 for authenticated requests (the app keeps its pending
+    records and retries later) and 401 for login/refresh (the app signs out).
+    """
+    if not user.is_active:
+        raise ApiError(status_code, "Inactive user", code=USER_INACTIVE)
+    organization = user.organization
+    if isinstance(organization, Organization) and not organization.is_active:
+        raise ApiError(status_code, "Organization is inactive.", code=ORGANIZATION_INACTIVE)

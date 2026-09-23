@@ -92,7 +92,7 @@ class TestLoginFailures:
         assert response.status_code == 401
         assert "Incorrect email or password" in response.json()["detail"]
 
-    def test_inactive_user_returns_400(self, client: TestClient, db_session):
+    def test_inactive_user_returns_401_with_code(self, client: TestClient, db_session):
         org = _create_org(db_session)
         _create_user(db_session, org.id, "inactive@hwb.org", "ValidPass123", is_active=False)
 
@@ -101,8 +101,8 @@ class TestLoginFailures:
             data={"username": "inactive@hwb.org", "password": "ValidPass123"},
         )
 
-        assert response.status_code == 400
-        assert "Inactive user" in response.json()["detail"]
+        assert response.status_code == 401
+        assert response.json() == {"detail": "Inactive user", "code": "user_inactive"}
 
     def test_empty_credentials_returns_422(self, client: TestClient, db_session):
         response = client.post("/api/v1/login/access-token", data={})
@@ -487,7 +487,7 @@ class TestJWTProtection:
         assert response.status_code == 401
         assert response.json()["detail"] == "Could not validate credentials"
 
-    def test_token_for_inactive_user_returns_400(self, client: TestClient, db_session):
+    def test_token_for_inactive_user_returns_403(self, client: TestClient, db_session):
         """A user deactivated after login can no longer use their access token."""
         from app.core.security import create_access_token
 
@@ -499,8 +499,10 @@ class TestJWTProtection:
             "/api/v1/users/me",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert response.status_code == 400
-        assert response.json()["detail"] == "Inactive user"
+        # 403, not 401: the app must not try to refresh, and must keep (and
+        # later retry) its pending records instead of marking them blocked.
+        assert response.status_code == 403
+        assert response.json() == {"detail": "Inactive user", "code": "user_inactive"}
 
     def test_token_without_jti_skips_revocation_check(self, client: TestClient, db_session):
         """Tokens minted before JTI support still authenticate an active user."""
