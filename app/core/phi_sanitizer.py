@@ -13,6 +13,7 @@ Usage:
     logger.warning("Name mismatch for %s", mask_name("Juan Pérez"))
 """
 
+import json
 import re
 from typing import Optional
 
@@ -70,11 +71,41 @@ def safe_doc_ref(doc_type: Optional[str], doc_number: Optional[str]) -> str:
     return f"{dtype}:{mask_id(doc_number)}"
 
 
+# JSON keys whose string values may carry names, identifiers, dates or free
+# clinical text in FHIR payloads and OperationOutcome diagnostics.
+_PHI_KEYS = (
+    "family|given|text|display|value|name|birthDate|diagnostics|line|city|"
+    "district|postalCode|div|expression|location"
+)
+
+
+def _summarize_operation_outcome(body: str) -> Optional[str]:
+    """Reduce a FHIR OperationOutcome to its issue severities and codes."""
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict) or parsed.get("resourceType") != "OperationOutcome":
+        return None
+    issues = parsed.get("issue") or []
+    summary = ", ".join(
+        f"{issue.get('severity', '?')}/{issue.get('code', '?')}"
+        for issue in issues
+        if isinstance(issue, dict)
+    )
+    return f"OperationOutcome issues=[{summary}]"
+
+
 def sanitize_error_body(body: Optional[str], max_length: int = 500) -> str:
     """
     Sanitize an HTTP error response body before logging. Strips patterns
     that commonly contain PHI (FHIR resource fragments, patient names,
     document numbers) and truncates to a safe length.
+
+    A FHIR ``OperationOutcome`` is reduced to its issue severities and codes:
+    its ``diagnostics`` text routinely quotes the offending values. Anything
+    else is redacted over the WHOLE body before truncating, so a value cut in
+    half by the truncation cannot slip past the patterns.
 
     This is intentionally aggressive — it's better to lose debugging detail
     in the logs than to leak clinical data.
@@ -82,24 +113,26 @@ def sanitize_error_body(body: Optional[str], max_length: int = 500) -> str:
     if not body:
         return "<empty>"
 
-    sanitized = body[:max_length]
+    outcome = _summarize_operation_outcome(body)
+    if outcome is not None:
+        return outcome[:max_length]
 
     # Strip values that might contain names or identifiers inside FHIR
     # resource fragments.  Covers both scalar strings and JSON arrays:
     #   "family": "Pérez Rodríguez"      → "family": "[REDACTED]"
     #   "given": ["Juan Carlos"]          → "given": "[REDACTED]"
     sanitized = re.sub(
-        r'"(family|given|text|display|value|name)":\s*"[^"]{4,}"',
+        rf'"({_PHI_KEYS})":\s*"[^"]{{4,}}"',
         r'"\1": "[REDACTED]"',
-        sanitized,
+        body,
     )
     sanitized = re.sub(
-        r'"(family|given|text|display|value|name)":\s*\[[^\]]{4,}\]',
+        rf'"({_PHI_KEYS})":\s*\[[^\]]{{4,}}\]',
         r'"\1": "[REDACTED]"',
         sanitized,
     )
 
-    if len(body) > max_length:
-        sanitized += f"... [truncated, {len(body)} chars total]"
+    if len(sanitized) > max_length:
+        sanitized = sanitized[:max_length] + f"... [truncated, {len(body)} chars total]"
 
     return sanitized

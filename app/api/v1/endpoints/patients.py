@@ -47,6 +47,7 @@ from app.services.nfc_key_version_service import (
 from app.services.patient_service import (
     DeviceUidConflictError,
     DuplicateIdentityError,
+    InvalidPatientDataError,
     create_or_update_patient,
     find_patient_strict,
     get_existing_history_count,
@@ -208,12 +209,19 @@ async def sync_patient(
 
     **Allowed roles:** `doctor`, `nurse`.
     """
-    if current_user.role not in {UserRole.doctor, UserRole.nurse}:
+    # Read once, up front: after a failed commit the session is rolled back and
+    # current_user is expired, so touching its attributes in the error handler
+    # below would raise again and turn a clean 4xx/500 into an unlogged crash.
+    actor_id = current_user.id
+    actor_org_id = current_user.organization_id
+    actor_role = current_user.role
+
+    if actor_role not in {UserRole.doctor, UserRole.nurse}:
         logger.warning(
             "Unauthorized patient sync actor_id=%s role=%s org_id=%s",
-            current_user.id,
-            current_user.role,
-            current_user.organization_id,
+            actor_id,
+            actor_role,
+            actor_org_id,
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -224,7 +232,7 @@ async def sync_patient(
         # A nurse may append vaccines but must not add new medical-history
         # entries. Enforce this BEFORE any LLM processing so an unauthorized
         # request never triggers diagnosis extraction.
-        if current_user.role == UserRole.nurse:
+        if actor_role == UserRole.nurse:
             existing_history_count = await asyncio.to_thread(
                 get_existing_history_count,
                 db,
@@ -237,8 +245,8 @@ async def sync_patient(
             ):
                 logger.warning(
                     "Nurse attempted to add medical history actor_id=%s org_id=%s patient_ref=%s",
-                    current_user.id,
-                    current_user.organization_id,
+                    actor_id,
+                    actor_org_id,
                     mask_id(patient_data.patientId),
                 )
                 raise HTTPException(
@@ -288,16 +296,16 @@ async def sync_patient(
         # 1. Save to DB (wrapped in to_thread to avoid blocking the event loop)
         logger.info(
             "Patient sync started actor_id=%s role=%s org_id=%s patient_ref=%s",
-            current_user.id,
-            current_user.role,
-            current_user.organization_id,
+            actor_id,
+            actor_role,
+            actor_org_id,
             mask_id(patient_data.patientId),
         )
         saved_patient, synced_encounter_ids, old_bg_hash, rda_paciente_sent = (
             await asyncio.to_thread(
                 create_or_update_patient,
-                db, patient_data, current_user.organization_id,
-                current_user.id,
+                db, patient_data, actor_org_id,
+                actor_id,
             )
         )
         
@@ -363,11 +371,22 @@ async def sync_patient(
     except HTTPException:
         raise
 
+    except InvalidPatientDataError:
+        logger.warning(
+            "Patient sync rejected by the database constraints actor_id=%s org_id=%s",
+            actor_id,
+            actor_org_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The patient record contains a value the server cannot store.",
+        )
+
     except DeviceUidConflictError:
         logger.warning(
             "Patient sync device tag conflict actor_id=%s org_id=%s",
-            current_user.id,
-            current_user.organization_id,
+            actor_id,
+            actor_org_id,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -377,8 +396,8 @@ async def sync_patient(
     except DuplicateIdentityError:
         logger.warning(
             "Patient sync duplicate identity document actor_id=%s org_id=%s",
-            current_user.id,
-            current_user.organization_id,
+            actor_id,
+            actor_org_id,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -386,12 +405,15 @@ async def sync_patient(
         )
 
     except Exception:
+        await asyncio.to_thread(db.rollback)
+        # The formatter strips exception messages (they may embed PHI), so the
+        # traceback keeps only types and frames.
         logger.exception(
             "Critical error during patient sync actor_id=%s org_id=%s",
-            current_user.id,
-            current_user.organization_id,
+            actor_id,
+            actor_org_id,
         )
-        
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail="Internal Server Error processing patient data."

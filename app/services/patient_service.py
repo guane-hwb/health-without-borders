@@ -5,7 +5,7 @@ from datetime import date
 from typing import Optional
 
 from sqlalchemy import func
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.phi_sanitizer import mask_id, safe_patient_ref
@@ -31,6 +31,15 @@ class DeviceUidConflictError(Exception):
     reusing an existing tag and a bracelet replacement that points an existing
     patient at a tag owned by someone else. The API layer maps this to a
     ``409 Conflict`` instead of a generic ``500``.
+    """
+
+
+class InvalidPatientDataError(Exception):
+    """
+    Raised when the database rejects a value the schema let through — a string
+    longer than its column, for example. It is the client's data that is wrong,
+    so the API layer maps this to a ``422`` rather than a ``500`` that the app
+    would retry forever.
     """
 
 
@@ -599,6 +608,9 @@ def create_or_update_patient(
             raise DeviceUidConflictError(
                 "A patient is already registered with this device tag."
             )
+        except DataError:
+            db.rollback()
+            raise InvalidPatientDataError("A value does not fit its database column.")
         db.refresh(existing_patient)
         return existing_patient, synced_encounter_ids, old_bg_hash, rda_paciente_sent
 
@@ -652,6 +664,9 @@ def create_or_update_patient(
             raise DeviceUidConflictError(
                 "A patient is already registered with this device tag."
             )
+        except DataError:
+            db.rollback()
+            raise InvalidPatientDataError("A value does not fit its database column.")
         db.refresh(db_patient)
         # New patient: no synced encounters, empty hash, not sent
         return db_patient, [], "", False

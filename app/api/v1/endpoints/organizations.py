@@ -3,6 +3,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -253,6 +254,8 @@ def delete_organization(
     - `403`: Caller is not a `superadmin`, or is deleting their own organization.
     - `404`: Organization not found.
     - `409`: Organization still has patients.
+    - `409`: Organization has a `superadmin` account.
+    - `409`: Its users are referenced by audit records (deactivate it instead).
     """
     if current_user.role != UserRole.superadmin:
         raise HTTPException(
@@ -286,6 +289,19 @@ def delete_organization(
             ),
         )
 
+    has_superadmin = (
+        db.query(User.id)
+        .filter(User.organization_id == org.id, User.role == UserRole.superadmin)
+        .first()
+    )
+    if has_superadmin is not None:
+        # /users never lets anyone manage a superadmin; the cascade below must
+        # not become a back door for removing one.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Organization has a superadmin account and cannot be deleted.",
+        )
+
     try:
         # Cascade: remove the organization's user accounts first (they FK to the
         # organization), then the organization itself — one atomic transaction.
@@ -296,6 +312,15 @@ def delete_organization(
         )
         db.delete(org)
         db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Users of this organization are referenced by audit records. "
+                "Deactivate the organization instead."
+            ),
+        )
     except Exception:
         db.rollback()
         logger.exception(

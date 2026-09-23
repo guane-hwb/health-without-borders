@@ -168,3 +168,32 @@ class TestSanitizeErrorBody:
         assert "Juan Carlos" not in result
         assert "María" not in result
         assert "[REDACTED]" in result
+    def test_operation_outcome_keeps_only_severity_and_code(self):
+        body = (
+            '{"resourceType": "OperationOutcome", "issue": ['
+            '{"severity": "error", "code": "invalid", '
+            '"diagnostics": "Patient.birthDate 2019-05-05 for Juan Perez"}, '
+            '"not-an-issue"]}'
+        )
+        result = sanitize_error_body(body)
+        assert result == "OperationOutcome issues=[error/invalid]"
+
+    def test_json_that_is_not_an_operation_outcome_is_redacted(self):
+        body = '["Juan Perez", {"birthDate": "2019-05-05"}]'
+        result = sanitize_error_body(body)
+        assert "2019-05-05" not in result
+        assert result.startswith('["Juan Perez"')
+
+    def test_redacts_birth_date_and_diagnostics(self):
+        body = '{"birthDate": "2019-05-05", "diagnostics": "bad value Juan"}'
+        result = sanitize_error_body(body)
+        assert "2019-05-05" not in result
+        assert "Juan" not in result
+
+    def test_value_cut_by_truncation_is_still_redacted(self):
+        """Redaction runs on the full body, so truncation cannot split a value
+        and leave its opening part unmatched by the pattern."""
+        body = '{"a": "' + "x" * 480 + '", "family": "Perez Rodriguez Largo"}'
+        result = sanitize_error_body(body, max_length=500)
+        assert "Perez" not in result
+        assert "truncated" in result

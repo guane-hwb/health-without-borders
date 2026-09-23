@@ -12,6 +12,10 @@ from app.db.session import SessionLocal
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("CreateUser")
 
+MIN_PASSWORD_LENGTH = 12
+# Values shipped in .env.example / docker-compose and other obvious defaults.
+PLACEHOLDER_PASSWORDS = {"change_me_now", "change_me", "password", "admin", "admin123"}
+
 def create_superadmin():
     db = SessionLocal()
     
@@ -24,6 +28,14 @@ def create_superadmin():
         raise RuntimeError(
             "FIRST_SUPERUSER_EMAIL and FIRST_SUPERUSER_PASSWORD must be explicitly configured."
         )
+    if len(password) < MIN_PASSWORD_LENGTH or password.lower() in PLACEHOLDER_PASSWORDS:
+        raise RuntimeError(
+            f"FIRST_SUPERUSER_PASSWORD must be at least {MIN_PASSWORD_LENGTH} characters "
+            "and must not be an example value."
+        )
+    if len(password.encode("utf-8")) > 72:
+        # bcrypt silently ignores everything past 72 bytes.
+        raise RuntimeError("FIRST_SUPERUSER_PASSWORD must be at most 72 bytes.")
     
     try:
         # Check if the root organization exists, if not create it
@@ -61,10 +73,15 @@ def create_superadmin():
         logger.info("SuperAdmin user created successfully.")
         
     except Exception as e:
-        logger.error(f"Failed to setup superadmin: {e}")
+        # Only the type: driver messages can embed the email or password hash.
+        logger.error("Failed to setup superadmin: %s", type(e).__name__)
         db.rollback()
+        raise
     finally:
         db.close()
 
 if __name__ == "__main__":
-    create_superadmin()
+    try:
+        create_superadmin()
+    except Exception:
+        sys.exit(1)
