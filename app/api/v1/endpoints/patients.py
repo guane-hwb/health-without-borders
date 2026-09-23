@@ -29,6 +29,7 @@ from app.schemas.nfc_key_version import (
 from app.schemas.patient import (
     PatientFullRecord,
     PatientSearchRequest,
+    PatientSyncRecord,
     PatientSyncResponse,
 )
 from app.services.emergency_access_service import store_emergency_access_entries
@@ -176,7 +177,7 @@ async def get_patient_by_device_uid_scan(
 
 @router.post("/sync", response_model=PatientSyncResponse, status_code=status.HTTP_201_CREATED)
 async def sync_patient(
-    patient_data: PatientFullRecord, 
+    patient_data: PatientSyncRecord, 
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):

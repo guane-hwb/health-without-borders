@@ -42,7 +42,8 @@ class EmergencyAccessEntry(BaseModel):
 class EmergencyAccessSyncRequest(BaseModel):
     """Batch of pending emergency-access entries from one device."""
 
-    entries: List[EmergencyAccessEntry] = Field(..., min_length=1)
+    # The app uploads every pending row at once; the cap only bounds a request.
+    entries: List[EmergencyAccessEntry] = Field(..., min_length=1, max_length=5000)
 
 
 class EmergencyAccessSyncResponse(BaseModel):
