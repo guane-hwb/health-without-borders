@@ -1,8 +1,64 @@
 import logging
 import logging.config
+import re
 import sys
+import traceback
 
 from app.core.config import settings
+
+# Path segment after /patients/scan/ is a bracelet UID, which the project
+# classifies as PHI (docs/infrastructure/security.md). Access logs print the
+# raw request path, so it is masked there.
+_SCAN_UID_IN_PATH = re.compile(r"(/patients/scan/)[^\s/?\"]+")
+
+
+class PhiSafeFormatter(logging.Formatter):
+    """
+    Formatter that never writes exception messages, only their types and frames.
+
+    Database driver errors carry PHI in their text: SQLAlchemy appends the
+    statement parameters and psycopg2 appends ``DETAIL: Key (col)=(value)``.
+    Any ``logger.exception`` in the app — and the traceback uvicorn prints for
+    an unhandled error — goes through this formatter, so a leak cannot depend
+    on every call site remembering to scrub its own exception.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        # A handler formatted earlier with the stock formatter may have cached
+        # the full traceback text on the record; always rebuild it here.
+        record.exc_text = None
+        return super().format(record)
+
+    def formatException(self, ei) -> str:  # noqa: N802 - logging API name
+        _, exc, _ = ei
+        blocks = []
+        seen = set()
+        while exc is not None and id(exc) not in seen:
+            seen.add(id(exc))
+            frames = "".join(traceback.format_tb(exc.__traceback__))
+            blocks.append(
+                f"Traceback (most recent call last):\n{frames}"
+                f"{type(exc).__module__}.{type(exc).__qualname__}: <message redacted>"
+            )
+            exc = exc.__cause__ or exc.__context__
+        # Innermost cause first, as Python prints chained exceptions.
+        return "\n\nDuring handling, another exception occurred:\n\n".join(
+            reversed(blocks)
+        )
+
+
+class ScanUidAccessFilter(logging.Filter):
+    """Mask the bracelet UID that /patients/scan/{uid} puts in access logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                _SCAN_UID_IN_PATH.sub(r"\1***", a) if isinstance(a, str) else a
+                for a in record.args
+            )
+        if isinstance(record.msg, str):
+            record.msg = _SCAN_UID_IN_PATH.sub(r"\1***", record.msg)
+        return True
 
 
 def setup_logging():
@@ -28,9 +84,13 @@ def setup_logging():
         "disable_existing_loggers": False,
         "formatters": {
             "standard": {
-                "format": log_format,
+                "()": PhiSafeFormatter,
+                "fmt": log_format,
                 "datefmt": "%Y-%m-%d %H:%M:%S",
             },
+        },
+        "filters": {
+            "scan_uid": {"()": ScanUidAccessFilter},
         },
         "handlers": {
             "console": {
@@ -61,6 +121,7 @@ def setup_logging():
             },
             "uvicorn.access": {
                 "handlers": ["console"],
+                "filters": ["scan_uid"],
                 "level": "INFO",
                 "propagate": False,
             },

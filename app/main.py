@@ -1,7 +1,10 @@
+import logging
+import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -14,6 +17,8 @@ from app.core.rate_limit import limiter
 from app.services.terminology import terminology
 
 setup_logging()
+
+logger = logging.getLogger(__name__)
 
 _nfc_keyring_errors = settings.nfc_keyring_errors()
 if _nfc_keyring_errors:
@@ -42,6 +47,29 @@ app = FastAPI(
 )
 
 terminology.load()
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """
+    Answer every unexpected error with a JSON 500 that carries no data.
+
+    The error id ties the response to the log line, which records only the
+    exception type — never its message, since database errors embed PHI.
+    """
+    error_id = uuid.uuid4().hex[:12]
+    logger.error(
+        "Unhandled error error_id=%s method=%s route=%s type=%s",
+        error_id,
+        request.method,
+        request.scope.get("route").path if request.scope.get("route") else "unknown",
+        type(exc).__name__,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "error_id": error_id},
+    )
+
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)

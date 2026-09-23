@@ -46,9 +46,13 @@ SQLALCHEMY_DATABASE_URI = get_database_uri()
 # Create the SQLAlchemy Engine
 # pool_pre_ping=True: Essential for Cloud SQL. It checks if the connection is alive 
 # before using it, preventing "server closed the connection unexpectedly" errors.
+# hide_parameters=True: keep statement parameters (patient names, documents,
+# password hashes...) out of the text of every database exception, which
+# would otherwise end up in tracebacks and logs.
 engine = create_engine(
     SQLALCHEMY_DATABASE_URI, 
-    pool_pre_ping=True
+    pool_pre_ping=True,
+    hide_parameters=True,
 )
 
 # Create the SessionLocal class

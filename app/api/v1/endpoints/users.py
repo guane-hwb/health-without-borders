@@ -3,11 +3,12 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.security import get_password_hash, nfc_key_claims
-from app.db.models import User, UserRole
+from app.db.models import Organization, User, UserRole
 from app.db.session import get_db
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
 
@@ -36,6 +37,7 @@ def create_user(
     - `400`: `superadmin` did not provide `organization_id`.
     - `403`: Caller is a `doctor` or `nurse`.
     - `403`: `org_admin` attempted to create an `org_admin` or `superadmin`.
+    - `404`: `superadmin` provided an `organization_id` that does not exist.
     """
     logger.info(f"User creation attempt by actor_id={current_user.id} (Role: {current_user.role}).")
 
@@ -71,6 +73,11 @@ def create_user(
                 detail="SuperAdmins must provide an 'organization_id' when creating users."
             )
         target_org_id = user_in.organization_id
+        if db.query(Organization.id).filter(Organization.id == target_org_id).first() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Organization not found.",
+            )
     else:
         # This ensures that org_admins can only create users within their own organization, regardless of the input.
         target_org_id = current_user.organization_id
@@ -247,6 +254,7 @@ def delete_user(
     - `403`: Not enough privileges, cross-org, or targeting a superadmin/admin.
     - `404`: User not found.
     - `409`: Target is the last administrator of its organization.
+    - `409`: Target is referenced by audit records (deactivate it instead).
     """
     target = _load_manageable_target(user_id, db, current_user, action="delete")
 
@@ -272,6 +280,18 @@ def delete_user(
             )
 
     db.delete(target)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # NFC telemetry and key events reference the user; deleting it would
+        # orphan the audit trail, so the database refuses.
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This user is referenced by audit records and cannot be deleted. "
+                "Deactivate the account instead."
+            ),
+        )
     logger.info("actor_id=%s hard-deleted user_id=%s", current_user.id, user_id)
     return None

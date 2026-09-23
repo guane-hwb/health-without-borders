@@ -14,6 +14,10 @@ from app.services.stats_service import build_overview
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Reporting windows are clamped to a sane range (see get_stats_overview).
+_MIN_REPORT_DATE = date(1900, 1, 1)
+_MAX_REPORT_DATE = date(2100, 12, 31)
+
 
 @router.get("/overview", response_model=StatsOverviewResponse)
 def get_stats_overview(
@@ -68,6 +72,7 @@ def get_stats_overview(
     - `400`: `date_from` is later than `date_to`.
     - `403`: Caller is a `doctor` or `nurse`.
     - `404`: Requested organization does not exist.
+    - `422`: A date falls outside 1900-01-01 … 2100-12-31.
     """
     if current_user.role not in {UserRole.superadmin, UserRole.org_admin}:
         logger.warning(
@@ -77,6 +82,18 @@ def get_stats_overview(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough privileges to view statistics.",
         )
+
+    for bound in (date_from, date_to):
+        if bound is not None and not (_MIN_REPORT_DATE <= bound <= _MAX_REPORT_DATE):
+            # The trend window is derived by date arithmetic, which overflows
+            # near date.min / date.max; no real report needs such bounds.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Dates must be between {_MIN_REPORT_DATE.isoformat()} "
+                    f"and {_MAX_REPORT_DATE.isoformat()}."
+                ),
+            )
 
     if date_from is not None and date_to is not None and date_from > date_to:
         raise HTTPException(
