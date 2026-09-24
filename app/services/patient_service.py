@@ -631,6 +631,10 @@ def create_or_update_patient(
     # it must never be persisted into the authoritative clinical record or
     # echoed back on /scan. Drop it before hashing, merging or storing.
     new_record_dump.pop("retiredDeviceReason", None)
+    # Same for the version fields: the version lives in patients.record_version
+    # and is added to /scan and /search responses, never stored in the JSON.
+    new_record_dump.pop("baseVersion", None)
+    new_record_dump.pop("recordVersion", None)
 
     # Compute the new background hash
     new_bg_hash = compute_background_hash(new_record_dump)
@@ -664,6 +668,19 @@ def create_or_update_patient(
                 safe_patient_ref(existing_patient.id),
             )
             conflicts.append("stale_payload_retired_device_uid")
+
+        # The general case: the device says which version its copy is based on.
+        # Without baseVersion (apps that predate it) nothing changes.
+        current_version = existing_patient.record_version or 1
+        if patient_in.baseVersion is not None and patient_in.baseVersion < current_version:
+            logger.warning(
+                "Stale sync payload (baseVersion %s < %s) patient=%s",
+                patient_in.baseVersion,
+                current_version,
+                safe_patient_ref(existing_patient.id),
+            )
+            stale = True
+            conflicts.append("stale_payload_base_version")
         synced_encounter_ids = list(existing_patient.synced_encounter_ids or [])
         old_bg_hash = existing_patient.background_data_hash or ""
         rda_paciente_sent = existing_patient.rda_paciente_sent
@@ -699,6 +716,7 @@ def create_or_update_patient(
             keep_server_guardians=keep_guardians,
         )
         existing_patient.full_record_json = merged_record
+        existing_patient.record_version = current_version + 1
         # background_data_hash is NOT updated here: it records what the FHIR
         # Store last ACCEPTED (see record_fhir_delivery). Updating it on save
         # meant a failed RDA-Paciente upload was never retried.

@@ -164,6 +164,14 @@ class Patient(Base):
         Boolean, default=False, nullable=False, server_default="false",
         comment="Whether the RDA-Paciente bundle has been sent at least once"
     )
+
+    record_version = Column(
+        Integer, nullable=False, default=1, server_default=text("1"),
+        comment=(
+            "Incremented by every /sync write. Clients send the version their copy "
+            "is based on (baseVersion) so an older offline copy is detected."
+        ),
+    )
     
     # Audit Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
