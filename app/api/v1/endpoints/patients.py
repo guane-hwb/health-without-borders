@@ -209,7 +209,8 @@ async def _scan(
             detail="Patient not found."
         )
 
-    record = patient_db.full_record_json or {}
+    # recordVersion travels with the response only; it is not in the stored JSON.
+    record = {**(patient_db.full_record_json or {}), "recordVersion": patient_db.record_version}
     patient_id = patient_db.id
     guardian_factor = False
 
@@ -483,6 +484,7 @@ async def sync_patient(
         # identity fields the server refused, or allergies a stale copy lacked;
         # the RDA must say exactly what HWB holds.
         saved_patient_id = str(saved_patient.id)
+        saved_record_version = saved_patient.record_version
         stored_record = saved_patient.full_record_json
         try:
             rda_source = PatientFullRecord.model_validate(stored_record)
@@ -558,6 +560,7 @@ async def sync_patient(
             fhir_status=fhir_status,
             vida_code=None,
             message="Patient synced and processed successfully",
+            record_version=saved_record_version,
             conflicts=conflicts,
         )
 
@@ -724,7 +727,7 @@ async def search_patient(
             detail="No patient found matching the provided criteria."
         )
 
-    record = patient.full_record_json
+    record = {**(patient.full_record_json or {}), "recordVersion": patient.record_version}
     # Recorded before the record is returned: no trace, no access. Search
     # never presents the guardian's card, even for a minor.
     await asyncio.to_thread(

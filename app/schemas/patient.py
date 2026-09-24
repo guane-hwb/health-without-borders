@@ -601,6 +601,25 @@ class PatientFullRecord(BaseModel):
         ),
     )
 
+    baseVersion: Optional[int] = Field(
+        None, ge=1,
+        description=(
+            "recordVersion de la copia sobre la que trabajó el dispositivo (la "
+            "recibida en /scan, /search o /sync). Si es menor que la del servidor, "
+            "el payload se trata como una copia antigua: no cambia manilla ni "
+            "acudientes, las alergias y antecedentes se unen en lugar de "
+            "reemplazarse, y se informa en `conflicts`. Si no se envía, el "
+            "comportamiento es el de siempre. Señal de transporte: no se guarda."
+        ),
+    )
+    recordVersion: Optional[int] = Field(
+        None,
+        description=(
+            "Versión del registro en el servidor; la devuelven /scan y /search. "
+            "El dispositivo debe guardarla y enviarla como baseVersion."
+        ),
+    )
+
     patientInfo: PatientInfo
     guardianInfo: GuardianInfo
     guardian2Info: Optional[GuardianInfo] = Field(None, description="Segundo guardián/tutor (opcional)")
@@ -787,6 +806,9 @@ class PatientSyncResponse(BaseModel):
     fhir_status: Optional[str] = "unknown"
     vida_code: Optional[str] = Field(None, description="Código VIDA retornado por IHCE")
     message: str
+    record_version: Optional[int] = Field(
+        None, description="Server version of the record after this sync (send it as baseVersion next time)"
+    )
     conflicts: List[str] = Field(
         default_factory=list,
         description=(
