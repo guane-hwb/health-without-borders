@@ -106,7 +106,12 @@ class GeminiMedicalCodingService:
 
     def __init__(self, model_name: str, project_id: Optional[str] = None) -> None:
         self.client = genai.Client(
-            vertexai=True, project=project_id, location=settings.LLM_LOCATION
+            vertexai=True,
+            project=project_id,
+            location=settings.LLM_LOCATION,
+            # A timeout surfaces as an exception, which every caller already
+            # turns into the R69 fallback.
+            http_options=types.HttpOptions(timeout=int(settings.LLM_TIMEOUT_SECONDS * 1000)),
         )
         self.model_name = model_name
         logger.info(f"Gemini Medical Coding Service initialized: {model_name}")

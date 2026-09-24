@@ -268,11 +268,19 @@ class TestFhirDatetime:
         result = _fhir_datetime(None)
         assert result.endswith("Z")
 
-    def test_datetime_object(self):
-        dt = datetime(2026, 1, 15, 9, 0, 0)
-        result = _fhir_datetime(dt)
-        assert "2026-01-15" in result
-        assert result.endswith("Z")
+    def test_naive_datetime_is_local_time(self):
+        """The app sends local wall-clock time; it must not become UTC (poc14)."""
+        dt = datetime(2026, 9, 22, 10, 30, 0)
+        assert _fhir_datetime(dt) == "2026-09-22T10:30:00-05:00"
+
+    def test_aware_datetimes_keep_their_offset(self):
+        from datetime import timedelta, timezone
+
+        minus_five = datetime(2026, 9, 22, 10, 30, tzinfo=timezone(timedelta(hours=-5)))
+        utc = datetime(2026, 9, 22, 15, 30, tzinfo=timezone.utc)
+        assert _fhir_datetime(minus_five) == "2026-09-22T10:30:00-05:00"
+        assert _fhir_datetime(utc) == "2026-09-22T15:30:00+00:00"
+        assert not _fhir_datetime(minus_five).endswith("Z")
 
     def test_date_object(self):
         d = date(2020, 1, 1)

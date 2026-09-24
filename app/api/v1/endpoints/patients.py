@@ -4,6 +4,7 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -62,11 +63,13 @@ from app.services.patient_service import (
     DuplicateIdentityError,
     IdentityMismatchError,
     InvalidPatientDataError,
+    compute_background_hash,
     create_or_update_patient,
     find_patient_strict,
     get_patient_by_device_uid,
     get_retired_device_uid,
     get_stored_record_for_sync,
+    record_fhir_delivery,
 )
 from app.services.record_merger import adopt_stored_item_ids
 
@@ -414,60 +417,74 @@ async def sync_patient(
             )
         )
         
-        # Determine if background data changed by comparing hashes
-        background_data_changed = (
-            rda_paciente_sent and old_bg_hash != saved_patient.background_data_hash
-        )
+        # 2. FHIR RDA Conversion — DELTA by encounter UUID + background hash.
+        # Built from the STORED record, not the payload: the payload may carry
+        # identity fields the server refused, or allergies a stale copy lacked;
+        # the RDA must say exactly what HWB holds.
+        saved_patient_id = str(saved_patient.id)
+        stored_record = saved_patient.full_record_json
+        try:
+            rda_source = PatientFullRecord.model_validate(stored_record)
+        except ValidationError:
+            logger.warning(
+                "Stored record does not validate; building the RDA from the payload "
+                "patient_ref=%s", mask_id(saved_patient_id),
+            )
+            rda_source = patient_data
+        current_bg_hash = compute_background_hash(stored_record)
+        # background_data_hash is the hash the FHIR Store last accepted.
+        background_data_changed = rda_paciente_sent and old_bg_hash != current_bg_hash
 
-        # 2. FHIR RDA Conversion — DELTA by encounter UUID + background hash
         fhir_bundles, new_encounter_ids = convert_to_fhir_rda(
-            patient_data,
+            rda_source,
             synced_encounter_ids=synced_encounter_ids,
             rda_paciente_already_sent=rda_paciente_sent,
             background_data_changed=background_data_changed,
         )
         logger.debug("Generated %d FHIR RDA Bundle(s) (delta)", len(fhir_bundles))
+        # RDA-Paciente, when generated, is first; then one RDA-Consulta per id.
+        bundle_kinds = [None] * (len(fhir_bundles) - len(new_encounter_ids)) + new_encounter_ids
+
+        # Do not hold a pooled connection while waiting on the FHIR Store.
+        await asyncio.to_thread(db.rollback)
 
         # 3. Send each Bundle to the configured FHIR Store
         fhir_status = "success" if not fhir_bundles else "unknown"
-        all_success = True
-        for i, bundle in enumerate(fhir_bundles):
+        accepted_encounter_ids: list[str] = []
+        sent_background_hash = None
+        for i, (bundle, encounter_id) in enumerate(zip(fhir_bundles, bundle_kinds)):
             result = await asyncio.to_thread(fhir_backend.send_bundle, bundle)
             bundle_status = result.get("status", "unknown")
 
             if bundle_status != "success":
                 logger.warning(
                     "Patient sync FHIR warning patient_ref=%s bundle=%d status=%s",
-                    mask_id(str(saved_patient.id)),
+                    mask_id(saved_patient_id),
                     i,
                     bundle_status,
                 )
                 fhir_status = bundle_status
-                all_success = False
+                continue
+            if fhir_status == "unknown":
+                fhir_status = "success"
+            if encounter_id is None:
+                sent_background_hash = current_bg_hash
             else:
-                if fhir_status == "unknown":
-                    fhir_status = "success"
-                logger.info(
-                    "Patient sync FHIR success patient_ref=%s bundle=%d",
-                    mask_id(str(saved_patient.id)), i
-                )
-
-        # 4. Update sync tracking ONLY if FHIR upload succeeded
-        if all_success and fhir_bundles:
-            # Append new encounter IDs to the synced set
-            updated_ids = list(set(synced_encounter_ids + new_encounter_ids))
-            saved_patient.synced_encounter_ids = updated_ids
-            saved_patient.rda_paciente_sent = True
-            await asyncio.to_thread(db.commit)
+                accepted_encounter_ids.append(encounter_id)
             logger.info(
-                "Sync tracking updated patient_ref=%s encounters=%d",
-                mask_id(str(saved_patient.id)),
-                len(updated_ids),
+                "Patient sync FHIR success patient_ref=%s bundle=%d",
+                mask_id(saved_patient_id), i
             )
+
+        # 4. Record every accepted bundle, even if another one failed.
+        await asyncio.to_thread(
+            record_fhir_delivery,
+            db, saved_patient_id, accepted_encounter_ids, sent_background_hash,
+        )
 
         return PatientSyncResponse(
             status="success",
-            internal_id=str(saved_patient.id),
+            internal_id=saved_patient_id,
             fhir_status=fhir_status,
             vida_code=None,
             message="Patient synced and processed successfully",

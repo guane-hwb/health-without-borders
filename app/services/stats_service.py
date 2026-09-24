@@ -52,7 +52,7 @@ from typing import Any, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.core.timezone import reporting_timezone
 from app.db.models import Patient
 from app.schemas.stats import (
     AllergyStat,
@@ -99,28 +99,8 @@ DateRange = Tuple[Optional[date], Optional[date]]
 # ============================================================================
 
 
-def _resolve_tz() -> tzinfo:
-    """
-    Return the reporting time zone.
-
-    Prefers the configured IANA zone. Slim container images sometimes ship
-    without the tz database; rather than crash or silently report in UTC (which
-    would push the last five hours of every Colombian month into the next one),
-    fall back to the configured fixed offset and say so in the logs.
-    """
-    try:
-        from zoneinfo import ZoneInfo
-
-        return ZoneInfo(settings.STATS_TIMEZONE)
-    except Exception:  # noqa: BLE001 - any tz-db failure must degrade, not crash
-        offset_hours = settings.STATS_TIMEZONE_FALLBACK_OFFSET_HOURS
-        logger.warning(
-            "Time zone %r unavailable; using fixed UTC%+d offset instead. "
-            "Month boundaries will drift wherever daylight saving applies.",
-            settings.STATS_TIMEZONE,
-            offset_hours,
-        )
-        return timezone(timedelta(hours=offset_hours))
+# Shared with the FHIR builder, which reads naive clinical times in the same zone.
+_resolve_tz = reporting_timezone
 
 
 def _server_date(value: Optional[datetime], tz: tzinfo) -> Optional[date]:

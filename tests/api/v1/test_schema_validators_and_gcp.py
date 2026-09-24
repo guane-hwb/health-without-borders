@@ -121,7 +121,7 @@ class TestGCPErrorSanitization:
             fhir_store_id="test-store",
         )
 
-    @patch("app.services.fhir.gcp.requests.post")
+    @patch("app.services.fhir.gcp.requests.Session.post")
     @patch("app.services.fhir.gcp.google.auth.default")
     def test_http_error_body_is_sanitized(self, mock_auth, mock_post):
         """PHI in the GCP error response body is redacted before logging."""
@@ -151,7 +151,7 @@ class TestGCPErrorSanitization:
         assert "400" in result["error"]
         assert "REDACTED" in result["error"]
 
-    @patch("app.services.fhir.gcp.requests.post")
+    @patch("app.services.fhir.gcp.requests.Session.post")
     @patch("app.services.fhir.gcp.google.auth.default")
     def test_success_returns_response(self, mock_auth, mock_post):
         """Successful bundle submission returns the GCP response."""
@@ -170,7 +170,7 @@ class TestGCPErrorSanitization:
 
         assert result["status"] == "success"
 
-    @patch("app.services.fhir.gcp.requests.post")
+    @patch("app.services.fhir.gcp.requests.Session.post")
     @patch("app.services.fhir.gcp.google.auth.default")
     def test_unexpected_error_logs_only_class_name(self, mock_auth, mock_post):
         """Unexpected (non-HTTP) errors log only the exception class, not the message."""
@@ -194,3 +194,58 @@ class TestGCPErrorSanitization:
         )
         result = backend.send_bundle({"resourceType": "Bundle"})
         assert result["status"] == "skipped"
+
+
+# ============================================================================
+# GCPHealthcareBackend — timeouts, retries, credentials
+# (audit be-v2-llamadas-externas-sin-timeout-con-conexion-abierta)
+# ============================================================================
+
+class TestGCPTransport:
+    def _backend(self) -> GCPHealthcareBackend:
+        return GCPHealthcareBackend(
+            project_id="p", dataset_id="d", fhir_store_id="s",
+        )
+
+    @patch("app.services.fhir.gcp.requests.Session.post")
+    @patch("app.services.fhir.gcp.google.auth.default")
+    def test_gcp_backend_uses_timeout(self, mock_auth, mock_post):
+        mock_auth.return_value = (MagicMock(token="t", valid=True), "p")
+
+        self._backend().send_bundle({"resourceType": "Bundle"})
+
+        assert mock_post.call_args.kwargs["timeout"] == (5.0, 30.0)
+
+    @patch("app.services.fhir.gcp.requests.Session.post")
+    @patch("app.services.fhir.gcp.google.auth.default")
+    def test_credentials_are_reused_and_refreshed_only_when_invalid(
+        self, mock_auth, mock_post
+    ):
+        creds = MagicMock(token="t", valid=False)
+        creds.refresh.side_effect = lambda request: setattr(creds, "valid", True)
+        mock_auth.return_value = (creds, "p")
+        backend = self._backend()
+
+        backend.send_bundle({"resourceType": "Bundle"})
+        backend.send_bundle({"resourceType": "Bundle"})
+
+        assert mock_auth.call_count == 1
+        assert creds.refresh.call_count == 1
+
+    def test_only_not_processed_responses_are_retried(self):
+        retry = self._backend()._session.get_adapter("https://x").max_retries
+
+        assert retry.status_forcelist == (429, 503)
+        assert retry.read == 0
+        assert "POST" in retry.allowed_methods
+
+
+def test_gemini_client_has_a_timeout(monkeypatch):
+    from app.core.config import settings
+    from app.services.llm import gemini
+
+    monkeypatch.setattr(settings, "LLM_TIMEOUT_SECONDS", 12.5)
+    with patch.object(gemini.genai, "Client", MagicMock()) as client_cls:
+        gemini.GeminiMedicalCodingService("model", project_id="p")
+
+    assert client_cls.call_args.kwargs["http_options"].timeout == 12500
