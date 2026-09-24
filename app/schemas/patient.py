@@ -830,5 +830,56 @@ class PatientSearchRequest(BaseModel):
         None, min_length=3,
         description="Nombre completo del acudiente (refuerza la verificación si el paciente tiene guardián)",
     )
+    access_reason: Optional[str] = Field(
+        None, max_length=500,
+        description=(
+            "Motivo de la consulta. Se guarda en el registro de accesos junto con "
+            "quién buscó y cuándo; la búsqueda no exige la tarjeta del acudiente."
+        ),
+    )
 
     model_config = ConfigDict(populate_by_name=True)
+
+
+class PatientScanRequest(BaseModel):
+    """
+    Body of ``POST /patients/scan``: the bracelet UID travels in the body, not
+    the URL, so it never reaches access or proxy logs (the project treats
+    device UIDs as PHI).
+    """
+    device_uid: str = Field(..., min_length=1, max_length=128,
+                            description="UID de hardware de la manilla del paciente")
+    guardian_device_uid: Optional[str] = Field(
+        None, max_length=128,
+        description="UID de la tarjeta del acudiente; obligatorio para menores",
+    )
+
+
+class PatientAccessQuery(BaseModel):
+    """Which patient's access ledger to read: server id or current bracelet UID."""
+    patient_id: Optional[str] = Field(None, min_length=1, max_length=128)
+    device_uid: Optional[str] = Field(None, min_length=1, max_length=128)
+    limit: int = Field(100, ge=1, le=500)
+
+    @model_validator(mode="after")
+    def _exactly_one_key(self):
+        if (self.patient_id is None) == (self.device_uid is None):
+            raise ValueError("Provide exactly one of patient_id or device_uid.")
+        return self
+
+
+class PatientAccessEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    actor_id: str
+    organization_id: str
+    channel: str
+    guardian_factor: bool
+    reason: Optional[str] = None
+    accessed_at: datetime
+
+
+class PatientAccessResponse(BaseModel):
+    patient_id: str
+    entries: List[PatientAccessEntry]
+

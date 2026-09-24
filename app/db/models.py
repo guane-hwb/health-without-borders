@@ -1,5 +1,6 @@
 import enum  # stdlib
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON,
@@ -12,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import relationship
@@ -405,10 +407,10 @@ class EmergencyAccessLog(Base):
     offline emergency path in the mobile app.
 
     The app records each access locally and syncs the pending entries here so
-    there is a tamper-evident central trail. It is the natural compensating
-    control for /search access to minors' records (which by design does not
-    require the guardian second factor): it leaves a record of who accessed
-    what, when, and why.
+    there is a central trail. ``user_id`` is what the device declares;
+    ``uploaded_by`` is the authenticated user whose session synced the entry.
+    Online reads (/scan, /search) are recorded server-side in
+    ``patient_access_log`` instead.
 
     Idempotency: the client generates a stable ``client_event_id`` (UUID) per
     entry. The local queue may retry, so re-sending the same entry is a no-op —
@@ -432,11 +434,22 @@ class EmergencyAccessLog(Base):
     )
     patient_name = Column(
         String, nullable=True,
-        comment="Patient name as reported by the client (decrypted before sync)",
+        comment=(
+            "No longer written (the UID identifies the record); kept for entries "
+            "synced before September 2026"
+        ),
     )
     user_id = Column(
         String, nullable=True,
         comment="Acting user reported by the client (the break-glass actor)",
+    )
+    uploaded_by = Column(
+        String, ForeignKey("users.id"), nullable=True, index=True,
+        comment=(
+            "Authenticated user whose session synced the entry. user_id is what "
+            "the device declares; this is what the server verified. Null only "
+            "for entries synced before the column existed."
+        ),
     )
     organization_id = Column(
         String, ForeignKey("organizations.id"), nullable=False,
@@ -460,3 +473,62 @@ class EmergencyAccessLog(Base):
             f"<EmergencyAccessLog(client_event_id={self.client_event_id}, "
             f"patient_uid={self.patient_uid}, reason={self.reason})>"
         )
+
+
+class PatientAccessLog(Base):
+    """
+    Append-only ledger of who opened or changed which patient record.
+
+    Patients are global: any doctor, nurse or org admin can read any record,
+    and /search returns a minor's record without the guardian's second factor.
+    Every successful /scan, /search and /sync writes one row here, with the
+    authenticated actor (never a client-declared one) and the server's clock,
+    so "who saw this child's record, when, how" has an answer.
+
+    Rows are never updated or deleted.
+    """
+    __tablename__ = "patient_access_log"
+
+    id = Column(
+        String, primary_key=True, index=True,
+        default=lambda: str(uuid.uuid4()),
+    )
+    patient_id = Column(
+        String, ForeignKey("patients.id"), nullable=False, index=True,
+        comment="Server id of the patient whose record was accessed",
+    )
+    actor_id = Column(
+        String, ForeignKey("users.id"), nullable=False, index=True,
+        comment="Authenticated user who made the request",
+    )
+    organization_id = Column(
+        String, ForeignKey("organizations.id"), nullable=False, index=True,
+        comment="Organization of the actor at the time of the access",
+    )
+    channel = Column(
+        String, nullable=False,
+        comment="'scan' (bracelet), 'search' (identity lookup) or 'sync' (write)",
+    )
+    guardian_factor = Column(
+        Boolean, nullable=False, default=False, server_default=text("false"),
+        comment="Whether the guardian's card was presented and matched",
+    )
+    reason = Column(
+        String, nullable=True,
+        comment="Reason given by the caller, when the channel accepts one",
+    )
+    accessed_at = Column(
+        DateTime(timezone=True), nullable=False, index=True,
+        # Set by the app (microseconds everywhere, so "newest first" is exact);
+        # the database default covers rows written by anything else.
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        comment="Server time of the access",
+    )
+
+    def __repr__(self):
+        return (
+            f"<PatientAccessLog(patient_id={self.patient_id}, "
+            f"actor_id={self.actor_id}, channel={self.channel})>"
+        )
+

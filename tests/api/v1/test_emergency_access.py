@@ -167,6 +167,7 @@ def test_concurrent_insert_race_counts_as_duplicate(db_session, monkeypatch):
         db_session,
         [EmergencyAccessEntry(**_entry("evt-race"))],
         organization_id="org-123",
+        uploaded_by="test-user-id",
     )
 
     assert (stored, duplicates) == (0, 1)
