@@ -11,6 +11,7 @@ env/
 # Python Cache & Build
 datalake/
 .ruff_cache/
+.mypy_cache/
 __pycache__/
 *.pyc
 *.pyo
@@ -32,6 +33,16 @@ wheels/
 
 # Secrets & Local Config
 .env
+.env.example
+.vscode/
+.idea/
+
+# Build & deploy configuration (not needed at runtime)
+Dockerfile
+.dockerignore
+.gcloudignore
+cloudbuild.yaml
+docker-compose.yml
 gcp_key.json
 *.pem
 cloud-sql-proxy

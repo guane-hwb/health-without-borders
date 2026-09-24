@@ -13,9 +13,9 @@ __pycache__/
 gcp_key.json
 *.pem
 
+# tests/ and pytest.ini are NOT ignored: step 1 of cloudbuild.yaml runs them.
 .pytest_cache/
-tests/
-pytest.ini
+.mypy_cache/
 .coverage
 htmlcov/
 
