@@ -24,12 +24,19 @@ def store_emergency_access_entries(
     db: Session,
     entries: Iterable[EmergencyAccessEntry],
     organization_id: str,
+    uploaded_by: str,
 ) -> tuple[int, int]:
     """
     Persist emergency-access entries idempotently.
 
     Returns ``(stored, duplicates)`` — the number of entries newly written and
     the number ignored because their ``client_event_id`` was already present.
+
+    ``uploaded_by`` is the authenticated user whose session sent the batch. The
+    device-declared ``user_id`` is kept next to it, never trusted instead of it:
+    an entry whose declared actor differs is stored (an audit trail must not
+    drop events) and logged. The patient name is not stored — the UID
+    identifies the record.
     """
     stored = 0
     duplicates = 0
@@ -53,8 +60,8 @@ def store_emergency_access_entries(
                 EmergencyAccessLog(
                     client_event_id=entry.client_event_id,
                     patient_uid=entry.patient_uid,
-                    patient_name=entry.patient_name,
                     user_id=entry.user_id,
+                    uploaded_by=uploaded_by,
                     organization_id=organization_id,
                     reason=entry.reason,
                     occurred_at=entry.occurred_at,
@@ -63,6 +70,11 @@ def store_emergency_access_entries(
             db.flush()
             savepoint.commit()
             stored += 1
+            if entry.user_id and entry.user_id != uploaded_by:
+                logger.warning(
+                    "Emergency access entry declares another actor uploaded_by=%s "
+                    "declared=%s", uploaded_by, entry.user_id,
+                )
         except IntegrityError:
             # Concurrent insert of the same client_event_id — treat as duplicate.
             savepoint.rollback()

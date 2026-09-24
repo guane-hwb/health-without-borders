@@ -18,6 +18,26 @@ def _engine():
     return create_engine("sqlite://")
 
 
+HEAD = "0002"
+
+
+def _upgrade(engine, revision: str) -> None:
+    from alembic import command
+
+    config = migrations.alembic_config()
+    with engine.begin() as conn:
+        config.attributes["connection"] = conn
+        command.upgrade(config, revision)
+
+
+def _database_built_without_alembic(engine) -> None:
+    """What scripts/create_tables.py produced before migrations: the 0001
+    schema with no alembic_version table (hwb-backend-dev until #55)."""
+    _upgrade(engine, "0001")
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE alembic_version"))
+
+
 def _version(engine) -> str:
     with engine.connect() as conn:
         return conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
@@ -29,7 +49,7 @@ def test_empty_database_gets_the_whole_schema():
     migrations.upgrade_to_head(engine)
 
     assert not schema_drift(engine).blocking
-    assert _version(engine) == "0001"
+    assert _version(engine) == HEAD
 
 
 def test_migrations_match_the_models():
@@ -43,14 +63,14 @@ def test_migrations_match_the_models():
     assert diff == []
 
 
-def test_existing_up_to_date_database_is_only_stamped():
+def test_database_built_by_create_tables_is_brought_to_head():
     engine = _engine()
-    Base.metadata.create_all(engine)
+    _database_built_without_alembic(engine)
 
     migrations.upgrade_to_head(engine)
-    migrations.upgrade_to_head(engine)  # idempotent
+    migrations.upgrade_to_head(engine)  # a second start changes nothing
 
-    assert _version(engine) == "0001"
+    assert _version(engine) == HEAD
     assert not schema_drift(engine).blocking
 
 
@@ -59,7 +79,11 @@ def test_old_database_gets_the_missing_table_and_column():
     engine = _engine()
     old_tables = [
         t for t in Base.metadata.sorted_tables
-        if t.name not in {"retired_device_uids", "nfc_keys", "nfc_key_events", "nfc_keyring_state"}
+        if t.name not in {
+            "retired_device_uids", "nfc_keys", "nfc_key_events", "nfc_keyring_state",
+            # created by 0002, and emergency_access_log gains a column there
+            "patient_access_log", "emergency_access_log",
+        }
     ]
     Base.metadata.create_all(engine, tables=old_tables)
     legacy = MetaData()
@@ -83,14 +107,20 @@ def test_old_database_gets_the_missing_table_and_column():
         role = conn.execute(text("SELECT device_role FROM retired_device_uids")).scalar_one()
     assert role == "patient"  # existing rows get the default
     assert "nfc_keys" in inspect(engine).get_table_names()
+    assert _version(engine) == HEAD
 
 
-def test_baseline_cannot_be_downgraded():
+def test_0002_downgrades_and_the_baseline_does_not():
     from alembic import command
 
     engine = _engine()
     migrations.upgrade_to_head(engine)
     config = migrations.alembic_config()
+
+    with engine.begin() as conn:
+        config.attributes["connection"] = conn
+        command.downgrade(config, "0001")
+    assert "patient_access_log" not in inspect(engine).get_table_names()
 
     with engine.begin() as conn:
         config.attributes["connection"] = conn

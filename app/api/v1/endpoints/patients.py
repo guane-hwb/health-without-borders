@@ -20,7 +20,7 @@ from app.core.errors import (
 )
 from app.core.phi_sanitizer import mask_id
 from app.core.rate_limit import limiter
-from app.db.models import User, UserRole
+from app.db.models import Patient, User, UserRole
 from app.db.session import get_db
 from app.schemas.emergency_access import (
     EmergencyAccessSyncRequest,
@@ -38,10 +38,21 @@ from app.schemas.nfc_key_version import (
 )
 from app.schemas.patient import (
     CodeSource,
+    PatientAccessEntry,
+    PatientAccessQuery,
+    PatientAccessResponse,
     PatientFullRecord,
+    PatientScanRequest,
     PatientSearchRequest,
     PatientSyncRecord,
     PatientSyncResponse,
+)
+from app.services.access_log_service import (
+    SCAN,
+    SEARCH,
+    SYNC,
+    list_patient_access,
+    record_patient_access,
 )
 from app.services.emergency_access_service import store_emergency_access_entries
 from app.services.fhir import fhir_backend
@@ -87,38 +98,78 @@ async def get_patient_by_device_uid_scan(
     """
     Retrieve a patient's full medical record by scanning their NFC tag or barcode.
 
+    Prefer `POST /patients/scan`, which carries the bracelet UID in the body:
+    in this route it is part of the URL and therefore of access and proxy logs.
+
     **Guardian 2FA for minors:**
     If the patient is under 18 years old, the `X-Guardian-Device-UID` header
     becomes mandatory. The scanned guardian tag must match the one registered in the
     patient's record. Access is denied if they do not match. The value travels in a
     header (not the URL) so it does not leak into access logs, proxies, or browser history.
 
+    Every successful scan is recorded in the patient access log.
+
     **Parameters:**
     - `device_uid` (path): The hardware identifier scanned from the patient's bracelet.
     - `X-Guardian-Device-UID` (header, conditional): Required only if patient is a minor.
 
-    **Allowed roles:** `doctor`, `nurse`.
+    **Allowed roles:** `doctor`, `nurse`, `org_admin`.
 
     **Responses:**
     - `200`: Full patient record returned.
-    - `403`: Caller is not `doctor` or `nurse`.
+    - `403`: Caller is not `doctor`, `nurse` or `org_admin`.
     - `403`: Patient is a minor and the `X-Guardian-Device-UID` header was not provided.
     - `403`: Patient is a minor and guardian tag does not match.
     - `404`: No patient registered with that device UID.
     - `410`: The tag was retired (lost/damaged/replaced) and no longer belongs to
       HWB. Body: `{"code": "device_retired", "reason": ..., "message": ...}`.
     """
+    return await _scan(device_uid, guardian_device_uid, db, current_user)
 
+
+@router.post("/scan", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
+async def scan_patient(
+    body: PatientScanRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Same as `GET /patients/scan/{device_uid}`, with both UIDs in the body so
+    neither appears in any URL or access log. Same roles, guardian rule,
+    access logging and responses.
+    """
+    return await _scan(body.device_uid, body.guardian_device_uid, db, current_user)
+
+
+def _is_minor(birth_date: Optional[date]) -> bool:
+    """Unknown birth date counts as a minor: the guardian check is the safe side."""
+    if birth_date is None:
+        return True
+    today = date.today()
+    age = today.year - birth_date.year - (
+        (today.month, today.day) < (birth_date.month, birth_date.day)
+    )
+    return age < 18
+
+
+async def _scan(
+    device_uid: str,
+    guardian_device_uid: Optional[str],
+    db: Session,
+    current_user: User,
+) -> dict:
     if current_user.role not in {UserRole.doctor, UserRole.nurse, UserRole.org_admin}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access Denied: Only medical staff can view patient records."
         )
-    
+    actor_id = current_user.id
+    actor_org_id = current_user.organization_id
+
     logger.info(
         "Patient scan request actor_id=%s org_id=%s device_ref=%s",
-        current_user.id,
-        current_user.organization_id,
+        actor_id,
+        actor_org_id,
         mask_id(device_uid),
     )
     
@@ -133,7 +184,7 @@ async def get_patient_by_device_uid_scan(
         if retired is not None:
             logger.info(
                 "Scan of retired device tag org_id=%s device_ref=%s reason=%s",
-                current_user.organization_id,
+                actor_org_id,
                 mask_id(device_uid),
                 retired.reason,
             )
@@ -150,48 +201,58 @@ async def get_patient_by_device_uid_scan(
             )
         logger.warning(
             "Patient scan not found org_id=%s device_ref=%s",
-            current_user.organization_id,
+            actor_org_id,
             mask_id(device_uid),
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Patient not found."
         )
-    
-    # Calculate patient's age to determine if guardian authentication is required
-    today = date.today()
-    dob = patient_db.birth_date
-    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
-    # If patient is a minor, require guardian device UID and validate it against the stored guardian info
-    if age < 18:
+    record = patient_db.full_record_json or {}
+    patient_id = patient_db.id
+    guardian_factor = False
+
+    # Minors (or patients with no recorded birth date) need the guardian's card.
+    if _is_minor(patient_db.birth_date):
         if not guardian_device_uid:
             raise ApiError(
                 status.HTTP_403_FORBIDDEN,
                 "Guardian bracelet scan required for minors.",
                 code=GUARDIAN_REQUIRED,
             )
-        
-        # Extract the stored guardian device UIDs from the patient's full record JSON
-        stored_guardian_uid = patient_db.full_record_json.get("guardianInfo", {}).get("device_uid")
-        stored_guardian2_uid = patient_db.full_record_json.get("guardian2Info", {}).get("device_uid") if patient_db.full_record_json.get("guardian2Info") else None
 
-        # Accept either guardian's tag
-        valid_uids = {uid for uid in [stored_guardian_uid, stored_guardian2_uid] if uid}
+        # Accept either guardian's tag. A missing guardian block is tolerated
+        # (it simply matches nothing) instead of raising a 500.
+        valid_uids = {
+            (record.get(slot) or {}).get("device_uid")
+            for slot in ("guardianInfo", "guardian2Info")
+        } - {None, ""}
         if guardian_device_uid not in valid_uids:
             logger.warning(
                 "Guardian validation failed actor_id=%s org_id=%s patient_ref=%s",
-                current_user.id,
-                current_user.organization_id,
-                mask_id(patient_db.id),
+                actor_id,
+                actor_org_id,
+                mask_id(patient_id),
             )
             raise ApiError(
                 status.HTTP_403_FORBIDDEN,
                 "Guardian tag mismatch. Access denied.",
                 code=GUARDIAN_MISMATCH,
             )
+        guardian_factor = True
 
-    return patient_db.full_record_json
+    # Recorded before the record is returned: no trace, no access.
+    await asyncio.to_thread(
+        record_patient_access,
+        db,
+        patient_id=patient_id,
+        actor_id=actor_id,
+        organization_id=actor_org_id,
+        channel=SCAN,
+        guardian_factor=guardian_factor,
+    )
+    return record
 
 
 def _normalized_text(value: Optional[str]) -> str:
@@ -432,6 +493,15 @@ async def sync_patient(
             )
             rda_source = patient_data
         current_bg_hash = compute_background_hash(stored_record)
+
+        await asyncio.to_thread(
+            record_patient_access,
+            db,
+            patient_id=saved_patient_id,
+            actor_id=actor_id,
+            organization_id=actor_org_id,
+            channel=SYNC,
+        )
         # background_data_hash is the hash the FHIR Store last accepted.
         background_data_changed = rda_paciente_sent and old_bg_hash != current_bg_hash
 
@@ -604,6 +674,12 @@ async def search_patient(
       `last_names` too.
     - `guardian_name` (optional): If the patient has a registered guardian,
       providing this adds an extra layer of verification. Partial match is allowed.
+    - `access_reason` (optional): Why the record is being looked up. Stored in
+      the patient access log.
+
+    Every successful lookup is recorded in the patient access log (actor,
+    organization, time, reason). The guardian's card is not required here, so
+    for a minor that log entry is the trace of the access.
 
     **Security:**
     - If the criteria match more than one patient (ambiguous), the endpoint 
@@ -648,7 +724,20 @@ async def search_patient(
             detail="No patient found matching the provided criteria."
         )
 
-    return patient.full_record_json
+    record = patient.full_record_json
+    # Recorded before the record is returned: no trace, no access. Search
+    # never presents the guardian's card, even for a minor.
+    await asyncio.to_thread(
+        record_patient_access,
+        db,
+        patient_id=patient.id,
+        actor_id=current_user.id,
+        organization_id=current_user.organization_id,
+        channel=SEARCH,
+        guardian_factor=False,
+        reason=criteria.access_reason,
+    )
+    return record
 
 
 @router.post(
@@ -699,6 +788,7 @@ async def sync_emergency_access(
         db,
         payload.entries,
         current_user.organization_id,
+        current_user.id,
     )
 
     return EmergencyAccessSyncResponse(
@@ -985,3 +1075,64 @@ def rotate_nfc_key(
     return NfcKeyRotateResponse(
         new_version=new_version, previous_version=previous
     )
+
+
+@router.post("/access-log", response_model=PatientAccessResponse)
+async def get_patient_access_log(
+    query: PatientAccessQuery,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Who opened or changed a patient's record: every `/scan`, `/search` and
+    `/sync`, newest first, with the authenticated actor, their organization at
+    the time, the channel, whether the guardian's card was presented and the
+    reason given (search).
+
+    Identify the patient by server `patient_id` or by the bracelet's current
+    `device_uid`, in the body (never the URL).
+
+    **Allowed roles:**
+    - `superadmin`: every access.
+    - `org_admin`: accesses made by users of their own organization.
+
+    **Responses:**
+    - `200`: The entries (at most `limit`, up to 500).
+    - `403`: Caller is not `superadmin` or `org_admin`.
+    - `404`: No patient with that id or bracelet.
+    - `422`: Neither or both of `patient_id` / `device_uid` given.
+    """
+    if current_user.role not in {UserRole.superadmin, UserRole.org_admin}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only administrators can read the access log.",
+        )
+
+    if query.device_uid is not None:
+        patient = await asyncio.to_thread(get_patient_by_device_uid, db, query.device_uid)
+    else:
+        patient = await asyncio.to_thread(
+            lambda: db.query(Patient).filter(Patient.id == query.patient_id).first()
+        )
+    if patient is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found.")
+
+    scope = None if current_user.role == UserRole.superadmin else current_user.organization_id
+    rows = await asyncio.to_thread(
+        list_patient_access,
+        db,
+        patient_id=patient.id,
+        actor_organization_id=scope,
+        limit=query.limit,
+    )
+    logger.info(
+        "Access log read actor_id=%s patient_ref=%s entries=%d",
+        current_user.id,
+        mask_id(patient.id),
+        len(rows),
+    )
+    return PatientAccessResponse(
+        patient_id=patient.id,
+        entries=[PatientAccessEntry.model_validate(row) for row in rows],
+    )
+
