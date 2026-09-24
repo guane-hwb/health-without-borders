@@ -18,6 +18,7 @@ from app.core.logging import setup_logging
 from app.core.nfc_startup import prepare_nfc_keyring_at_startup
 from app.core.rate_limit import limiter
 from app.core.request_limits import BodySizeLimitMiddleware
+from app.db.schema_check import report_schema_drift_at_startup
 from app.services.terminology import terminology
 
 setup_logging()
@@ -37,7 +38,10 @@ if _nfc_keyring_errors:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Prepare the NFC keyring before serving traffic."""
+    """Report schema drift, then prepare the NFC keyring, before serving traffic."""
+    # First, and read-only: if the keyring step below refuses to start because
+    # a table is missing, the log already says which ones.
+    report_schema_drift_at_startup()
     prepare_nfc_keyring_at_startup()
     yield
 

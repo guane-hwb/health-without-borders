@@ -134,6 +134,7 @@ def test_unhandled_error_is_a_json_500_without_details(db_session, monkeypatch):
         raise RuntimeError(f"secret {SYNTHETIC_NAME}")
 
     monkeypatch.setattr("app.main.prepare_nfc_keyring_at_startup", lambda: None)
+    monkeypatch.setattr("app.main.report_schema_drift_at_startup", lambda: None)
     app.dependency_overrides[get_current_user] = _explode
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.get("/api/v1/users/me")
