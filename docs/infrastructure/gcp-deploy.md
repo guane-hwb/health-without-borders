@@ -268,7 +268,11 @@ If using the default Compute service account, ensure IAM is explicitly scoped an
 
 ## 8. Data Initialization (Schema & Seeding)
 
-Because our database lacks a public IP for security reasons, initializing the database from a local laptop requires a temporary security bypass. We will temporarily assign a public IP, run our scripts securely through the encrypted Auth Proxy, and then lock the instance down again.
+**Schema: automatic.** The service applies the database migrations (Alembic, `migrations/`) every time a new revision starts, before it serves traffic, using its own Cloud SQL connection. There is nothing to run by hand and the database never needs a public IP for it. A PostgreSQL advisory lock makes concurrent instances wait for each other. If a migration fails, the new revision does not start and Cloud Run keeps serving the previous one; the startup log says `Database migration failed: <ErrorType>`. Right after the migration, the startup log reports whether any table or column the models expect is missing (`Schema check: ...`). Set `RUN_MIGRATIONS_ON_STARTUP=false` only to disable this deliberately.
+
+The first migration (`0001`) is a baseline that creates only what is missing, so a database built earlier with `scripts/create_tables.py` is simply recorded as being at `0001`.
+
+**Seeding the first superadmin: manual, once.** Because our database lacks a public IP for security reasons, running `scripts/create_generic_user.py` from a local laptop requires a temporary security bypass. We will temporarily assign a public IP, run the script securely through the encrypted Auth Proxy, and then lock the instance down again.
 
 **1. Temporarily Open the Vault (Assign Public IP):**
 ```bash
@@ -286,15 +290,13 @@ In a new terminal window, open the secure encrypted tunnel:
 
 ```
 
-**3. Execute Initialization Scripts:**
+**3. Execute the Seeding Script:**
 In a **separate terminal window**, force the `DATABASE_URL` to route through the local tunnel:
 
 ```bash
 export DATABASE_URL="postgresql://postgres:<DB_PASSWORD>@127.0.0.1:5433/<DB_NAME>"
 
-uv run python scripts/create_tables.py
 uv run python scripts/create_generic_user.py
-uv run python scripts/load_catalogs.py
 
 ```
 

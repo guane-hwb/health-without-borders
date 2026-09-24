@@ -230,8 +230,8 @@ online-only until someone uses it once with a signal".
 
 ### Telemetry storage
 
-Sightings land in `nfc_key_version_observations`, created by
-`scripts/create_tables.py` like every other table. It is **append-only**: the
+Sightings land in `nfc_key_version_observations`, created by the
+database migrations like every other table. It is **append-only**: the
 device keeps one row per chip, the server keeps every sighting, because the gap
 between consecutive sightings of the same UID is what a retention period has to
 be sized from.
