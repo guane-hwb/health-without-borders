@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
-from jose import JWTError
+from jwt import PyJWTError
 from sqlalchemy.orm import Session
 
 from app.api.deps import ensure_account_is_active
@@ -132,7 +132,7 @@ def refresh_access_token(
         if not email or token_type != "refresh" or not jti:
             raise credentials_exception
 
-    except JWTError:
+    except PyJWTError:
         raise credentials_exception
 
     # Check if the refresh token has been revoked
@@ -212,7 +212,7 @@ def logout(
                 detail="Token missing JTI claim",
             )
 
-    except JWTError:
+    except PyJWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
@@ -249,7 +249,7 @@ def logout(
                     )
                     db.add(RevokedToken(jti=refresh_jti, expires_at=refresh_expires_at))
                     db.commit()
-        except JWTError:
+        except PyJWTError:
             # Invalid/expired refresh token — nothing to revoke, ignore.
             pass
 

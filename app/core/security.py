@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Union
 
-from jose import jwt
+import jwt
 from passlib.context import CryptContext
 
 from app.core.config import settings
@@ -69,9 +69,16 @@ def create_refresh_token(
 def decode_token(token: str) -> dict:
     """
     Decode and validate a JWT token, returning the full claims dict.
-    Raises jose.JWTError on invalid/expired tokens.
+    Raises jwt.PyJWTError on invalid/expired tokens.
+
+    ``exp`` is mandatory: a signed token without it would never expire.
     """
-    return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    return jwt.decode(
+        token,
+        settings.SECRET_KEY,
+        algorithms=[settings.ALGORITHM],
+        options={"require": ["exp"]},
+    )
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

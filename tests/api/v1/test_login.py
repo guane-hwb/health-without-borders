@@ -356,7 +356,7 @@ class TestLogout:
         """Logout with a valid JWT that has no jti claim returns 401."""
         from datetime import datetime, timedelta, timezone
 
-        from jose import jwt
+        import jwt
 
         from app.core.config import settings
 
@@ -456,7 +456,7 @@ class TestJWTProtection:
     def _encode(self, claims: dict) -> str:
         from datetime import datetime, timedelta, timezone
 
-        from jose import jwt
+        import jwt
 
         from app.core.config import settings
 
@@ -465,6 +465,24 @@ class TestJWTProtection:
             settings.SECRET_KEY,
             algorithm=settings.ALGORITHM,
         )
+
+    def test_token_without_exp_returns_401(self, client: TestClient, db_session):
+        """A signed token with no expiry must not be accepted forever."""
+        import jwt
+
+        from app.core.config import settings
+
+        org = _create_org(db_session)
+        _create_user(db_session, org.id, "noexp@hwb.org", "ValidPass123")
+        token = jwt.encode(
+            {"sub": "noexp@hwb.org", "type": "access", "jti": "no-exp-jti"},
+            settings.SECRET_KEY,
+            algorithm=settings.ALGORITHM,
+        )
+
+        response = client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 401
 
     def test_token_without_subject_returns_401(self, client: TestClient, db_session):
         token = self._encode({"type": "access", "jti": "no-sub-jti"})

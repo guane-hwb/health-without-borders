@@ -1,7 +1,7 @@
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError
+from jwt import PyJWTError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -44,7 +44,7 @@ def get_current_user(
         if token_type != "access":
             raise credentials_exception
 
-    except JWTError:
+    except PyJWTError:
         raise credentials_exception
 
     # Check token revocation

@@ -41,6 +41,12 @@ jobs:
       - name: Type check
         run: uv run mypy app/core/rate_limit.py app/core/logging.py --ignore-missing-imports
 
+      - name: Audit production dependencies
+        # Fails on any known vulnerability in what ships in the image.
+        run: |
+          uv export --no-dev --no-hashes --format requirements-txt -o requirements-prod.txt
+          uvx pip-audit -r requirements-prod.txt --no-deps --disable-pip
+
       - name: Run tests
         env:
           SECRET_KEY: "dummy_secret_for_ci_only"

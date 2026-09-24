@@ -22,6 +22,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: uv sync
+        # mkdocs lives in the "docs" dependency group, outside the production image.
+        run: uv sync --group docs
       - name: Deploy MkDocs
         run: uv run mkdocs gh-deploy --force
