@@ -62,6 +62,7 @@ def client(
     # directly in test_nfc_keys.py.
     monkeypatch.setattr("app.main.prepare_nfc_keyring_at_startup", lambda: None)
     monkeypatch.setattr("app.main.report_schema_drift_at_startup", lambda: None)
+    monkeypatch.setattr("app.main.run_migrations_at_startup", lambda: None)
 
     def override_get_db():
         try:

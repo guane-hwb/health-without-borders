@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     # them a hung Vertex or Healthcare API call held a worker thread (and a DB
     # connection) forever.
     LLM_TIMEOUT_SECONDS: float = 30.0
+    # Apply Alembic migrations when the service starts (app/db/migrations.py).
+    RUN_MIGRATIONS_ON_STARTUP: bool = True
     FHIR_CONNECT_TIMEOUT_SECONDS: float = 5.0
     FHIR_READ_TIMEOUT_SECONDS: float = 30.0
     

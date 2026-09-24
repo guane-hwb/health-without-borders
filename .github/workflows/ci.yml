@@ -47,6 +47,17 @@ jobs:
           uv export --no-dev --no-hashes --format requirements-txt -o requirements-prod.txt
           uvx pip-audit -r requirements-prod.txt --no-deps --disable-pip
 
+      - name: Migrations match the models
+        env:
+          SECRET_KEY: "dummy_secret_for_ci_only"
+          DB_PASS: "dummy_pass"
+          DATABASE_URL: "sqlite:///./migrations-check.db"
+          FHIR_BACKEND: "noop"
+          LLM_BACKEND: "noop"
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+
       - name: Run tests
         env:
           SECRET_KEY: "dummy_secret_for_ci_only"

@@ -115,9 +115,8 @@ uv sync
 # 4. Start local database
 docker run --name hwb-db-local -e POSTGRES_PASSWORD=password -e POSTGRES_DB=hwb_local -p 5432:5432 -d postgres:15
 
-# 5. Initialize schema and catalogs
+# 5. Initialize the schema (the server also applies migrations on startup)
 uv run python scripts/create_tables.py
-uv run python scripts/load_catalogs.py
 
 # 6. Run the server
 uv run uvicorn app.main:app --reload

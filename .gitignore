@@ -25,3 +25,6 @@ Thumbs.db
 
 .vscode/
 .idea/
+# Local SQLite files created by tests and CI checks
+test.db
+migrations-check.db

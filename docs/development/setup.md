@@ -94,7 +94,7 @@ To avoid installing PostgreSQL directly on your host operating system and managi
 
 A fresh Docker database starts completely empty. You must create the schema and seed the initial data to test the API locally.
 
-1. **Create Database Tables:** Generates the relational schema based on the SQLAlchemy models.
+1. **Create Database Tables:** Applies the Alembic migrations (`alembic upgrade head`). The server also does this on startup, so this step is optional.
 
     ```bash
     uv run python scripts/create_tables.py
@@ -158,3 +158,20 @@ uv run pytest
 - **`Terminology file not found` warning at startup:**
     - Run `uv run python scripts/sync_terminology.py --local ...` with the CodeSystem JSONs, or download them from [vulcano.ihcecol.gov.co](https://vulcano.ihcecol.gov.co/).
     - If the catalog files are missing, the app still runs but LLM-generated ICD codes will not be validated (graceful degradation).
+
+## Changing the database schema
+
+The schema is versioned with Alembic (`migrations/versions/`). When you change a model in `app/db/models.py`:
+
+1. Generate a migration against a local database that is at the latest revision:
+
+    ```bash
+    uv run alembic upgrade head
+    uv run alembic revision --autogenerate -m "short description"
+    ```
+
+2. Review the generated file. Autogenerate does not detect everything (renames, data backfills), and a column added as `NOT NULL` to an existing table needs a `server_default` or a backfill.
+3. Commit it with the model change. CI runs `alembic check` and fails if the models and the migrations disagree.
+
+Deployed services apply new migrations themselves on startup.
+

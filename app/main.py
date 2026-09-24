@@ -18,6 +18,7 @@ from app.core.logging import setup_logging
 from app.core.nfc_startup import prepare_nfc_keyring_at_startup
 from app.core.rate_limit import limiter
 from app.core.request_limits import BodySizeLimitMiddleware
+from app.db.migrations import run_migrations_at_startup
 from app.db.schema_check import report_schema_drift_at_startup
 from app.services.terminology import terminology
 
@@ -38,9 +39,12 @@ if _nfc_keyring_errors:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Report schema drift, then prepare the NFC keyring, before serving traffic."""
-    # First, and read-only: if the keyring step below refuses to start because
-    # a table is missing, the log already says which ones.
+    """Migrate, report schema drift, then prepare the NFC keyring, before serving traffic."""
+    # A failed migration stops the revision from starting; Cloud Run keeps
+    # serving the previous one.
+    run_migrations_at_startup()
+    # Read-only: if anything is still missing (or the keyring step below
+    # refuses to start), the log says which tables and columns.
     report_schema_drift_at_startup()
     prepare_nfc_keyring_at_startup()
     yield

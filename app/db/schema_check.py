@@ -38,7 +38,8 @@ class SchemaDrift:
 def schema_drift(engine: Engine) -> SchemaDrift:
     """Compare table and column names only; no data is read."""
     inspector = inspect(engine)
-    existing = set(inspector.get_table_names())
+    # Alembic's bookkeeping table is expected and not part of the models.
+    existing = set(inspector.get_table_names()) - {"alembic_version"}
     expected = {table.name: table for table in Base.metadata.sorted_tables}
 
     drift = SchemaDrift(
