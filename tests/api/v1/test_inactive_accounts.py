@@ -118,12 +118,20 @@ def test_deactivated_org_users_are_blocked_everywhere(client, db_session, clinic
     assert sync.json()["code"] == "organization_inactive"
 
 
-def test_reactivated_org_users_regain_access(client, db_session, clinic):
+def test_reactivated_org_users_sign_in_again(client, db_session, clinic):
+    """Deactivation revokes every session: reactivating restores the accounts,
+    not the tokens issued before (a stolen device's among them)."""
     _set_org_active(client, clinic, False)
     _set_org_active(client, clinic, True)
 
-    assert _login(client, clinic["doctor_email"]).status_code == 200
-    assert client.get("/api/v1/users/me", headers=_bearer(clinic["doc"])).status_code == 200
+    assert client.get("/api/v1/users/me", headers=_bearer(clinic["doc"])).status_code == 401
+    refresh = client.post(
+        "/api/v1/login/refresh", json={"refresh_token": clinic["doc"]["refresh_token"]}
+    )
+    assert refresh.status_code == 401
+    login = _login(client, clinic["doctor_email"])
+    assert login.status_code == 200
+    assert client.get("/api/v1/users/me", headers=_bearer(login.json())).status_code == 200
 
 
 def test_refresh_of_deactivated_user_carries_the_code(client, db_session, clinic):

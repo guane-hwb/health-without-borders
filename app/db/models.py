@@ -63,6 +63,21 @@ class User(Base):
     # Allowed roles: "superadmin", "org_admin", "doctor", "nurse"
     role = Column(SAEnum(UserRole), nullable=False, default=UserRole.doctor)
     is_active = Column(Boolean, default=True)
+    token_version = Column(
+        Integer, nullable=False, default=0, server_default=text("0"),
+        comment=(
+            "Stamped into every token as 'tv'. Incrementing it invalidates every "
+            "token issued before (deactivation, revoke-sessions, refresh reuse)."
+        ),
+    )
+    created_at = Column(
+        DateTime(timezone=True), nullable=True,
+        # No server default on purpose: rows that predate the column stay NULL
+        # instead of getting the migration time, which would invalidate every
+        # token issued before the deploy.
+        default=lambda: datetime.now(timezone.utc),
+        comment="Account creation time; NULL for accounts created before September 2026",
+    )
 
     # Relationships
     organization = relationship("Organization", back_populates="users")

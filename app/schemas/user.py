@@ -1,8 +1,22 @@
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.db.models import UserRole
+
+#: bcrypt only reads the first 72 bytes; anything after them is silently ignored.
+MAX_PASSWORD_BYTES = 72
+
+
+def check_password_length(password: str) -> str:
+    if len(password.encode("utf-8")) > MAX_PASSWORD_BYTES:
+        raise ValueError(f"Password must be at most {MAX_PASSWORD_BYTES} bytes.")
+    return password
+
+
+def normalize_email(email: str) -> str:
+    """Emails are case-insensitive: store and compare them in lower case."""
+    return email.strip().lower()
 
 
 class UserBase(BaseModel):
@@ -18,6 +32,9 @@ class UserCreate(UserBase):
     """
     password: str = Field(..., min_length=8, description="Temporary password")
     organization_id: Optional[str] = Field(None, description="Required only if superadmin is creating an org_admin")
+
+    _normalize_email = field_validator("email")(normalize_email)
+    _check_password = field_validator("password")(check_password_length)
 
 class UserUpdate(BaseModel):
     """Payload to toggle a user's active state (soft deactivate)."""

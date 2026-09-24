@@ -33,7 +33,7 @@ def upgrade() -> None:
         op.create_table('nfc_keyring_state',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('current_version', sa.Integer(), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.PrimaryKeyConstraint('id')
         )
 
@@ -50,7 +50,7 @@ def upgrade() -> None:
     if 'revoked_tokens' not in existing:
         op.create_table('revoked_tokens',
         sa.Column('jti', sa.String(), nullable=False, comment='JWT ID claim from the revoked token'),
-        sa.Column('revoked_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('revoked_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False, comment='Original token expiry — safe to delete row after this time'),
         sa.PrimaryKeyConstraint('jti')
         )
@@ -65,7 +65,7 @@ def upgrade() -> None:
         sa.Column('organization_id', sa.String(), nullable=False, comment='Organization of the authenticated caller that synced the entry'),
         sa.Column('reason', sa.String(), nullable=False, comment='Why the emergency access happened (e.g. guardian_absent_offline)'),
         sa.Column('occurred_at', sa.String(), nullable=False, comment='Timestamp as reported by the client (ISO 8601; may be naive local time)'),
-        sa.Column('received_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='Server receipt time — the defensible audit timestamp'),
+        sa.Column('received_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False, comment='Server receipt time — the defensible audit timestamp'),
         sa.ForeignKeyConstraint(['organization_id'], ['organizations.id'], ),
         sa.PrimaryKeyConstraint('id')
         )
@@ -96,8 +96,8 @@ def upgrade() -> None:
         sa.Column('synced_encounter_ids', sa.JSON(), server_default='[]', nullable=False, comment='List of encounterIdentifier UUIDs already sent to FHIR Store'),
         sa.Column('background_data_hash', sa.String(length=64), nullable=True, comment='SHA-256 hash of background data fields (patientInfo, guardianInfo, allergies, etc.)'),
         sa.Column('rda_paciente_sent', sa.Boolean(), server_default='false', nullable=False, comment='Whether the RDA-Paciente bundle has been sent at least once'),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=True),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=True),
         sa.ForeignKeyConstraint(['organization_id'], ['organizations.id'], ),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('frontend_patient_id', 'organization_id', name='uq_patient_frontend_id_org')
@@ -135,7 +135,7 @@ def upgrade() -> None:
         sa.Column('version', sa.Integer(), nullable=False),
         sa.Column('actor_id', sa.String(), nullable=True),
         sa.Column('reason', sa.String(), nullable=True),
-        sa.Column('at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.ForeignKeyConstraint(['actor_id'], ['users.id'], ),
         sa.PrimaryKeyConstraint('id')
         )
@@ -151,7 +151,7 @@ def upgrade() -> None:
         sa.Column('key_version', sa.Integer(), nullable=False, comment='NFC key version that decrypted this chip'),
         sa.Column('had_header', sa.Boolean(), server_default='false', nullable=False, comment='Whether the payload carried a version header (version >= 1)'),
         sa.Column('observed_at', sa.DateTime(timezone=True), nullable=False, comment='When the device read the chip (client clock)'),
-        sa.Column('reported_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='When the server received it — may lag by days for a brigade that was offline'),
+        sa.Column('reported_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False, comment='When the server received it — may lag by days for a brigade that was offline'),
         sa.Column('reported_by', sa.String(), nullable=True, comment='User whose device reported the sighting'),
         sa.Column('organization_id', sa.String(), nullable=True, comment='Retained for traceability only, never for access control'),
         sa.ForeignKeyConstraint(['organization_id'], ['organizations.id'], ),
@@ -170,7 +170,7 @@ def upgrade() -> None:
         sa.Column('wrapped_key', sa.String(), nullable=False, comment='Base64 of nonce+ciphertext+tag, sealed under the KEK'),
         sa.Column('kek_id', sa.String(), nullable=False, comment='Fingerprint of the KEK that sealed this row — not the secret'),
         sa.Column('status', sa.String(), server_default='live', nullable=False, comment="'live' (delivered to devices) or 'revoked' (never delivered)"),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column('revoked_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('revoked_by', sa.String(), nullable=True),
         sa.Column('revoke_reason', sa.String(), nullable=True),
@@ -186,7 +186,7 @@ def upgrade() -> None:
         sa.Column('patient_id', sa.String(), nullable=False, comment='Patient whose record this UID was retired from'),
         sa.Column('reason', sa.String(), nullable=False, comment="Why the UID was retired — 'lost', 'damaged' or 'replaced'"),
         sa.Column('device_role', sa.String(), server_default='patient', nullable=False, comment="Which device was retired — 'patient' bracelet or 'guardian' card"),
-        sa.Column('retired_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('retired_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column('retired_by', sa.String(), nullable=True, comment='User id that performed the retirement, when known'),
         sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ),
         sa.PrimaryKeyConstraint('id')

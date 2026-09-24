@@ -6,7 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import find_user_by_email, get_current_user
 from app.core.security import get_password_hash
 from app.db.models import Organization, Patient, User, UserRole
 from app.db.session import get_db
@@ -82,7 +82,7 @@ def create_organization(
     # Fail fast on a duplicate admin email BEFORE inserting anything, so the
     # caller gets a clean 400 and no partial state is created.
     if org_in.admin is not None:
-        existing_user = db.query(User).filter(User.email == org_in.admin.email).first()
+        existing_user = find_user_by_email(db, org_in.admin.email)
         if existing_user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -191,7 +191,8 @@ def update_organization_status(
     Activate or deactivate an organization (soft state change).
 
     Deactivating is the safe default for retiring an organization: it preserves
-    all users, patients and clinical history while blocking access.
+    all users, patients and clinical history while blocking access. It also
+    revokes every session of its users, so reactivating does not revive them.
 
     - **Allowed roles:** `superadmin` only.
     - **Guards:** a superadmin cannot deactivate their own organization.
@@ -220,6 +221,12 @@ def update_organization_status(
             detail="You cannot deactivate your own organization.",
         )
 
+    if org.is_active and org_in.is_active is False:
+        # Revoke every session of its users: reactivating the organization
+        # later must not bring back tokens issued before (a stolen one included).
+        db.query(User).filter(User.organization_id == org.id).update(
+            {User.token_version: User.token_version + 1}, synchronize_session=False
+        )
     org.is_active = org_in.is_active
     db.commit()
     db.refresh(org)

@@ -21,16 +21,18 @@ def _create_token(
     subject: Union[str, Any],
     expires_delta: timedelta,
     token_type: str,
+    token_version: Optional[int] = None,
 ) -> str:
     """
     Internal helper: creates a signed JWT with a unique JTI claim
     for revocation support.
 
     Claims:
-      - sub: user identifier (email)
+      - sub: user id (tokens issued before September 2026 carry the email)
       - exp: expiration timestamp
       - jti: unique token ID (UUID4) for revocation lookups
       - type: "access" or "refresh"
+      - tv: the user's token_version; bumping it revokes every older token
     """
     now = datetime.now(timezone.utc)
     expire = now + expires_delta
@@ -42,28 +44,43 @@ def _create_token(
         "jti": str(uuid.uuid4()),
         "type": token_type,
     }
+    if token_version is not None:
+        to_encode["tv"] = token_version
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
 def create_access_token(
-    subject: Union[str, Any], expires_delta: Optional[timedelta] = None
+    subject: Union[str, Any],
+    expires_delta: Optional[timedelta] = None,
+    token_version: Optional[int] = None,
 ) -> str:
     """
     Generates a short-lived access token (default: 60 min).
     """
     delta = expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    return _create_token(subject, delta, token_type="access")
+    return _create_token(subject, delta, token_type="access", token_version=token_version)
 
 
 def create_refresh_token(
-    subject: Union[str, Any], expires_delta: Optional[timedelta] = None
+    subject: Union[str, Any],
+    expires_delta: Optional[timedelta] = None,
+    token_version: Optional[int] = None,
 ) -> str:
     """
     Generates a longer-lived refresh token (default: 7 days).
     Used to obtain a new access token without re-authenticating.
     """
     delta = expires_delta or timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)
-    return _create_token(subject, delta, token_type="refresh")
+    return _create_token(subject, delta, token_type="refresh", token_version=token_version)
+
+
+def token_pair_for(user: Any) -> tuple[str, str]:
+    """Access and refresh tokens bound to the user's id and token_version."""
+    version = user.token_version or 0
+    return (
+        create_access_token(subject=user.id, token_version=version),
+        create_refresh_token(subject=user.id, token_version=version),
+    )
 
 
 def decode_token(token: str) -> dict:
