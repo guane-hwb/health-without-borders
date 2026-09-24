@@ -6,7 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import find_user_by_email, get_current_user, revoke_all_sessions
 from app.core.security import get_password_hash, nfc_key_claims
 from app.db.models import Organization, User, UserRole
 from app.db.session import get_db
@@ -57,7 +57,7 @@ def create_user(
         )
 
     # 3. Check if email already exists globally
-    user = db.query(User).filter(User.email == user_in.email).first()
+    user = find_user_by_email(db, user_in.email)
     if user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -215,7 +215,8 @@ def update_user_status(
     Activate or deactivate a user (soft state change).
 
     Deactivating is the safe default for revoking access: the account and its
-    audit trail are preserved while login and API access are blocked.
+    audit trail are preserved while login and API access are blocked. It also
+    revokes every session, so reactivating the account does not revive them.
 
     - **Allowed roles:** `superadmin`, `org_admin` (scoped to own org / clinical roles).
     - **Responses:**
@@ -225,6 +226,10 @@ def update_user_status(
     - `404`: User not found.
     """
     target = _load_manageable_target(user_id, db, current_user, action="deactivate")
+    if target.is_active and not user_in.is_active:
+        # Reactivating later must not revive tokens issued before (a stolen
+        # device's refresh token included).
+        revoke_all_sessions(target)
     target.is_active = user_in.is_active
     db.commit()
     db.refresh(target)
@@ -233,6 +238,31 @@ def update_user_status(
         current_user.id, target.id, target.is_active,
     )
     return target
+
+
+@router.post("/{user_id}/revoke-sessions", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_user_sessions(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Sign a user out everywhere: every access and refresh token issued so far
+    stops working (lost or stolen device). The account stays active; the user
+    signs in again. Their devices also stop receiving NFC keys until they do.
+
+    - **Allowed roles:** `superadmin`, `org_admin` (scoped like PATCH).
+    - **Responses:**
+    - `204`: Sessions revoked.
+    - `400`: Attempt on own account.
+    - `403`: Not enough privileges, cross-org, or targeting a superadmin/admin.
+    - `404`: User not found.
+    """
+    target = _load_manageable_target(user_id, db, current_user, action="revoke sessions of")
+    revoke_all_sessions(target)
+    db.commit()
+    logger.info("actor_id=%s revoked all sessions of user_id=%s", current_user.id, user_id)
+    return None
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

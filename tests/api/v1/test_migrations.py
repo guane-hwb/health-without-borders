@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import Column, MetaData, String, Table, create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, text
 
 from app.core.config import settings
 from app.db import migrations
@@ -18,7 +18,7 @@ def _engine():
     return create_engine("sqlite://")
 
 
-HEAD = "0002"
+HEAD = "0003"
 
 
 def _upgrade(engine, revision: str) -> None:
@@ -77,24 +77,11 @@ def test_database_built_by_create_tables_is_brought_to_head():
 def test_old_database_gets_the_missing_table_and_column():
     """poc17: a database created before device_role and the NFC key tables."""
     engine = _engine()
-    old_tables = [
-        t for t in Base.metadata.sorted_tables
-        if t.name not in {
-            "retired_device_uids", "nfc_keys", "nfc_key_events", "nfc_keyring_state",
-            # created by 0002, and emergency_access_log gains a column there
-            "patient_access_log", "emergency_access_log",
-        }
-    ]
-    Base.metadata.create_all(engine, tables=old_tables)
-    legacy = MetaData()
-    Table(
-        "retired_device_uids", legacy,
-        Column("id", String, primary_key=True), Column("device_uid", String),
-        Column("patient_id", String), Column("reason", String),
-        Column("retired_at", String), Column("retired_by", String),
-    )
-    legacy.create_all(engine)
+    _database_built_without_alembic(engine)
     with engine.begin() as conn:
+        for table in ("nfc_key_events", "nfc_keys", "nfc_keyring_state"):
+            conn.execute(text(f"DROP TABLE {table}"))
+        conn.execute(text("ALTER TABLE retired_device_uids DROP COLUMN device_role"))
         conn.execute(text(
             "INSERT INTO retired_device_uids (id, device_uid, patient_id, reason) "
             "VALUES ('r1', 'UID-OLD', 'p1', 'lost')"

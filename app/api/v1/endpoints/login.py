@@ -7,11 +7,17 @@ from fastapi.security import OAuth2PasswordRequestForm
 from jwt import PyJWTError
 from sqlalchemy.orm import Session
 
-from app.api.deps import ensure_account_is_active
+from app.api.deps import (
+    ensure_account_is_active,
+    find_user_by_email,
+    revoke_all_sessions,
+    token_is_current,
+    user_for_token,
+)
 from app.core import security
 from app.core.config import settings
 from app.core.rate_limit import limiter
-from app.db.models import RevokedToken, User
+from app.db.models import RevokedToken
 from app.db.session import get_db
 from app.schemas.token import LogoutRequest, RefreshRequest, TokenPair
 
@@ -73,7 +79,7 @@ def login_access_token(
     - `422`: Missing required form fields.
     """
     # 1. Authenticate User
-    user = db.query(User).filter(User.email == form_data.username).first()
+    user = find_user_by_email(db, form_data.username)
     hashed_password = user.hashed_password if user else DUMMY_PASSWORD_HASH
     password_is_valid = security.verify_password(form_data.password, hashed_password)
 
@@ -86,8 +92,7 @@ def login_access_token(
     ensure_account_is_active(user, status.HTTP_401_UNAUTHORIZED)
 
     # 2. Create token pair
-    access_token = security.create_access_token(subject=user.email)
-    refresh_token = security.create_refresh_token(subject=user.email)
+    access_token, refresh_token = security.token_pair_for(user)
 
     return TokenPair(
         access_token=access_token,
@@ -107,8 +112,9 @@ def refresh_access_token(
     Exchange a valid refresh token for a new access + refresh token pair.
 
     The old refresh token is revoked to prevent reuse (rotation).
-    If the refresh token has already been revoked, all tokens for the
-    user should be considered compromised (but for now we just reject).
+    If a refresh token that was already rotated or revoked is presented again,
+    someone else holds a copy: every session of that user is revoked (the
+    legitimate device signs in again, the copy stops working).
 
     **Responses:**
     - `200`: New token pair returned.
@@ -124,12 +130,11 @@ def refresh_access_token(
 
     try:
         payload = security.decode_token(body.refresh_token)
-        email = payload.get("sub")
         token_type = payload.get("type")
         jti = payload.get("jti")
         exp = payload.get("exp")
 
-        if not email or token_type != "refresh" or not jti:
+        if not payload.get("sub") or token_type != "refresh" or not jti:
             raise credentials_exception
 
     except PyJWTError:
@@ -138,17 +143,25 @@ def refresh_access_token(
     # Check if the refresh token has been revoked
     revoked = db.query(RevokedToken).filter(RevokedToken.jti == jti).first()
     if revoked:
+        owner = user_for_token(db, payload)
+        if owner is not None:
+            revoke_all_sessions(owner)
+            db.commit()
         logger.warning(
-            "Revoked refresh token reuse attempt jti=%s",
+            "Revoked refresh token reuse attempt jti=%s; sessions revoked for user_id=%s",
             jti[:8],
+            owner.id if owner is not None else "unknown",
         )
         raise credentials_exception
 
-    # Verify user still exists and is active (and so is its organization)
-    user = db.query(User).filter(User.email == email).first()
+    # Verify the token still represents the account, and that the account is
+    # active (and so is its organization)
+    user = user_for_token(db, payload)
     if not user:
         raise credentials_exception
     ensure_account_is_active(user, status.HTTP_401_UNAUTHORIZED)
+    if not token_is_current(user, payload):
+        raise credentials_exception
 
     # Revoke the old refresh token (rotation)
     expires_at = datetime.fromtimestamp(exp, tz=timezone.utc) if exp else datetime.now(timezone.utc)
@@ -159,8 +172,7 @@ def refresh_access_token(
     _purge_expired_revoked_tokens(db)
 
     # Issue new token pair
-    new_access = security.create_access_token(subject=user.email)
-    new_refresh = security.create_refresh_token(subject=user.email)
+    new_access, new_refresh = security.token_pair_for(user)
 
     return TokenPair(
         access_token=new_access,

@@ -1,6 +1,8 @@
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+from app.schemas.user import check_password_length, normalize_email
 
 
 class OrganizationBase(BaseModel):
@@ -13,6 +15,9 @@ class OrganizationAdminCreate(BaseModel):
     full_name: str = Field(..., min_length=3, description="Full name of the administrator")
     email: EmailStr = Field(..., description="Login email of the administrator")
     password: str = Field(..., min_length=8, description="Temporary password")
+
+    _normalize_email = field_validator("email")(normalize_email)
+    _check_password = field_validator("password")(check_password_length)
 
 
 class OrganizationCreate(OrganizationBase):

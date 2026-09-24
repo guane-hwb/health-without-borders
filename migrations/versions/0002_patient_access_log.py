@@ -48,7 +48,7 @@ def upgrade() -> None:
         sa.Column('reason', sa.String(), nullable=True,
                   comment='Reason given by the caller, when the channel accepts one'),
         sa.Column('accessed_at', sa.DateTime(timezone=True),
-                  server_default=sa.text('now()'), nullable=False,
+                  server_default=sa.func.now(), nullable=False,
                   comment='Server time of the access'),
         sa.ForeignKeyConstraint(['actor_id'], ['users.id']),
         sa.ForeignKeyConstraint(['organization_id'], ['organizations.id']),

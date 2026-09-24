@@ -126,17 +126,21 @@ revoking version 0 that variable still holds the revoked key.
 Revoking a key alone does **not** cut the stolen device: its refresh token stays
 valid for up to 7 days and would receive the replacement key. In this order:
 
-1. **Deactivate the user** of that device (`PATCH /users/{id}` with
-   `{"is_active": false}`). Login, refresh and every authenticated call are
-   refused from that moment, so the device stops receiving keys.
+1. **Revoke the user's sessions:** `POST /api/v1/users/{id}/revoke-sessions`
+   (`superadmin`, or the `org_admin` of that user's organization). Every access
+   and refresh token issued to that user stops working at once, on every
+   device; the account stays active and the person signs in again on a trusted
+   device. Deactivating the account (`PATCH /users/{id}` with
+   `{"is_active": false}`) has the same effect on sessions, and reactivating it
+   later does **not** bring them back.
 2. **Revoke the key version** the device held, as above.
-3. **Do not simply reactivate the account.** Reactivating revives the refresh
-   tokens issued before the deactivation, including the stolen one. Until
-   per-user session revocation exists, give the person a new account instead of
-   reactivating the old one.
+3. **Change the password** if it may have been exposed.
 
 If the whole organization is compromised, deactivate the organization: that
-blocks all its users at once.
+blocks all its users at once and revokes all their sessions.
+
+A refresh token presented twice (the device's copy and a stolen copy) is
+treated the same way: the second use revokes every session of that user.
 
 ## 5. Generating a key
 
