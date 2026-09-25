@@ -175,3 +175,17 @@ The schema is versioned with Alembic (`migrations/versions/`). When you change a
 
 Deployed services apply new migrations themselves on startup.
 
+## Test suites
+
+* **Unit and API tests** (`tests/api/`, SQLite in memory) and **contract tests** (`tests/contract/`, payloads shaped exactly as the mobile app serializes them) run with a plain `uv run pytest`. CI requires 100 % line coverage.
+* **PostgreSQL integration tests** (`tests/integration/`) run the real application — startup and migrations included — with real users and tokens against PostgreSQL. They are skipped unless `DATABASE_URL` points to PostgreSQL, and they **drop and recreate the schema**, so the database name must contain `test`:
+
+    ```bash
+    docker run -d --name hwb-test-db -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=hwb_test -p 5433:5432 postgres:15
+    DATABASE_URL=postgresql://postgres:postgres@localhost:5433/hwb_test \
+      SECRET_KEY=local_integration_secret_0123456789abcdef FHIR_BACKEND=noop LLM_BACKEND=noop \
+      uv run pytest tests/integration -m pg --no-cov
+    ```
+
+    CI runs them in the `Integration (PostgreSQL 15)` job.
+

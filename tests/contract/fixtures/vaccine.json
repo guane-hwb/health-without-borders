@@ -1,0 +1,10 @@
+{
+  "vaccinationId": "c7d8e9f0-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+  "date": "2026-09-25",
+  "vaccineName": "Triple viral",
+  "vaccineCode": "03",
+  "dose": 1,
+  "administratedBy": "Enfermera Sintetica",
+  "administratedAt": "Albergue",
+  "status": "completed"
+}

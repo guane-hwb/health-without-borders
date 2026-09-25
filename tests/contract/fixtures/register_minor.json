@@ -1,0 +1,71 @@
+{
+  "patientId": "3f2b8c1e-5a7d-4e2b-9c1a-7d3e5f9b2a11",
+  "device_uid": "04:5B:2C:9A:71:3E:80",
+  "patientInfo": {
+    "identification": {
+      "documentType": "RC",
+      "documentNumber": "SINT-1122334455"
+    },
+    "firstLastName": "Prueba",
+    "firstName": "Nina",
+    "dob": "2019-05-05",
+    "nationalityCode": "UNK",
+    "biologicalSex": "F",
+    "ethnicity": "6",
+    "ethnicCommunity": "Comunidad Sintetica",
+    "ethnic_community": "Comunidad Sintetica",
+    "address": {
+      "city": "Cúcuta",
+      "cityCode": "54001",
+      "state": "Norte de Santander",
+      "country": "COL",
+      "countryName": "Colombia",
+      "zone": "01"
+    },
+    "bloodType": "O+",
+    "weight": 18.4,
+    "height": 108.0
+  },
+  "guardianInfo": {
+    "name": "Acudiente Sintetica",
+    "relationship": "Madre",
+    "phone": "+573000000001",
+    "device_uid": "04:77:1A:2B:3C:4D:80",
+    "documentType": "PT",
+    "documentNumber": "SINT-ACU-0001",
+    "consent": {
+      "accepted": true,
+      "acceptedAt": "2026-09-25T10:15:30.123456-05:00",
+      "signatureBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    }
+  },
+  "backgroundHistory": {
+    "chronicConditions": [
+      {
+        "chronicDescription": "Asma"
+      }
+    ],
+    "personalHistory": "Nacimiento a término",
+    "familyHistory": [
+      {
+        "conditionDescription": "Diabetes",
+        "relationship": "04"
+      }
+    ],
+    "medications": [
+      {
+        "medicationName": "Salbutamol inhalado",
+        "status": "active"
+      }
+    ]
+  },
+  "allergies": [
+    {
+      "category": "01",
+      "allergen": "Penicilina",
+      "reaction": "Urticaria"
+    }
+  ],
+  "medicalHistory": [],
+  "vaccinationRecord": []
+}

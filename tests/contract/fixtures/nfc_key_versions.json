@@ -1,0 +1,11 @@
+{
+  "entries": [
+    {
+      "device_uid": "04:5B:2C:9A:71:3E:80",
+      "device_role": "patient",
+      "key_version": 0,
+      "had_header": false,
+      "observed_at": "2026-09-25T15:30:00.000Z"
+    }
+  ]
+}

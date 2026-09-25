@@ -1,0 +1,12 @@
+{
+  "entries": [
+    {
+      "client_event_id": "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9",
+      "patient_uid": "04:5B:2C:9A:71:3E:80",
+      "patient_name": "Nina Prueba",
+      "user_id": null,
+      "reason": "guardian_absent_offline",
+      "occurred_at": "2026-09-14T15:07:02.287683"
+    }
+  ]
+}
