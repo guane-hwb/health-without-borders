@@ -430,6 +430,15 @@ class VaccinationRecordItem(BaseModel):
     administratedBy: str
     administratedAt: str
     status: str
+    recordedByOrganizationId: Optional[str] = Field(
+        None, description="Organización que registró el ítem (la asigna el servidor)"
+    )
+    recordedByUserId: Optional[str] = Field(
+        None, description="Usuario que registró el ítem (lo asigna el servidor)"
+    )
+    recordedAt: Optional[datetime] = Field(
+        None, description="Momento en que el servidor recibió el ítem"
+    )
 
     @model_validator(mode='before')
     @classmethod
@@ -567,6 +576,15 @@ class MedicalHistoryItem(BaseModel):
     occupation: Optional[str] = Field(None, description="Código CIUO-88 A.C. (Elem. 22)")
     occupationDescription: Optional[str] = Field(None)
     prescriptions: List[MedicationRequestItem] = Field(default_factory=list)
+    recordedByOrganizationId: Optional[str] = Field(
+        None, description="Organización que registró el ítem (la asigna el servidor)"
+    )
+    recordedByUserId: Optional[str] = Field(
+        None, description="Usuario que registró el ítem (lo asigna el servidor)"
+    )
+    recordedAt: Optional[datetime] = Field(
+        None, description="Momento en que el servidor recibió el ítem"
+    )
 
     @model_validator(mode='before')
     @classmethod

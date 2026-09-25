@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -256,6 +256,36 @@ async def _scan(
     return record
 
 
+def _stamp_new_items(
+    patient_data: PatientFullRecord,
+    new_visits: list,
+    stored_record: Optional[dict],
+    actor_id: str,
+    actor_org_id: str,
+) -> None:
+    """
+    Record who performed each visit / vaccination new to the server.
+
+    Patients are global, so the organization that registered a child is often
+    not the one that vaccinates or sees them; statistics attribute each act to
+    the organization that recorded it. Taken from the authenticated caller,
+    never from the payload. Items the server already holds keep theirs (the
+    merge keeps the stored version).
+    """
+    stored_vaccine_ids = {
+        v.get("vaccinationId")
+        for v in (stored_record or {}).get("vaccinationRecord") or []
+    }
+    new_vaccines = [
+        v for v in patient_data.vaccinationRecord if v.vaccinationId not in stored_vaccine_ids
+    ]
+    recorded_at = datetime.now(timezone.utc)
+    for item in [*new_visits, *new_vaccines]:
+        item.recordedByOrganizationId = actor_org_id
+        item.recordedByUserId = actor_id
+        item.recordedAt = recorded_at
+
+
 def _normalized_text(value: Optional[str]) -> str:
     return " ".join((value or "").split()).casefold()
 
@@ -461,6 +491,7 @@ async def sync_patient(
             )
 
         await _apply_llm_coding(patient_data, new_visits, stored_record)
+        _stamp_new_items(patient_data, new_visits, stored_record, actor_id, actor_org_id)
 
         # 1. Save to DB (wrapped in to_thread to avoid blocking the event loop)
         logger.info(
