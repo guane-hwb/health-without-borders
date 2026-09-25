@@ -36,6 +36,20 @@ encounters           ``medicalHistory[].startDateTime``  (event)
 Allergies carry no date of their own in the RDA schema, so they are necessarily
 a cohort metric.
 
+**Two organizational anchors.** Patients are global: the organization that
+registered a child is often not the one that vaccinates or sees them. Cohort
+metrics (patients, minors, nationalities, allergies) belong to the
+organization that *registered* the patient. Acts (vaccine doses, encounters)
+belong to the organization that *recorded* them — ``recordedByOrganizationId``,
+stamped by the server on /sync since September 2026. Acts recorded before that
+carry no attribution and fall back to the patient's organization, which is how
+every act was counted before. Scoping to one organization therefore scans every
+patient row (the acts may sit on anyone's record) and filters per item.
+
+**Vaccine codes** are free text from the app; ``03``, ``3`` and `` 03 `` are
+grouped as one code (numeric codes are zero-padded to two digits, others
+upper-cased) until a catalog is agreed.
+
 **Time zone.** ``created_at`` is stored as an aware UTC timestamp under
 Postgres and as a naive UTC timestamp under SQLite. Clinical timestamps written
 by the app are local wall-clock. Both are normalised to a *local calendar date*
@@ -261,9 +275,22 @@ class _Accumulator:
         self.nationality_counts: Counter = Counter()
 
 
+def _vaccine_code_key(code: str) -> str:
+    """'03', '3' and ' 03 ' are one vaccine; non-numeric codes are upper-cased."""
+    code = code.strip()
+    return str(int(code)).zfill(2) if code.isdigit() else code.upper()
+
+
+def _performed_by(entry: Mapping[str, Any], patient_org: Optional[str]) -> Optional[str]:
+    """The organization an act is attributed to (see module notes)."""
+    return _text(entry.get("recordedByOrganizationId")) or patient_org
+
+
 def _fold_patient(
     acc: _Accumulator,
     *,
+    scope_org: Optional[str] = None,
+    patient_org: Optional[str] = None,
     created_local: Optional[date],
     birth_date: Optional[date],
     nationality_code: Optional[str],
@@ -274,8 +301,15 @@ def _fold_patient(
     current: DateRange,
     previous: DateRange,
 ) -> None:
-    """Fold one patient row into ``acc``."""
-    in_window = _within(created_local, window)
+    """
+    Fold one patient row into ``acc``.
+
+    ``scope_org`` restricts the figures to one organization: cohort metrics
+    when it registered the patient, acts when it performed them. ``None``
+    counts everything.
+    """
+    counts_cohort = scope_org is None or patient_org == scope_org
+    in_window = counts_cohort and _within(created_local, window)
 
     if in_window:
         acc.patients += 1
@@ -285,9 +319,9 @@ def _fold_patient(
                 acc.minors += 1
         acc.nationality_counts[_text(nationality_code) or UNKNOWN_NATIONALITY] += 1
 
-    if _within(created_local, current):
+    if counts_cohort and _within(created_local, current):
         acc.trend_patients[0] += 1
-    if _within(created_local, previous):
+    if counts_cohort and _within(created_local, previous):
         acc.trend_patients[1] += 1
 
     payload: Mapping[str, Any] = record if isinstance(record, Mapping) else {}
@@ -309,6 +343,8 @@ def _fold_patient(
     for entry in _iter_entries(payload.get("vaccinationRecord")):
         if _text(entry.get("status")).lower() != COMPLETED_VACCINE_STATUS:
             continue
+        if scope_org is not None and _performed_by(entry, patient_org) != scope_org:
+            continue
 
         dose_id = _text(entry.get("vaccinationId"))
         if dose_id:
@@ -318,7 +354,7 @@ def _fold_patient(
 
         applied_on = _plain_date(entry.get("date"))
         if _within(applied_on, window):
-            code = _text(entry.get("vaccineCode")) or UNCODED_VACCINE
+            code = _vaccine_code_key(_text(entry.get("vaccineCode"))) or UNCODED_VACCINE
             name = _text(entry.get("vaccineName"))
             acc.vaccine_doses += 1
             acc.vaccine_counts[code] += 1
@@ -332,6 +368,8 @@ def _fold_patient(
     # --- Encounters: event metric, deduplicated per patient ---
     seen_encounters: set[str] = set()
     for entry in _iter_entries(payload.get("medicalHistory")):
+        if scope_org is not None and _performed_by(entry, patient_org) != scope_org:
+            continue
         encounter_id = _text(entry.get("encounterIdentifier"))
         if encounter_id:
             if encounter_id in seen_encounters:
@@ -429,20 +467,23 @@ def build_overview(
         trend_period = "month"
         current, previous = _month_trend_windows(today)
 
+    # Not filtered by organization: acts performed by the scoped organization
+    # can sit on a patient another organization registered.
     statement = select(
+        Patient.organization_id,
         Patient.created_at,
         Patient.birth_date,
         Patient.nationality_code,
         Patient.full_record_json,
     )
-    if organization_id is not None:
-        statement = statement.where(Patient.organization_id == organization_id)
 
     acc = _Accumulator()
     rows = db.execute(statement.execution_options(yield_per=YIELD_PER))
-    for created_at, birth_date, nationality_code, record in rows:
+    for patient_org, created_at, birth_date, nationality_code, record in rows:
         _fold_patient(
             acc,
+            scope_org=organization_id,
+            patient_org=patient_org,
             created_local=_server_date(created_at, tz),
             birth_date=_plain_date(birth_date),
             nationality_code=nationality_code,
