@@ -1,0 +1,26 @@
+{
+  "encounterIdentifier": "9b1f3c2d-8e4a-4f6b-a1c2-3d4e5f6a7b8c",
+  "type": "Consultation",
+  "startDateTime": "2026-09-25T10:30:00.000-05:00",
+  "endDateTime": "2026-09-25T10:55:00.000-05:00",
+  "careModality": "01",
+  "serviceGroup": "01",
+  "careEnvironment": "05",
+  "practitioner": {
+    "documentType": "CC",
+    "documentNumber": "SINT-MED-01",
+    "name": "Medica Sintetica",
+    "firstName": "Medica",
+    "firstLastName": "Sintetica"
+  },
+  "physician": "Medica Sintetica",
+  "clinicalEvaluation": {
+    "historyOfCurrentIllness": "Tos seca y fiebre de 3 dias",
+    "generalPhysicalExamination": "T 38.2, faringe eritematosa",
+    "treatmentPlanObservations": "Acetaminofen, control en 48 h"
+  },
+  "diagnosis": [],
+  "diagnosisType": "01",
+  "riskFactors": [],
+  "prescriptions": []
+}
