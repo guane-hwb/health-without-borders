@@ -71,7 +71,7 @@ On each `/sync` call:
 | System | URI | Usage |
 |---|---|---|
 | ICD-10 (WHO) | `http://hl7.org/fhir/sid/icd-10` | Diagnosis coding (no-dot format: `A099` not `A09.9`) |
-| ICD-11 (WHO) | `http://id.who.int/icd/release/11/mms` | Diagnosis coding (optional) |
+| ICD-11 (WHO) | `http://hl7.org/fhir/sid/icd-11` | Diagnosis coding (optional). The system and code format the RDA requires are still to be confirmed against the IG |
 | SISPRO | `https://www.sispro.gov.co/terminologias/...` | Modality, service group, environment, diagnosis type, allergy category, risk factors |
 | DIVIPOLA | DANE codes | Municipality identification |
 | LOINC | `http://loinc.org` | Composition section codes |

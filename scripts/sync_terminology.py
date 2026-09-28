@@ -182,7 +182,32 @@ def enrich_with_spanish(who_codes: dict[str, str], vulcano: dict[str, str]) -> d
     return enriched
 
 
-def write_lookup(codes: dict[str, str], output_path: Path, label: str) -> None:
+def write_lookup(
+    codes: dict[str, str], output_path: Path, label: str, force: bool = False
+) -> None:
+    """
+    Write a catalog, refusing to make things worse.
+
+    An empty result (missing input file, failed download) is never written, and
+    a catalog smaller than the one already on disk is only written with
+    --force: the committed files are the full WHO catalogs and the service
+    validates every ICD code against them.
+    """
+    if not codes:
+        print(f"ERROR: {label}: no codes to write; {output_path.name} left untouched.")
+        sys.exit(1)
+    if output_path.exists() and not force:
+        try:
+            with open(output_path, "r", encoding="utf-8") as f:
+                current = len(json.load(f))
+        except (OSError, ValueError):
+            current = 0
+        if len(codes) < current:
+            print(
+                f"ERROR: {label}: {len(codes)} codes would replace {current} in "
+                f"{output_path.name}. Refusing; pass --force to overwrite."
+            )
+            sys.exit(1)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(codes, f, ensure_ascii=False, indent=None, separators=(",", ":"))
@@ -197,6 +222,10 @@ def main():
     parser.add_argument(
         "--vulcano-icd10", metavar="FILE",
         help="Vulcano CodeSystem-ICD10CO.json for Spanish name enrichment",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Allow replacing a catalog with a smaller one",
     )
     parser.add_argument("--icd10-only", action="store_true")
     parser.add_argument("--icd11-only", action="store_true")
@@ -218,9 +247,12 @@ def main():
         print("\n⚠ Local mode: Vulcano fragments only (~395 ICD-10 codes)")
         for i, (path, label) in enumerate([(args.local[0], "ICD-10"), (args.local[1], "ICD-11")]):
             print(f"\n[{i+1}/2] {label}")
-            codes = load_vulcano_fragment(path) if Path(path).exists() else {}
+            if not Path(path).exists():
+                print(f"ERROR: {path} does not exist; nothing was changed.")
+                sys.exit(1)
+            codes = load_vulcano_fragment(path)
             fname = "icd10_codes.json" if i == 0 else "icd11_codes.json"
-            write_lookup(codes, OUTPUT_DIR / fname, label)
+            write_lookup(codes, OUTPUT_DIR / fname, label, force=args.force)
     else:
         client_id = args.client_id or os.environ.get("WHO_CLIENT_ID")
         client_secret = args.client_secret or os.environ.get("WHO_CLIENT_SECRET")
@@ -257,7 +289,7 @@ def main():
                 print("  ℹ No Vulcano fragment found — using English names.")
                 print("    Pass --vulcano-icd10 <file> for Spanish enrichment.")
 
-            write_lookup(icd10, OUTPUT_DIR / "icd10_codes.json", "ICD-10")
+            write_lookup(icd10, OUTPUT_DIR / "icd10_codes.json", "ICD-10", force=args.force)
         else:
             print("\n[1/2] ICD-10 — skipped")
 
@@ -271,7 +303,7 @@ def main():
                 lang="es", remove_dots=False,
             )
             print(f"  Downloaded in {time.time() - t0:.0f}s")
-            write_lookup(icd11, OUTPUT_DIR / "icd11_codes.json", "ICD-11")
+            write_lookup(icd11, OUTPUT_DIR / "icd11_codes.json", "ICD-11", force=args.force)
         else:
             print("\n[2/2] ICD-11 — skipped")
 

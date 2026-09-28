@@ -20,7 +20,7 @@ All three tasks run automatically during `POST /api/v1/patients/sync` before the
 
 ### Model Execution
 
-- **Model:** gemini-2.5-pro (via Vertex AI).
+- **Model:** set by `LLM_MODEL_NAME` (default `gemini-3-flash-preview`), via Vertex AI in the region set by `LLM_LOCATION` (default `global`). Each call has a timeout (`LLM_TIMEOUT_SECONDS`, default 30 s); a timeout or error falls back to R69.
 - **Configuration:** `temperature=0.0` (Greedy Decoding) for deterministic coding. `thinking_config` enabled for internal step-by-step reasoning.
 
 ### Safety & Compliance
@@ -53,9 +53,11 @@ Input: Single `conditionDescription` string (e.g., "Glaucoma").
 
 Output: Dictionary with `icd10Code`, `icd11Code` (nullable), and `description` in Spanish.
 
-Only runs for `FamilyHistoryItem` entries that have a description but no ICD codes yet — items already coded (e.g., from a previous sync) are skipped.
+Only runs for `FamilyHistoryItem` entries that have a description but no ICD codes yet. An item whose text is already coded on the server reuses that coding instead of calling the LLM again.
 
-Fallback on error: `R69` with the original description preserved.
+The clinician's `conditionDescription` is **never replaced**: the LLM's description is stored in `conditionCodedDisplay`, and `codingSource` records `ai_suggested` (or `ai_fallback` for R69).
+
+Fallback on error: `R69`, with the clinician's text untouched.
 
 ### 4.3. Chronic Condition Coding (`code_chronic_condition`)
 
@@ -63,9 +65,13 @@ Input: Single `chronicDescription` string (e.g., "Hipertensión arterial").
 
 Output: Dictionary with `icd10Code`, `icd11Code` (nullable), and `description` in Spanish.
 
-Only runs for `ChronicConditionItem` entries that have a description but no ICD codes yet.
+Only runs for `ChronicConditionItem` entries that have a description but no ICD codes yet (reusing a stored coding for the same text when there is one). As with family history, `chronicDescription` is never replaced; the code's name goes to `chronicCodedDisplay` with `codingSource`.
 
-Fallback on error: `R69` with the original description preserved.
+Fallback on error: `R69`, with the clinician's text untouched.
+
+### 4.4. Provenance of AI output
+
+Every diagnosis the LLM produces is stored with `source` (`ai_suggested`, or `ai_fallback` for R69), `model` and `generatedAt`; a diagnosis the client sends for a new visit is marked `clinician`. In the RDA, a `Condition` is `confirmed` only for a clinician diagnosis of type 02/03 (confirmed); AI suggestions, fallbacks, legacy diagnoses with no source and diagnostic impressions (01) are sent as `provisional`. Only visits new to the server are sent to the LLM.
 
 ## 5. Terminology Validation
 
@@ -148,7 +154,7 @@ Set `LLM_BACKEND` in your `.env` file:
 
 | Value | Effect |
 |---|---|
-| `gemini` (default) | Uses Google Vertex AI with Gemini 2.5 Pro |
+| `gemini` (default) | Uses Google Vertex AI with the model in `LLM_MODEL_NAME` |
 | `noop` | Returns deterministic fallback codes (R69) without any LLM call |
 
 ### Adding a New LLM Backend

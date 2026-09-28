@@ -14,7 +14,7 @@ This page explains how to find an existing patient and how to read a patient's c
 
 The document number and the date of birth must be the patient's own — they are what identifies the record. The names confirm that identity, so you do not have to reproduce them exactly:
 
-* **Accents and capitals are ignored.** A child registered as "Andrés Guerrero" is found by typing "andres guerrero".
+* **Accents and capitals are ignored.** A child registered as "Ana María Rojas" is found by typing "ana maria rojas".
 * **Last names:** enter the last names the patient has — one if they have one, both if they have two, in either order. Entering only one of two also works.
 * **Given names:** the first name alone is enough; entering the first and second name also works.
 * **A shortened name still matches.** "Rodrig" finds "Rodríguez".

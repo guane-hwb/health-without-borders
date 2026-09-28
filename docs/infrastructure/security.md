@@ -91,7 +91,7 @@ Use `POST /api/v1/patients/scan` (UIDs in the body) rather than `GET /api/v1/pat
 
 API endpoints that are vulnerable to brute-force attacks (`/login/access-token`, `/patients/search`) enforce per-client request limits using [SlowAPI](https://github.com/laurents/slowapi).
 
-- **Backend Storage:** Redis (shared across all Cloud Run instances). Configured via the `REDIS_URL` environment variable. Falls back to in-memory storage for local development when `REDIS_URL` is not set.
+- **Backend Storage:** Redis when `REDIS_URL` is set, shared across all Cloud Run instances. **The current deployment does not set it**, so each instance counts in its own memory (the effective limit is multiplied by the number of instances and resets on cold start). Provisioning Redis is pending.
 - **Client IP Detection:** Extracted from the `X-Forwarded-For` header set by Cloud Run's load balancer, ensuring rate limits apply per real client rather than per proxy.
 - **Default Limits:** `10/minute` for login, `30/minute` for patient search. Configurable via `RATE_LIMIT_LOGIN` and `RATE_LIMIT_PATIENT_SEARCH` environment variables.
 
