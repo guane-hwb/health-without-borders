@@ -18,6 +18,7 @@ from app.core.logging import setup_logging
 from app.core.nfc_startup import prepare_nfc_keyring_at_startup
 from app.core.rate_limit import limiter
 from app.core.request_limits import BodySizeLimitMiddleware
+from app.core.security_headers import SecurityHeadersMiddleware
 from app.db.migrations import run_migrations_at_startup
 from app.db.schema_check import report_schema_drift_at_startup
 from app.services.terminology import terminology
@@ -123,9 +124,11 @@ if cors_origins:
         allow_headers=["Authorization", "Content-Type"],
     )
 
-# Added last so it is the outermost user middleware: oversized bodies are
-# refused before rate limiting, CORS or any body parsing.
+# Outside rate limiting and CORS: oversized bodies are refused before any
+# of them, or any body parsing, runs.
 app.add_middleware(BodySizeLimitMiddleware)
+# Outermost: every response gets the security headers, the 413s above included.
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Include all API routers
 app.include_router(api_router, prefix=settings.API_V1_STR)
