@@ -241,8 +241,7 @@ Create a trigger for pull requests targeting `develop`:
 
 - **Event:** Pull request
 - **Base branch:** `^develop$`
-- **Configuration file:** `/cloudbuild.pr.yaml`
-- **Behavior:** Run lint, scoped type-check, and tests with coverage. No deploy step.
+- **Behavior:** Pull requests are validated by the GitHub Actions workflow `.github/workflows/ci.yml` (lint, type-check, migrations check, dependency audit, tests with 100 % coverage, PostgreSQL integration tests). There is no separate Cloud Build configuration for pull requests.
 
 ### Trigger B: Deploy from `develop`
 

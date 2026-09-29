@@ -319,12 +319,16 @@ makes every chip on a database-held version unreadable offline until rewritten �
 which, once version 0 is imported, means the whole fleet. There is no recovery
 by design: if there were, the wrapping would be worthless.
 
-**Custodians:** Andrés Guerrero and Leonardo Calderón.
+**Custodians:** two named people — the technical lead and the security lead
+of the deploying organization. Who they are is recorded in the team's internal
+register, not in this public document: naming them here only gives an attacker
+two targets.
 
 **Primary copy:** Secret Manager, as the value of `NFC_KEK`.
 
 **Backup:** the KEK encrypted with `age` under a six-word passphrase known to
-both custodians, stored in each custodian's Drive — two separate accounts.
+both custodians, stored in two separate, access-controlled locations — one per
+custodian, under different accounts.
 
 Created once, at the time the KEK is generated:
 
@@ -336,18 +340,18 @@ age -d kek.age > kek-check.txt          # verify BEFORE deleting anything
 diff kek.txt kek-check.txt && echo "BACKUP OK"
 
 # kek.txt  -> Secret Manager, as NFC_KEK
-# kek.age  -> each custodian's Drive
+# kek.age  -> each custodian's backup location
 
 shred -u kek.txt kek-check.txt          # macOS: rm -P
 ```
 
-Then one custodian downloads `kek.age` **from their Drive** — not the local copy
-— and decrypts it, to prove what was uploaded works.
+Then one custodian downloads `kek.age` **from their backup location** — not the
+local copy — and decrypts it, to prove what was uploaded works.
 
 **Permanent rules:**
 
 - Never paste the KEK or the passphrase into chat, email or Slack.
-- The passphrase must not live in the same Drive as the file. Together they are
+- The passphrase must not live in the same place as the file. Together they are
   one secret, not two.
 - Re-verify when a custodian changes, and at least once a year.
 - **A database backup is incomplete without the KEK backup.** Restoring the

@@ -32,7 +32,7 @@ This repository contains the source code for the Backend API of the Health Witho
 * **Database:** PostgreSQL 15 (Cloud SQL in Production)
 * **ORM:** SQLAlchemy 2.0
 * **FHIR Store:** Google Cloud Healthcare API (R4)
-* **LLM:** Google Vertex AI (Gemini 2.5 Pro)
+* **LLM:** Google Vertex AI (Gemini; model set by `LLM_MODEL_NAME`, default `gemini-3-flash-preview`)
 * **Package Manager:** `uv` (Astral)
 * **Infrastructure:** Docker, Google Artifact Registry, Google Cloud Build.
 
@@ -47,10 +47,10 @@ health-without-borders/
 │   ├── api/                          # API versioning and routing
 │   │   ├── deps.py                   # Shared dependencies (DB session, auth)
 │   │   └── v1/endpoints/             # Endpoint modules
-│   │       ├── catalogs.py           # ICD-10, CVX catalog endpoints
 │   │       ├── login.py              # Authentication & JWT
 │   │       ├── organizations.py      # Organization management
-│   │       ├── patients.py           # Patient sync, scan, search
+│   │       ├── patients.py           # Patient sync, scan, search, access log, NFC keys
+│   │       ├── stats.py              # Aggregated statistics
 │   │       └── users.py              # User management
 │   ├── core/                         # Configuration & utilities
 │   ├── db/                           # Database layer (models, session)
@@ -70,7 +70,7 @@ health-without-borders/
 │       │   └── schemas.py            # Provider-agnostic output schemas
 │       ├── fhir_service.py           # FHIR R4 RDA bundle generation
 │       └── patient_service.py        # Patient CRUD & strict lookup
-├── datalake/                         # Sample patient JSON files for testing
+├── migrations/                       # Alembic database migrations (applied at startup)
 ├── docs/                             # MkDocs documentation source
 ├── scripts/                          # DB initialization and data loading
 ├── tests/                            # Automated test suite (pytest)
@@ -86,14 +86,14 @@ health-without-borders/
 
 ## Documentation
 
-Full technical documentation is published at **[guanes.github.io/health-without-borders](https://guanes.github.io/health-without-borders/)**.
+Full technical documentation is published at **[guane-hwb.github.io/health-without-borders](https://guane-hwb.github.io/health-without-borders/)**.
 
 Key sections:
-* [FHIR RDA Architecture](https://guanes.github.io/health-without-borders/architecture/fhir-rda/)
-* [AI & NLP Integration](https://guanes.github.io/health-without-borders/architecture/ai-integration/)
-* [Local Setup Guide](https://guanes.github.io/health-without-borders/development/setup/)
-* [Security Protocols](https://guanes.github.io/health-without-borders/infrastructure/security/)
-* [GCP Deployment](https://guanes.github.io/health-without-borders/infrastructure/gcp-deploy/)
+* [FHIR RDA Architecture](https://guane-hwb.github.io/health-without-borders/architecture/fhir-rda/)
+* [AI & NLP Integration](https://guane-hwb.github.io/health-without-borders/architecture/ai-integration/)
+* [Local Setup Guide](https://guane-hwb.github.io/health-without-borders/development/setup/)
+* [Security Protocols](https://guane-hwb.github.io/health-without-borders/infrastructure/security/)
+* [GCP Deployment](https://guane-hwb.github.io/health-without-borders/infrastructure/gcp-deploy/)
 
 **Project Board:** [github.com/users/guane-hwb/projects/1](https://github.com/users/guane-hwb/projects/1)
 ---
@@ -132,7 +132,7 @@ The interactive API will be available at: **http://localhost:8000/docs**
 uv run pytest --cov=app --cov-report=term-missing
 ```
 
-The project maintains **≥ 75% code coverage**. Coverage is enforced automatically on every PR via the CI pipeline.
+The project maintains **100 % line coverage**, enforced on every PR by the CI pipeline. CI also runs the PostgreSQL integration suite (`tests/integration`), checks that the migrations match the models (`alembic check`) and audits production dependencies (`pip-audit`). See [Local Setup Guide](docs/development/setup.md#test-suites).
 
 ---
 
@@ -159,7 +159,9 @@ This project is released with a [Contributor Code of Conduct](CODE_OF_CONDUCT.md
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+This project's source code is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+The ICD-10 / ICD-11 catalogs in `app/data/` are © World Health Organization and are **not** covered by the MIT License; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ---
 

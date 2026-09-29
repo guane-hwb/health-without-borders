@@ -65,9 +65,9 @@ docker run --name hwb-db-local \
   -e POSTGRES_DB=hwb_local \
   -p 5432:5432 -d postgres:15
 
-# 5. Initialize schema and terminology catalogs
+# 5. Initialize the schema (the server also applies migrations on startup).
+#    The ICD-10/11 catalogs are already committed in app/data/.
 uv run python scripts/create_tables.py
-uv run python scripts/sync_terminology.py --local app/data/CodeSystem-ICD10CO.json app/data/CodeSystem-ICD11CO.json
 
 # 6. Run the server
 uv run uvicorn app.main:app --reload

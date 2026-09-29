@@ -15,7 +15,7 @@ Before onboarding a pilot site, verify that all cloud infrastructure is operatio
 | Cloud SQL instance running | `gcloud sql instances describe <INSTANCE>` shows `RUNNABLE` | [GCP Deployment](../infrastructure/gcp-deploy.md) |
 | FHIR Store accessible | Healthcare API dashboard shows the store with R4, referential integrity enabled | [FHIR Store Configuration](../infrastructure/healthcare-api.md) |
 | Cloud Run service healthy | `GET /health-check` returns `200 OK` | [GCP Deployment](../infrastructure/gcp-deploy.md) |
-| Secret Manager configured | `hwb-db-pass` and `hwb-secret-key` exist and are bound to Cloud Run | [GCP Deployment § Security](../infrastructure/gcp-deploy.md#4-security-secret-manager-setup) |
+| Secret Manager configured | `hwb-db-pass`, `hwb-secret-key`, `hwb-nfc-master-key` and `nfc-kek` exist and are bound to Cloud Run | [GCP Deployment § Security](../infrastructure/gcp-deploy.md#4-security-secret-manager-setup) |
 | CI/CD pipeline green | Latest Cloud Build on `develop` succeeded (lint + tests + deploy) | [QA & PR Workflow](../development/qa-plan.md) |
 | ICD-10/11 terminology loaded | Application startup logs show `"Terminology loaded: N ICD-10 codes, M ICD-11 codes"` | [AI & NLP Integration § Terminology](../architecture/ai-integration.md#5-terminology-validation) |
 
@@ -39,7 +39,7 @@ The site's `org_admin` creates `doctor` and `nurse` accounts for the healthcare 
 
 **Step 4 — Distribute credentials:**
 
-Provide each user with their email and temporary password. Users authenticate via `POST /api/v1/login` to obtain a JWT token.
+Provide each user with their email and temporary password. Users authenticate via `POST /api/v1/login/access-token` to obtain an access and a refresh token (`POST /api/v1/login/refresh` renews them).
 
 For the full RBAC matrix (who can do what), see [Database Schema § RBAC](../infrastructure/database.md#4-role-based-access-control-rbac-matrix).
 
@@ -52,7 +52,7 @@ The mobile app connects to the backend through these settings:
 | Setting | Value | Notes |
 |---|---|---|
 | API Base URL | `https://<CLOUD_RUN_SERVICE_URL>/api/v1` | Provided after Cloud Run deployment |
-| Authentication | Bearer JWT token from `/login` | 30-day expiry |
+| Authentication | Bearer JWT from `/login/access-token` | Access token 60 min; refresh token 7 days |
 | NFC chip compatibility | NTAG 213/215/216 (patients), DESFire EV3 4K (guardians) | See [FHIR RDA Architecture](../architecture/fhir-rda.md) |
 | Offline mode | App queues sync requests locally | Syncs automatically when connectivity returns |
 
@@ -99,7 +99,7 @@ Before going live with real patients, validate the full pipeline with synthetic 
 2. Attempt to sync a patient with a new medical history entry → verify `403 Forbidden`.
 3. Sync a patient with only new vaccination records → verify `201 Created`.
 
-The sample synthetic patients in the `datalake/` directory can be used for these tests.
+The synthetic payloads in `tests/contract/fixtures/` (shaped exactly as the app sends them) can be used for these tests.
 
 ---
 

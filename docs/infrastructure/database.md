@@ -167,7 +167,7 @@ Migrant populations often have unstructured or transient data.
 Three columns track sync state: `synced_encounter_ids` (JSON list of encounter UUIDs already sent), `rda_paciente_sent` (boolean), and `background_data_hash` (SHA-256). Visits are identified by their `encounterIdentifier` UUID rather than list index, preventing duplicates when records are merged from multiple devices. The background hash detects changes in demographics, allergies, and chronic conditions to avoid unnecessary RDA-Paciente retransmission. Tracking is updated **only after successful FHIR Store upload** — if GCP fails, the next sync retries automatically.
 
 ### 3.4. Soft Deletion (`is_active`)
-Rows in critical tables (Users, Organizations) are never physically deleted. This preserves historical integrity for future audits.
+Deactivation (`PATCH` with `is_active: false`) is the way to retire a user or an organization: it keeps every row and blocks access. `DELETE` exists but only succeeds when nothing references the rows: a user or organization referenced by audit records (patient access log, NFC telemetry and key events) cannot be deleted and the API answers `409`, and an organization with patients or with a `superadmin` cannot be deleted either. This preserves historical integrity for audits.
 
 ### 3.5. Indexing Strategy
 * **Search Optimization:** B-Tree indexes on `first_name`, `last_name`, `document_number`, and `nationality_code` for fast patient lookups. Sync identity now resolves by `device_uid` (unique) and `frontend_patient_id` (indexed); the composite `(organization_id, frontend_patient_id)` index is retained but no longer on the sync path.

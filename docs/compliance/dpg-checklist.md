@@ -13,7 +13,7 @@ against those indicators and is intended to be validated with the privacy & secu
 | #  | DPG Standard indicator | Status | Notes / action |
 |----|------------------------|--------|----------------|
 | 1  | Relevance to the SDGs (SDG 3 — Health) | ✅ Met | Clinical-records platform for medical brigades and migrant/pediatric patients; aligned with SDG 3. |
-| 2  | Use of an approved open license | ✅ Met | OSI-approved license in the repository (`LICENSE`). |
+| 2  | Use of an approved open license | ⚠️ Partially met | Source code: OSI-approved license (`LICENSE`, MIT). The repository also redistributes the WHO ICD-10/11 catalogs (`app/data/`), whose terms are pending legal review — see `THIRD_PARTY_NOTICES.md`. |
 | 3  | Clear ownership | ✅ Met | Owned and maintained by Guane Enterprises; stated in `README`. |
 | 4  | Platform independence | 🟡 Partial | No mandatory proprietary dependencies; document alternatives to managed services (e.g. FHIR store). |
 | 5  | Documentation | ✅ Met | Developer documentation (architecture, setup, deployment, security) and the new **User Guide** are both published on the docs site. |

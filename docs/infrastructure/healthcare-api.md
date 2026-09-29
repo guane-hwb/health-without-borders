@@ -2,7 +2,7 @@
 
 This document details the configuration of the **Google Cloud Healthcare API FHIR Store** used to ingest and manage RDA bundles (Resolution 1888/2025) in the Health Without Borders project.
 
-> **Note:** The current implementation uses GCP as the FHIR Store backend. A future abstraction layer will allow deploying with alternative backends (Azure FHIR, AWS HealthLake, HAPI FHIR) for open-source flexibility.
+> **Note:** The deployment uses GCP as the FHIR Store backend. The code talks to it through a vendor-neutral protocol (`app/services/fhir/base.py`, selected by `FHIR_BACKEND` in `factory.py`), so another backend (Azure FHIR, AWS HealthLake, HAPI FHIR) can be added without touching the RDA builder.
 
 ---
 
