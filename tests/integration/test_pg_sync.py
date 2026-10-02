@@ -181,9 +181,14 @@ def test_no_connection_is_held_while_waiting_on_the_llm_or_fhir(api, staff, db, 
     samples = []
     for _ in range(6):
         time.sleep(0.5)
+        # A transaction is briefly idle between two of its statements; that is
+        # normal and a sample can land on it (audit be-oct26-ci-integracion-
+        # rota-por-fecha: intermittent). Holding one across the 2 s LLM call
+        # is the defect, so count only connections idle for over 0.5 s.
         samples.append(db.execute(text(
             "SELECT count(*) FROM pg_stat_activity WHERE datname = :db "
-            "AND state = 'idle in transaction' AND pid <> pg_backend_pid()"
+            "AND state = 'idle in transaction' AND pid <> pg_backend_pid() "
+            "AND clock_timestamp() - state_change > interval '500 milliseconds'"
         ), {"db": database}).scalar_one())
         db.commit()
     for thread in threads:
