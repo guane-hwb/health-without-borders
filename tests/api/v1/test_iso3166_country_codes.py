@@ -70,6 +70,15 @@ def test_unrecognised_input_yields_none(value):
     assert iso3166.to_numeric(value) is None
 
 
+@pytest.mark.parametrize(("value", "alpha3"), [
+    ("VEN", "VEN"), ("ve", "VEN"), ("862", "VEN"), (" col ", "COL"), ("4", "AFG"),
+    ("UNK", None), ("XX", None), (None, None),
+])
+def test_any_representation_maps_to_alpha3(value, alpha3):
+    """The patients.nationality_code column groups the statistics by alpha-3."""
+    assert iso3166.to_alpha3(value) == alpha3
+
+
 def test_display_is_the_iso_short_name():
     assert iso3166.display_for("170") == "Colombia"
     assert iso3166.display_for("862") == "Venezuela, Bolivarian Republic of"

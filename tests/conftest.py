@@ -1,3 +1,4 @@
+import logging
 from typing import Generator
 
 import pytest
@@ -81,3 +82,13 @@ def client(
 
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def app_log(caplog):
+    """The "app" logger does not propagate to root, so hook caplog in directly."""
+    logger = logging.getLogger("app")
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.DEBUG, logger="app")
+    yield caplog
+    logger.removeHandler(caplog.handler)
