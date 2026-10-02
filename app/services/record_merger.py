@@ -20,6 +20,13 @@ still carries a bracelet or guardian card the server already retired) is
 merged conservatively instead: identifiers and guardians stay as stored and
 declarative lists are united, so an old offline copy cannot erase an allergy
 or re-activate a lost bracelet.
+
+A visit or vaccination the server already holds keeps its stored version. When
+the device's copy of it says something else (the app edits the last visit in
+place), the difference is reported in ``conflicts`` as
+``visit_edit_not_applied:<encounterIdentifier>`` or
+``vaccination_edit_not_applied:<vaccinationId>`` instead of being dropped
+without a word.
 """
 
 import logging
@@ -39,6 +46,7 @@ def merge_patient_records(
     *,
     stale: bool = False,
     keep_server_guardians: bool = False,
+    conflicts: Optional[List[str]] = None,
 ) -> dict:
     """
     Produce a merged patient record from the server state and an incoming
@@ -65,6 +73,9 @@ def merge_patient_records(
     ``keep_server_guardians``: the device may add clinical data but not change
     who the guardians are or which cards identify them.
 
+    ``conflicts``: receives one entry per stored visit / vaccination whose
+    incoming copy differs and was therefore not applied.
+
     Returns:
         A new dict representing the merged patient record.
     """
@@ -85,6 +96,7 @@ def merge_patient_records(
         incoming_items=incoming_record.get("medicalHistory", []),
         key="encounterIdentifier",
         entity_label="visit",
+        conflicts=conflicts,
     )
 
     merged["vaccinationRecord"] = _merge_items_by_key(
@@ -92,6 +104,7 @@ def merge_patient_records(
         incoming_items=incoming_record.get("vaccinationRecord", []),
         key="vaccinationId",
         entity_label="vaccination",
+        conflicts=conflicts,
     )
 
     if stale or keep_server_guardians:
@@ -297,13 +310,16 @@ def _merge_items_by_key(
     incoming_items: List[Dict[str, Any]],
     key: str,
     entity_label: str,
+    conflicts: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Merge two lists of items using a unique key field.
 
     Rules:
       - Items present on both sides (same key) → server version is kept
-        because it's the source of truth for already-persisted data.
+        because it's the source of truth for already-persisted data. If the
+        incoming copy differs, ``<entity_label>_edit_not_applied:<key>`` is
+        added to ``conflicts``.
       - Items only on server → preserved (prevents data loss from devices
         that haven't seen them yet).
       - Items only in incoming → appended at the end (new data from this
@@ -316,11 +332,12 @@ def _merge_items_by_key(
     _assign_missing_keys(server_items, key)
     _assign_missing_keys(incoming_items, key)
 
-    server_keys: Set[str] = set()
+    server_by_key: Dict[str, Dict[str, Any]] = {}
     for item in server_items:
         k = item.get(key)
         if k:
-            server_keys.add(k)
+            server_by_key.setdefault(k, item)
+    server_keys: Set[str] = set(server_by_key)
 
     # Start with all server items to guarantee nothing is lost
     merged: List[Dict[str, Any]] = list(server_items)
@@ -332,6 +349,17 @@ def _merge_items_by_key(
         if k and k not in server_keys:
             merged.append(item)
             added += 1
+        elif k and conflicts is not None:
+            edited = _edited_fields(server_by_key[k], item, key)
+            code = f"{entity_label}_edit_not_applied:{k}"
+            if edited and code not in conflicts:
+                # Field names only: the values are clinical text.
+                logger.warning(
+                    "Merge kept the stored %s; the incoming copy differs in: %s",
+                    entity_label,
+                    ", ".join(edited),
+                )
+                conflicts.append(code)
 
     # Log when the merge prevented data loss
     incoming_keys = {item.get(key) for item in incoming_items if item.get(key)}
@@ -351,6 +379,58 @@ def _merge_items_by_key(
         )
 
     return merged
+
+
+#: Stamped by the server on the items it receives; the app does not send them back.
+_SERVER_MANAGED_FIELDS = frozenset({"recordedByOrganizationId", "recordedByUserId", "recordedAt"})
+#: Who coded a diagnosis is the server's record; older builds do not send it back.
+_DIAGNOSIS_PROVENANCE_FIELDS = frozenset({"source", "model", "generatedAt"})
+_EMPTY: tuple = (None, "", [], {})
+
+
+def _asserted(value: Any) -> Any:
+    """What a value says once empty parts are removed: leaving a field empty is not an edit."""
+    if isinstance(value, dict):
+        pruned = {k: _asserted(v) for k, v in value.items()}
+        return {k: v for k, v in pruned.items() if v not in _EMPTY}
+    if isinstance(value, list):
+        return [_asserted(v) for v in value]
+    return value
+
+
+def _comparable(field: str, value: Any) -> Any:
+    if field == "diagnosis" and isinstance(value, list):
+        value = [
+            {k: v for k, v in d.items() if k not in _DIAGNOSIS_PROVENANCE_FIELDS}
+            if isinstance(d, dict) else d
+            for d in value
+        ]
+    return _asserted(value)
+
+
+def _edited_fields(
+    server_item: Dict[str, Any], incoming_item: Dict[str, Any], key: str
+) -> List[str]:
+    """
+    Top-level fields where the device's copy of a stored item says something else.
+
+    Only what the device sends counts. A top-level field it leaves empty is not
+    an edit: a visit synced without a diagnosis is coded by the server
+    afterwards, and the device's own copy still has none. The server's stamps
+    and the AI provenance of diagnoses are ignored for the same reason. Inside
+    a field the device does send, every difference counts (a cleared plan in
+    clinicalEvaluation is an edit).
+    """
+    edited = []
+    for field, value in incoming_item.items():
+        if field == key or field in _SERVER_MANAGED_FIELDS:
+            continue
+        sent = _comparable(field, value)
+        if sent in _EMPTY:
+            continue
+        if sent != _comparable(field, server_item.get(field)):
+            edited.append(field)
+    return edited
 
 
 def _assign_missing_keys(items: List[Dict[str, Any]], key: str) -> None:

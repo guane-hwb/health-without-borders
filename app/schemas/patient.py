@@ -321,6 +321,15 @@ class PatientInfo(BaseModel):
     nationalityName: Optional[str] = Field(None, description="Nombre del país (Elem. 10)")
     biologicalSex: BiologicalSex = Field(..., description="Sexo biológico (Elem. 3)")
     ethnicity: Optional[Ethnicity] = Field(None, description="Pertenencia étnica (Elem. 5)")
+    ethnicCommunity: Optional[str] = Field(
+        None,
+        # The app sends it under both names.
+        validation_alias=AliasChoices("ethnicCommunity", "ethnic_community"),
+        description=(
+            "Comunidad étnica (texto libre). Se guarda y se devuelve en /scan; "
+            "no forma parte del RDA."
+        ),
+    )
     disabilityCategory: Optional[DisabilityCategory] = Field(None, description="Discapacidad (Elem. 6)")
     genderIdentity: Optional[GenderIdentity] = Field(None, description="Identidad de género (Elem. 4)")
     address: Address
@@ -730,6 +739,37 @@ def _walk_strings(value: Any, path: str = ""):
             yield from _walk_strings(item, f"{path}[{index}]")
 
 
+#: Keys the app sends that are read under another name, so they are not lost.
+_ALIASED_PAYLOAD_KEYS = frozenset({
+    "patientInfo.ethnic_community",
+    *(f"{guardian}.{alias}" for guardian in ("guardianInfo", "guardian2Info")
+      for alias in _GUARDIAN_KEY_ALIASES),
+})
+
+
+def fields_not_kept(sent: Any, kept: Any, path: str = "") -> list[str]:
+    """
+    Paths of the keys in a /sync body that the validated record does not keep.
+
+    The model ignores unknown keys, so a field the app adds before the backend
+    knows it is dropped without an error (ethnicCommunity was, for months).
+    List positions are written as ``[]``: the result names fields, never values.
+    """
+    missing: set[str] = set()
+    if isinstance(sent, dict) and isinstance(kept, dict):
+        for key, value in sent.items():
+            child = f"{path}.{key}" if path else key
+            if key not in kept:
+                if child not in _ALIASED_PAYLOAD_KEYS:
+                    missing.add(child)
+            else:
+                missing.update(fields_not_kept(value, kept[key], child))
+    elif isinstance(sent, list) and isinstance(kept, list):
+        for sent_item, kept_item in zip(sent, kept):
+            missing.update(fields_not_kept(sent_item, kept_item, f"{path}[]"))
+    return sorted(missing)
+
+
 class PatientSyncRecord(PatientFullRecord):
     """
     Body of ``POST /patients/sync``.
@@ -832,7 +872,10 @@ class PatientSyncResponse(BaseModel):
         description=(
             "Parts of the payload the server did not apply because they were "
             "older than what it holds (e.g. a retired bracelet), or not the "
-            "device's to change. The rest of the record was synced."
+            "device's to change, or edits of a visit / vaccination it already "
+            "holds (visit_edit_not_applied:<encounterIdentifier>, "
+            "vaccination_edit_not_applied:<vaccinationId>). The rest of the "
+            "record was synced."
         ),
     )
 

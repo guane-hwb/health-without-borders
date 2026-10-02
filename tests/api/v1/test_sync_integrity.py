@@ -5,7 +5,8 @@ Audit findings: x-v2-consultas-sin-id-se-duplican-en-cada-sync (poc06),
 x-v2-sync-sin-control-de-versiones-pierde-datos-clinicos (poc05 + row lock),
 be-v2-tarjeta-acudiente-reemplazable-con-solo-uid-pulsera (poc04),
 x-v2-evidencia-consentimiento-mal-atribuida (poc09),
-x-v2-409-sin-codigo-bloquea-registros.
+x-v2-409-sin-codigo-bloquea-registros,
+x-oct26-edicion-de-visita-descartada (poc02 of the 2026-10-02 audit).
 """
 from copy import deepcopy
 
@@ -25,6 +26,7 @@ from app.services.patient_service import (
     create_or_update_patient,
 )
 from app.services.record_merger import (
+    _edited_fields,
     _same_guardian,
     _union_background,
     adopt_stored_item_ids,
@@ -418,3 +420,102 @@ def test_same_guardian_resync_keeps_the_signature():
 )
 def test_same_guardian_uses_the_strongest_shared_identifier(server, incoming, same):
     assert _same_guardian(server, incoming) is same
+
+
+# ---------------------------------------------------------------------------
+# Edits of items the server already holds (x-oct26-edicion-de-visita-descartada)
+# ---------------------------------------------------------------------------
+
+
+def _scan(client):
+    app.dependency_overrides[get_current_user] = lambda: MockUser()
+    return client.get(
+        f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}", headers=GUARDIAN_HEADER
+    ).json()
+
+
+def test_edit_of_a_synced_visit_is_reported(client, db_session, app_log):
+    """poc02: the app edits the last visit in place; the edit was dropped with 'success'."""
+    assert _sync(client, _payload(medicalHistory=[deepcopy(VISIT_1)])).status_code == 201
+    edited = deepcopy(VISIT_1)
+    edited["clinicalEvaluation"]["treatmentPlanObservations"] = "Amoxicilina NO: alergia"
+    edited["diagnosisType"] = "02"
+
+    response = _sync(client, _payload(medicalHistory=[edited]))
+
+    assert response.status_code == 201
+    assert response.json()["conflicts"] == ["visit_edit_not_applied:enc-visit-001"]
+    stored = _stored(db_session).full_record_json["medicalHistory"]
+    assert [v["diagnosisType"] for v in stored] == ["01"]  # the stored version is kept
+    log = " ".join(r.getMessage() for r in app_log.records)
+    assert "differs in: clinicalEvaluation, diagnosisType" in log
+    assert "Amoxicilina" not in log
+
+
+def test_edit_of_a_stored_vaccination_is_reported(client, db_session):
+    assert _sync(client, _payload(vaccinationRecord=[_vaccine("VAC-1")])).status_code == 201
+    corrected = _vaccine("VAC-1")
+    corrected["dose"] = 2
+
+    response = _sync(client, _payload(vaccinationRecord=[corrected]))
+
+    assert response.json()["conflicts"] == ["vaccination_edit_not_applied:VAC-1"]
+    assert _stored(db_session).full_record_json["vaccinationRecord"][0]["dose"] == 1
+
+
+def test_resending_the_record_as_scan_returned_it_reports_nothing(client, db_session):
+    """The scan copy carries the server's stamps and the AI provenance."""
+    visit = deepcopy(VISIT_1)
+    visit["diagnosis"] = []
+    _sync(client, _payload(medicalHistory=[visit], vaccinationRecord=[_vaccine("VAC-1")]))
+    record = _scan(client)
+    record.pop("recordVersion")
+
+    response = _sync(client, record)
+
+    assert response.status_code == 201
+    assert response.json()["conflicts"] == []
+
+
+def test_the_devices_copy_without_the_server_coded_diagnosis_reports_nothing(client, db_session):
+    visit = deepcopy(VISIT_1)
+    visit["diagnosis"] = []
+    _sync(client, _payload(medicalHistory=[visit]))
+    assert _stored(db_session).full_record_json["medicalHistory"][0]["diagnosis"]
+
+    response = _sync(client, _payload(medicalHistory=[visit], vaccinationRecord=[_vaccine("VAC-1")]))
+
+    assert response.json()["conflicts"] == []
+
+
+def test_a_diagnosis_resent_without_its_source_reports_nothing(client, db_session):
+    """Builds before the provenance fields drop `source`; the server stamped 'clinician'."""
+    _sync(client, _payload(medicalHistory=[deepcopy(VISIT_1)]))
+    stored = _stored(db_session).full_record_json["medicalHistory"][0]
+    assert stored["diagnosis"][0]["source"] == "clinician"
+
+    response = _sync(client, _payload(medicalHistory=[deepcopy(VISIT_1)]))
+
+    assert response.json()["conflicts"] == []
+
+
+def test_what_counts_as_an_edit():
+    stored = deepcopy(VISIT_1)
+    stored["recordedByUserId"] = "user-1"
+    same = deepcopy(VISIT_1)
+    same.update(diagnosis=[], endDateTime=None)  # left empty: not an edit
+    cleared = deepcopy(VISIT_1)
+    cleared["clinicalEvaluation"]["treatmentPlanObservations"] = None  # inside a field: an edit
+
+    assert _edited_fields(stored, same, "encounterIdentifier") == []
+    assert _edited_fields(stored, cleared, "encounterIdentifier") == ["clinicalEvaluation"]
+
+
+def test_merging_without_a_conflicts_list_still_keeps_the_stored_item():
+    server = _payload(medicalHistory=[deepcopy(VISIT_1)])
+    edited = deepcopy(VISIT_1)
+    edited["diagnosisType"] = "02"
+
+    merged = merge_patient_records(server, _payload(medicalHistory=[edited]))
+
+    assert merged["medicalHistory"][0]["diagnosisType"] == "01"
