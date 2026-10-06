@@ -421,6 +421,14 @@ class RevokedToken(Base):
         DateTime(timezone=True), nullable=False,
         comment="Original token expiry — safe to delete row after this time"
     )
+    replaced_by_jti = Column(
+        String, nullable=True,
+        comment=(
+            "For a rotated refresh token, the refresh token issued in its place. "
+            "Lets a retry after a lost response get through without being taken "
+            "for theft. NULL for tokens revoked by logout."
+        ),
+    )
 
 
 class EmergencyAccessLog(Base):

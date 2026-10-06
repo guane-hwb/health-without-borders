@@ -81,6 +81,7 @@ Stores the JTI (JWT ID) of tokens that have been explicitly revoked via logout o
 | `jti` | Varchar | PK | JWT ID claim from the revoked token. |
 | `revoked_at` | DateTime | Default: now() | When the token was revoked. |
 | `expires_at` | DateTime | Not Null | Original token expiry — safe to delete this row after this time. |
+| `replaced_by_jti` | Varchar | Nullable | For a rotated refresh token, the refresh token issued in its place (see the retry grace in `security.md` § 1). NULL for tokens revoked by logout. |
 
 ### 2.5. NFC Keyring (`nfc_keys`, `nfc_keyring_state`, `nfc_key_events`)
 

@@ -3,7 +3,9 @@ Per-user session revocation (users.token_version) and id-bound tokens.
 
 Audit findings: be-v2-sesiones-no-revocables-token-ligado-a-email (poc18),
 be-v2-revocacion-no-corta-sesion-del-dispositivo, be-v2-email-sensible-a-mayusculas,
-be-v2-bcrypt-trunca-72-bytes.
+be-v2-bcrypt-trunca-72-bytes; (2026-10-02) be-oct26-refresh-reintentado-revoca-todas-las-sesiones
+(poc05), be-oct26-logout-concurrente-500, be-oct26-oraculo-de-correos-entre-organizaciones
+(the race).
 """
 from datetime import datetime, timedelta, timezone
 
@@ -12,7 +14,7 @@ import pytest
 
 from app.core.config import settings
 from app.core.security import create_access_token, get_password_hash
-from app.db.models import Organization, User, UserRole
+from app.db.models import Organization, RevokedToken, User, UserRole
 
 PASSWORD = "ValidPass123"
 
@@ -116,16 +118,101 @@ def test_revoke_sessions_uses_the_management_guards(client, db_session, accounts
     assert cross_org.status_code == 403
 
 
+def _after_the_grace_period(db_session):
+    db_session.query(RevokedToken).update(
+        {RevokedToken.revoked_at: datetime.now(timezone.utc) - timedelta(minutes=5)}
+    )
+    db_session.commit()
+
+
 def test_refresh_reuse_revokes_the_whole_family(client, db_session, accounts):
     first = accounts["doctor"]["refresh_token"]
     rotated = _refresh(client, first)
     assert rotated.status_code == 200
+    latest = _refresh(client, rotated.json()["refresh_token"])  # the chain moves on
+    assert latest.status_code == 200
 
-    assert _refresh(client, first).status_code == 401  # reuse of a rotated token
+    # A rotated token whose replacement was already used: a copy, even within
+    # the retry grace period.
+    assert _refresh(client, first).status_code == 401
 
     # The copy and the legitimate chain are both dead now.
-    assert _refresh(client, rotated.json()["refresh_token"]).status_code == 401
-    assert _me(client, rotated.json()["access_token"]).status_code == 401
+    assert _refresh(client, latest.json()["refresh_token"]).status_code == 401
+    assert _me(client, latest.json()["access_token"]).status_code == 401
+
+
+def test_refresh_retry_within_grace_does_not_revoke_everything(client, db_session, accounts):
+    """poc05: the response of a refresh is lost and the device retries with the same token."""
+    other_device = _login(client, "doc@clinic.org").json()
+    first = accounts["doctor"]["refresh_token"]
+    lost = _refresh(client, first)
+    assert lost.status_code == 200
+
+    retried = _refresh(client, first)
+
+    assert retried.status_code == 200
+    assert _me(client, other_device["access_token"]).status_code == 200
+    assert _me(client, retried.json()["access_token"]).status_code == 200
+    # Only one refresh token of the chain stays valid: the lost one was revoked
+    # in favour of the retry, and using it later is reuse.
+    _after_the_grace_period(db_session)
+    assert _refresh(client, lost.json()["refresh_token"]).status_code == 401
+    assert _me(client, other_device["access_token"]).status_code == 401
+
+
+def test_a_retry_after_the_grace_period_is_reuse(client, db_session, accounts):
+    first = accounts["doctor"]["refresh_token"]
+    assert _refresh(client, first).status_code == 200
+    _after_the_grace_period(db_session)
+
+    assert _refresh(client, first).status_code == 401
+    assert _me(client, accounts["doctor"]["access_token"]).status_code == 401
+
+
+def test_a_logged_out_refresh_token_gets_no_grace(client, db_session, accounts):
+    tokens = accounts["doctor"]
+    other_device = _login(client, "doc@clinic.org").json()
+    assert client.post("/api/v1/logout", headers=_auth(tokens),
+                       json={"refresh_token": tokens["refresh_token"]}).status_code == 204
+
+    assert _refresh(client, tokens["refresh_token"]).status_code == 401
+    assert _me(client, other_device["access_token"]).status_code == 401  # a copy was used
+
+
+def test_logging_out_twice_is_fine(client, db_session, accounts):
+    tokens = accounts["doctor"]
+    body = {"refresh_token": tokens["refresh_token"]}
+
+    for _ in range(2):
+        assert client.post("/api/v1/logout", headers=_auth(tokens), json=body).status_code == 204
+    assert db_session.query(RevokedToken).count() == 2
+
+
+def test_a_concurrent_duplicate_user_is_a_400_not_a_500(client, db_session, accounts, monkeypatch):
+    """Both requests pass the email check; the unique index stops the second."""
+    from app.api.v1.endpoints import users
+
+    monkeypatch.setattr(users, "find_user_by_email", lambda db, email: None)
+    response = client.post("/api/v1/users/", headers=_auth(accounts["admin"]), json={
+        "email": "doc@clinic.org", "full_name": "Persona Sintetica", "password": PASSWORD,
+        "role": "doctor",
+    })
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "The user with this email already exists in the system."
+
+
+def test_a_concurrent_duplicate_organization_admin_is_a_400(client, db_session, accounts, monkeypatch):
+    from app.api.v1.endpoints import organizations
+
+    monkeypatch.setattr(organizations, "find_user_by_email", lambda db, email: None)
+    response = client.post("/api/v1/organizations/", headers=_auth(accounts["sa"]), json={
+        "name": "Nueva ONG", "is_active": True,
+        "admin": {"email": "admin@clinic.org", "full_name": "Persona Sintetica", "password": PASSWORD},
+    })
+
+    assert response.status_code == 400
+    assert "already exists" in response.json()["detail"]
 
 
 def test_reuse_of_a_token_for_a_deleted_account_is_just_rejected(client, db_session, accounts):

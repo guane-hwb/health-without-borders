@@ -4,10 +4,13 @@ tokens end to end.
 
 Audit PoCs: poc03 (deactivated organization), poc18 (sessions), poc10 (emergency
 uploader); findings be-v2-lecturas-de-historias-sin-registro-de-acceso,
-be-v2-email-sensible-a-mayusculas.
+be-v2-email-sensible-a-mayusculas; (2026-10-02) poc05 and poc14 (simultaneous
+refreshes and logouts).
 """
+import threading
 from copy import deepcopy
 
+from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from tests.api.v1.test_patients import MOCK_PATIENT_PAYLOAD
@@ -65,8 +68,10 @@ def test_session_revocation_end_to_end(api, staff):
     fresh = login(api, "DOC@A.ORG")  # e-mail case does not matter
     rotated = _refresh(api, fresh)
     assert rotated.status_code == 200
+    latest = _refresh(api, rotated.json())  # the replacement is used
+    assert latest.status_code == 200
     assert _refresh(api, fresh).status_code == 401  # reuse: the family dies
-    assert _refresh(api, {"refresh_token": rotated.json()["refresh_token"]}).status_code == 401
+    assert _refresh(api, latest.json()).status_code == 401
 
     again = login(api, "doc@a.org")
     assert api.post(f"{user_url}/revoke-sessions", headers=admin["headers"]).status_code == 204
@@ -112,3 +117,49 @@ def test_emergency_entries_keep_the_authenticated_uploader(api, staff, db):
     assert response.status_code == 200
     row = db.execute(text("SELECT uploaded_by, user_id, patient_name FROM emergency_access_log")).one()
     assert tuple(row) == (staff["ids"]["doc_a"], staff["ids"]["doc_b"], None)
+
+
+def _at_once(count, request):
+    """Run ``request(client)`` from ``count`` threads released together."""
+    from app.main import app
+
+    barrier = threading.Barrier(count)
+    results = []
+
+    def worker():
+        client = TestClient(app)
+        barrier.wait()
+        results.append(request(client))
+
+    threads = [threading.Thread(target=worker) for _ in range(count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return results
+
+
+def test_simultaneous_logouts_all_succeed(api, staff):
+    """poc14: the check-then-insert gave the second logout a 500."""
+    tokens = login(api, "doc@a.org")
+
+    codes = _at_once(5, lambda client: client.post(
+        "/api/v1/logout", headers=tokens["headers"],
+        json={"refresh_token": tokens["refresh_token"]},
+    ).status_code)
+
+    assert codes == [204] * 5
+    assert _me(api, tokens).status_code == 401
+
+
+def test_simultaneous_refreshes_keep_the_sessions(api, staff):
+    """poc05: two refreshes with one token ended every session of the user."""
+    tokens = login(api, "doc@a.org")
+    other_device = login(api, "doc@a.org")
+
+    responses = _at_once(2, lambda client: client.post(
+        "/api/v1/login/refresh", json={"refresh_token": tokens["refresh_token"]},
+    ))
+
+    assert sorted(r.status_code for r in responses) == [200, 200]
+    assert _me(api, other_device).status_code == 200
