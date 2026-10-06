@@ -18,7 +18,7 @@ def _engine():
     return create_engine("sqlite://")
 
 
-HEAD = "0004"
+HEAD = "0005"
 
 
 def _upgrade(engine, revision: str) -> None:
@@ -113,6 +113,43 @@ def test_0002_downgrades_and_the_baseline_does_not():
         config.attributes["connection"] = conn
         with pytest.raises(NotImplementedError):
             command.downgrade(config, "base")
+
+
+def test_0005_brings_the_columns_in_line_with_the_records():
+    """be-oct26-columnas-relacionales-desalineadas: columns set only at creation."""
+    import json
+
+    engine = _engine()
+    _upgrade(engine, "0004")
+    rows = {
+        # nationality corrected, second guardian removed after creation
+        "p1": ({"patientInfo": {"nationalityCode": "CO", "bloodType": "O+"},
+                "guardianInfo": {"name": "Acudiente", "phone": "300"}},
+               {"nationality_code": "VEN", "guardian2_name": "Retirado", "guardian2_phone": "301"}),
+        # a blood type from before the length check does not fit the column
+        "p2": ({"patientInfo": {"nationalityCode": "862", "bloodType": "O positivo"},
+                "guardianInfo": {"name": "Otra"}},
+               {"nationality_code": "VE", "blood_type": "O+"}),
+    }
+    with engine.begin() as conn:
+        for pid, (record, columns) in rows.items():
+            values = {"id": pid, "frontend_patient_id": pid, "organization_id": "org",
+                      "device_uid": f"UID-{pid}",
+                      "full_record_json": json.dumps(record), **columns}
+            conn.execute(text(
+                f"INSERT INTO patients ({', '.join(values)}) "
+                f"VALUES ({', '.join(':' + name for name in values)})"
+            ), values)
+
+    _upgrade(engine, "0005")
+
+    with engine.connect() as conn:
+        stored = {row.id: row for row in conn.execute(text(
+            "SELECT id, nationality_code, blood_type, guardian_name, guardian_phone, "
+            "guardian2_name, guardian2_phone FROM patients"
+        ))}
+    assert tuple(stored["p1"])[1:] == ("COL", "O+", "Acudiente", "300", None, None)
+    assert tuple(stored["p2"])[1:] == ("VEN", "O+", "Otra", None, None, None)
 
 
 def test_postgresql_takes_the_advisory_lock_first():

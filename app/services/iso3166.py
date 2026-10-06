@@ -278,6 +278,7 @@ _COUNTRIES: tuple[tuple[str, str, str, str], ...] = (
 _ALPHA2_TO_NUMERIC = {alpha2: numeric for alpha2, _, numeric, _ in _COUNTRIES}
 _ALPHA3_TO_NUMERIC = {alpha3: numeric for _, alpha3, numeric, _ in _COUNTRIES}
 _NUMERIC_TO_DISPLAY = {numeric: name for _, _, numeric, name in _COUNTRIES}
+_NUMERIC_TO_ALPHA3 = {numeric: alpha3 for _, alpha3, numeric, _ in _COUNTRIES}
 
 
 def to_numeric(code: Optional[str]) -> Optional[str]:
@@ -310,6 +311,17 @@ def to_numeric(code: Optional[str]) -> Optional[str]:
     if len(candidate) == 2:
         return _ALPHA2_TO_NUMERIC.get(candidate)
     return None
+
+
+def to_alpha3(code: Optional[str]) -> Optional[str]:
+    """
+    Normalise any ISO 3166-1 representation to its alpha-3 code ('VE', 'ven'
+    and '862' all give 'VEN'), the form the app sends and shows.
+
+    Returns ``None`` for anything unrecognised, as ``to_numeric`` does.
+    """
+    numeric = to_numeric(code)
+    return _NUMERIC_TO_ALPHA3.get(numeric) if numeric else None
 
 
 def display_for(numeric: str) -> Optional[str]:

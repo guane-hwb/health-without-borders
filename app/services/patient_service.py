@@ -17,7 +17,8 @@ from app.core.text_normalizer import (
     text_matches,
 )
 from app.db.models import Patient, RetiredDeviceUid
-from app.schemas.patient import PatientFullRecord
+from app.schemas.patient import UNKNOWN_NATIONALITY_CODE, PatientFullRecord
+from app.services.iso3166 import to_alpha3
 from app.services.record_merger import merge_patient_records
 
 # Setup Logger
@@ -82,6 +83,33 @@ class DuplicateIdentityError(Exception):
 # Background data hash computation
 # ---------------------------------------------------------------------------
 
+#: patientInfo fields stored and returned to the app but absent from the RDA.
+_NOT_IN_RDA_PACIENTE = frozenset({"ethnicCommunity"})
+
+
+def mirror_columns(record: dict) -> dict:
+    """
+    The relational copies of fields held in the JSON record.
+
+    Statistics group by ``nationality_code`` and ``/search`` confirms identity
+    with the guardian names, so these columns must follow the stored record on
+    every write: they were set only at creation, and a corrected nationality or
+    a removed second guardian lived on in reports and in identity checks.
+    Nationality is kept as alpha-3 so 'VE', 'VEN' and '862' count as one country.
+    """
+    info = record.get("patientInfo") or {}
+    guardian = record.get("guardianInfo") or {}
+    guardian2 = record.get("guardian2Info") or {}
+    return {
+        "nationality_code": to_alpha3(info.get("nationalityCode")) or UNKNOWN_NATIONALITY_CODE,
+        "blood_type": info.get("bloodType"),
+        "guardian_name": guardian.get("name"),
+        "guardian_phone": guardian.get("phone"),
+        "guardian2_name": guardian2.get("name"),
+        "guardian2_phone": guardian2.get("phone"),
+    }
+
+
 def compute_background_hash(record: dict) -> str:
     """
     Compute a SHA-256 hash over the patient fields that are part of the
@@ -102,8 +130,14 @@ def compute_background_hash(record: dict) -> str:
     referenced a non-existent top-level "medications" key, which always resolved
     to None and added nothing to the hash.)
     """
+    patient_info = record.get("patientInfo")
+    if isinstance(patient_info, dict):
+        # Not part of the RDA-Paciente bundle. Leaving it out also keeps every
+        # stored hash valid now that the field exists, so adding it did not
+        # resend an RDA-Paciente for every patient.
+        patient_info = {k: v for k, v in patient_info.items() if k not in _NOT_IN_RDA_PACIENTE}
     background_fields = {
-        "patientInfo": record.get("patientInfo"),
+        "patientInfo": patient_info,
         "guardianInfo": record.get("guardianInfo"),
         "guardian2Info": record.get("guardian2Info"),
         "backgroundHistory": record.get("backgroundHistory"),
@@ -697,16 +731,7 @@ def create_or_update_patient(
 
         keep_guardians = stale or resolved_by_tag
 
-        # RULE 2: UPDATE ONLY ALLOWED FIELDS (guardian, address, vaccines)
-        if not keep_guardians:
-            existing_patient.guardian_name = patient_in.guardianInfo.name
-            existing_patient.guardian_phone = patient_in.guardianInfo.phone
-
-            # Persist guardian2 name to relational column for search if present
-            if patient_in.guardian2Info and patient_in.guardian2Info.name:
-                existing_patient.guardian2_name = patient_in.guardian2Info.name
-
-        # RULE 3: MERGE CLINICAL LISTS BY UUID
+        # RULE 2: MERGE CLINICAL LISTS BY UUID
         # Prevents data loss when multiple devices sync different visits
         # or vaccinations for the same patient.
         merged_record = merge_patient_records(
@@ -714,8 +739,12 @@ def create_or_update_patient(
             new_record_dump,
             stale=stale,
             keep_server_guardians=keep_guardians,
+            conflicts=conflicts,
         )
         existing_patient.full_record_json = merged_record
+        # RULE 3: THE RELATIONAL COPIES FOLLOW THE STORED RECORD
+        for column, value in mirror_columns(merged_record).items():
+            setattr(existing_patient, column, value)
         existing_patient.record_version = current_version + 1
         # background_data_hash is NOT updated here: it records what the FHIR
         # Store last ACCEPTED (see record_fhir_delivery). Updating it on save
@@ -820,12 +849,7 @@ def create_or_update_patient(
             second_last_name=pi.secondLastName,
             birth_date=pi.dob,
             biological_sex=pi.biologicalSex.value,
-            blood_type=pi.bloodType,
-            nationality_code=pi.nationalityCode,
-            guardian_name=patient_in.guardianInfo.name,
-            guardian_phone=patient_in.guardianInfo.phone,
-            guardian2_name=patient_in.guardian2Info.name if patient_in.guardian2Info else None,
-            guardian2_phone=patient_in.guardian2Info.phone if patient_in.guardian2Info else None,
+            **mirror_columns(new_record_dump),
             full_record_json=new_record_dump,
             synced_encounter_ids=[],
             background_data_hash=new_bg_hash,

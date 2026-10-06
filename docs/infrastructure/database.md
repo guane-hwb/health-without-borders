@@ -55,7 +55,7 @@ Stores the core identity data of migrant children. Relational columns mirror the
 | `birth_date` | Date | Not Null | Date of birth for age calculation and vaccine schedules. |
 | `biological_sex` | Varchar(2) | Nullable | Biological sex: M, F, I (Res. 866 Elem. 5). |
 | `blood_type` | Varchar(5) | Nullable | Optional blood group (e.g., O+, A-). |
-| `nationality_code`| Varchar(3) | Index | ISO 3166-1 country code (Res. 866 Elems. 1.1, 1.2). Critical for migrant population filtering. |
+| `nationality_code`| Varchar(3) | Index | ISO 3166-1 alpha-3 country code (Res. 866 Elems. 1.1, 1.2), or `UNK`. The record keeps what the app sent (alpha-3, alpha-2 or numeric); the column is always alpha-3, so statistics count `VE`, `VEN` and `862` as one country. Critical for migrant population filtering. |
 | `guardian_name` | Varchar | Nullable | Name of the legal guardian or companion. |
 | `guardian_phone` | Varchar | Nullable | Contact number for the guardian. |
 | `guardian2_name` | Varchar | Nullable | Name of the second guardian (optional). |
@@ -145,7 +145,9 @@ Every `User` belongs to an `Organization`, but **patient records do not**. A pat
 
 **Identity guard.** When the match comes from the tag (the payload's `patientId` is not the stored record's), the bracelet UID alone proves nothing — any NFC phone can read it. The payload must be the same child: if the stored patient has a real identity document, the incoming number must match it (an empty one is refused); if it has none, or a placeholder type (`AS`/`MS`/`SI`), birth date, first name and first surname must match. Otherwise the sync is refused with `409 identity_mismatch`. Even when it matches, a tag-resolved sync may add visits and vaccinations but **cannot change the guardians or their cards** (the guardian card is the second factor for reading a minor's record); the response reports `guardians_not_changed_by_tag_resolved_sync`. This relies on the operating assumption that **a physical bracelet is never reassigned from one child to another**.
 
-**Stale payloads.** A sync that still carries a bracelet or guardian-card UID already present in `retired_device_uids` is an offline copy from before a replacement. It keeps the stored bracelet and guardians, merges allergies and background lists as a union (nothing stored is dropped), adds its new visits/vaccinations, and reports `stale_payload_retired_device_uid` in `conflicts`. A retired bracelet UID can never be bound to a new patient (`409 device_retired`). General version control for stale copies that do not touch a UID needs the `record_version` column (pending migrations).
+**Stale payloads.** A sync that still carries a bracelet or guardian-card UID already present in `retired_device_uids` is an offline copy from before a replacement. It keeps the stored bracelet and guardians, merges allergies and background lists as a union (nothing stored is dropped), adds its new visits/vaccinations, and reports `stale_payload_retired_device_uid` in `conflicts`. A retired bracelet UID can never be bound to a new patient (`409 device_retired`). A copy that sends `baseVersion` lower than `record_version` is treated the same way (`stale_payload_base_version`).
+
+**Edits of stored visits and vaccinations.** A visit or vaccination the server already holds (same `encounterIdentifier` / `vaccinationId`) keeps its stored version. When the payload's copy of it says something else — the app edits the last visit in place — the response lists `visit_edit_not_applied:<encounterIdentifier>` or `vaccination_edit_not_applied:<vaccinationId>` in `conflicts`, and the log names the fields that differ (never their values). Only what the device sends counts: a field it leaves empty (a visit's diagnoses, which the server codes after the first sync), the server's `recordedBy*` stamps and the AI provenance of diagnoses are not edits.
 
 **Concurrency.** The upsert reads the patient with `SELECT … FOR UPDATE`, so two syncs of the same patient are serialised instead of the second overwriting the first.
 
@@ -160,7 +162,7 @@ Every `User` belongs to an `Organization`, but **patient records do not**. A pat
 ### 3.2. Hybrid Relational-Document Model (JSON)
 Migrant populations often have unstructured or transient data.
 * **Implementation:** PostgreSQL's `JSON` data type stores the `full_record_json` field — the authoritative source for the complete patient payload.
-* **Relational Columns:** The most-queried fields (`document_number`, `first_name`, `last_name`, `nationality_code`) are mirrored as indexed relational columns for fast lookups without scanning JSON.
+* **Relational Columns:** The most-queried fields (`document_number`, `first_name`, `last_name`, `nationality_code`) are mirrored as indexed relational columns for fast lookups without scanning JSON. The mutable ones (`nationality_code`, `blood_type`, `guardian_name`, `guardian_phone`, `guardian2_name`, `guardian2_phone`) are rewritten from the stored record on every sync, so a corrected nationality or a removed guardian reaches the statistics and `/search` (migration `0005` brought the existing rows in line).
 * **FHIR Source:** The JSON is the source of truth used to build FHIR R4 RDA bundles for interoperability.
 
 ### 3.3. Delta Sync Tracking

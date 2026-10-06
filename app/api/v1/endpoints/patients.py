@@ -46,6 +46,7 @@ from app.schemas.patient import (
     PatientSearchRequest,
     PatientSyncRecord,
     PatientSyncResponse,
+    fields_not_kept,
 )
 from app.services.access_log_service import (
     SCAN,
@@ -387,7 +388,8 @@ async def _apply_llm_coding(
 
 @router.post("/sync", response_model=PatientSyncResponse, status_code=status.HTTP_201_CREATED)
 async def sync_patient(
-    patient_data: PatientSyncRecord, 
+    patient_data: PatientSyncRecord,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -424,8 +426,20 @@ async def sync_patient(
     registered twice under two different `device_uid`s. Unidentified document types
     (`AS`, `MS`, `SI`) are exempt, since their numbers are local placeholders.
 
+    **Edits the server does not apply:** a visit or vaccination the server already
+    holds keeps its stored version. If the payload's copy of it differs (an
+    edited plan, `diagnosisType`, practitioner…), `conflicts` lists
+    `visit_edit_not_applied:<encounterIdentifier>` or
+    `vaccination_edit_not_applied:<vaccinationId>`; the rest of the record syncs.
+
     **Allowed roles:** `doctor`, `nurse`.
     """
+    # A field the app sends that the schema does not know is dropped without
+    # an error; log its name (never its value) so the gap shows up.
+    dropped = fields_not_kept(await request.json(), patient_data.model_dump(mode="json"))
+    if dropped:
+        logger.warning("Sync payload fields the server does not keep: %s", ", ".join(dropped))
+
     # Read once, up front: after a failed commit the session is rolled back and
     # current_user is expired, so touching its attributes in the error handler
     # below would raise again and turn a clean 4xx/500 into an unlogged crash.

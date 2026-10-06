@@ -20,6 +20,7 @@ import pytest
 from app.api.deps import get_current_user
 from app.db.models import EmergencyAccessLog, Patient
 from app.main import app
+from app.schemas.patient import fields_not_kept
 from tests.api.v1.test_patients import MockNurse, MockUser
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -76,6 +77,43 @@ def test_registration_from_older_builds_with_other_and_doc_aliases(client, db_se
     assert stored["guardianInfo"]["documentNumber"] == "SINT-ACU-0001"
 
 
+def test_every_field_the_app_sends_is_kept(client, db_session):
+    """ethnicCommunity was dropped without an error (x-oct26-comunidad-etnica-descartada)."""
+    payload = fixture("register_minor")
+    payload["medicalHistory"] = [fixture("consultation")]
+    payload["vaccinationRecord"] = [fixture("vaccine")]
+
+    assert _sync(client, deepcopy(payload)).status_code == 201
+
+    stored = _record(db_session).full_record_json
+    assert fields_not_kept(payload, stored) == []
+    assert stored["patientInfo"]["ethnicCommunity"] == "Comunidad Sintetica"
+
+
+def test_a_field_the_server_does_not_keep_is_logged_by_name(client, db_session, app_log):
+    payload = fixture("register_minor")
+    payload["patientInfo"]["futureField"] = "valor sintetico"
+    payload["medicalHistory"] = [{**fixture("consultation"), "futureFlag": True}]
+
+    assert _sync(client, payload).status_code == 201
+
+    messages = [r.getMessage() for r in app_log.records if "does not keep" in r.getMessage()]
+    assert messages == [
+        "Sync payload fields the server does not keep: "
+        "medicalHistory[].futureFlag, patientInfo.futureField"
+    ]
+
+
+def test_the_app_payload_and_its_legacy_keys_log_nothing(client, db_session, app_log):
+    payload = fixture("register_minor")
+    guardian = payload["guardianInfo"]
+    guardian["docType"] = guardian.pop("documentType")  # older builds
+
+    assert _sync(client, payload).status_code == 201
+
+    assert not [r for r in app_log.records if "does not keep" in r.getMessage()]
+
+
 def test_scan_returns_what_the_app_reads(client, db_session, registered):
     payload = fixture("register_minor")
     _as(MockUser)
@@ -96,6 +134,7 @@ def test_scan_returns_what_the_app_reads(client, db_session, registered):
         assert key in body
     assert body["patientId"] == payload["patientId"]
     assert body["recordVersion"] == 1
+    assert body["patientInfo"]["ethnicCommunity"] == "Comunidad Sintetica"
 
 
 def test_minor_scan_without_card_uses_the_text_the_app_matches(client, db_session, registered):
