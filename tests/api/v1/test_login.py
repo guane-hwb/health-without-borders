@@ -7,6 +7,8 @@ Covers:
 - POST /api/v1/logout (H4: token revocation)
 - JWT protection on protected endpoints
 """
+from datetime import datetime, timedelta, timezone
+
 from fastapi.testclient import TestClient
 
 from app.core.security import get_password_hash
@@ -159,6 +161,11 @@ class TestTokenRefresh:
 
         # First refresh succeeds
         client.post("/api/v1/login/refresh", json={"refresh_token": old_refresh})
+        # Past the retry grace period (a lost response may be retried within it)
+        db_session.query(RevokedToken).update(
+            {RevokedToken.revoked_at: datetime.now(timezone.utc) - timedelta(minutes=5)}
+        )
+        db_session.commit()
 
         # Second attempt with same token fails (revoked)
         response = client.post(

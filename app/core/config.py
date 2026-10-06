@@ -79,6 +79,10 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days
+    # A rotated refresh token presented again within this many seconds, while the
+    # token issued in its place is still unused, is a retry after a lost
+    # response, not theft: it gets a new pair instead of revoking every session.
+    REFRESH_RETRY_GRACE_SECONDS: int = 120
     
     # --- NFC ---
     # Version 0 is reserved for this legacy single key. Tags written before key

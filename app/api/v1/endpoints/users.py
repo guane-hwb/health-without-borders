@@ -93,9 +93,18 @@ def create_user(
     )
     
     db.add(db_user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Two simultaneous requests with the same email both pass the check
+        # above; the unique index stops the second, which used to be a 500.
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The user with this email already exists in the system."
+        )
     db.refresh(db_user)
-    
+
     logger.info(f"User user_id={db_user.id} created successfully in Org {target_org_id}.")
     
     return db_user

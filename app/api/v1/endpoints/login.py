@@ -1,10 +1,11 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from jwt import PyJWTError
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -49,6 +50,64 @@ def _purge_expired_revoked_tokens(db: Session) -> int:
     if deleted:
         db.commit()
     return deleted
+
+
+def _expiry(exp: Optional[int]) -> datetime:
+    return datetime.fromtimestamp(exp, tz=timezone.utc) if exp else datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    """SQLite hands timestamps back without their zone; they are UTC."""
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _revoke_once(
+    db: Session, jti: str, expires_at: datetime, replaced_by: Optional[str] = None
+) -> bool:
+    """
+    Add ``jti`` to the revocation list; False if it was already there.
+
+    A single ``INSERT … ON CONFLICT DO NOTHING``, so of two requests revoking
+    the same token exactly one wins. Reading first and inserting after let two
+    simultaneous logouts both try the insert, and the second failed with a 500.
+    """
+    dialect = postgresql if db.get_bind().dialect.name == "postgresql" else sqlite
+    statement = (
+        dialect.insert(RevokedToken)
+        .values(
+            jti=jti,
+            expires_at=expires_at,
+            revoked_at=datetime.now(timezone.utc),
+            replaced_by_jti=replaced_by,
+        )
+        .on_conflict_do_nothing(index_elements=["jti"])
+    )
+    return db.execute(statement).rowcount == 1
+
+
+def _retry_within_grace(db: Session, jti: str, issued_jti: str) -> bool:
+    """
+    Whether an already rotated refresh token is a retry after a lost response.
+
+    On a patchy network the server can rotate the token and the response never
+    arrive; the device then retries with the token it still holds. That is a
+    retry, not theft, when it comes soon after the rotation and the token
+    issued then was never used. The token issued then is revoked in favour of
+    the one issued now, so only one of them stays valid.
+    """
+    rotated = db.query(RevokedToken).filter(RevokedToken.jti == jti).one_or_none()
+    if rotated is None or rotated.replaced_by_jti is None:
+        return False  # revoked by logout, or before replacements were recorded
+    grace = timedelta(seconds=settings.REFRESH_RETRY_GRACE_SECONDS)
+    if datetime.now(timezone.utc) - _as_utc(rotated.revoked_at) > grace:
+        return False
+    previous_expiry = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES
+    )
+    if not _revoke_once(db, rotated.replaced_by_jti, previous_expiry, replaced_by=issued_jti):
+        return False  # the token issued in its place was already used
+    rotated.replaced_by_jti = issued_jti
+    return True
 
 
 @router.post("/login/access-token", response_model=TokenPair)
@@ -116,6 +175,11 @@ def refresh_access_token(
     someone else holds a copy: every session of that user is revoked (the
     legitimate device signs in again, the copy stops working).
 
+    Except a retry after a lost response: a rotated token presented again
+    within `REFRESH_RETRY_GRACE_SECONDS` (2 minutes), while the token issued
+    in its place is still unused, gets a new pair. The token issued the first
+    time is revoked in its favour, so only one refresh token stays valid.
+
     **Responses:**
     - `200`: New token pair returned.
     - `401`: Refresh token is invalid, expired, or revoked.
@@ -140,20 +204,6 @@ def refresh_access_token(
     except PyJWTError:
         raise credentials_exception
 
-    # Check if the refresh token has been revoked
-    revoked = db.query(RevokedToken).filter(RevokedToken.jti == jti).first()
-    if revoked:
-        owner = user_for_token(db, payload)
-        if owner is not None:
-            revoke_all_sessions(owner)
-            db.commit()
-        logger.warning(
-            "Revoked refresh token reuse attempt jti=%s; sessions revoked for user_id=%s",
-            jti[:8],
-            owner.id if owner is not None else "unknown",
-        )
-        raise credentials_exception
-
     # Verify the token still represents the account, and that the account is
     # active (and so is its organization)
     user = user_for_token(db, payload)
@@ -163,16 +213,27 @@ def refresh_access_token(
     if not token_is_current(user, payload):
         raise credentials_exception
 
-    # Revoke the old refresh token (rotation)
-    expires_at = datetime.fromtimestamp(exp, tz=timezone.utc) if exp else datetime.now(timezone.utc)
-    db.add(RevokedToken(jti=jti, expires_at=expires_at))
+    # Rotation: revoke the presented token, recording the one issued for it.
+    new_access, new_refresh = security.token_pair_for(user)
+    issued_jti = security.decode_token(new_refresh)["jti"]
+    if not _revoke_once(db, jti, _expiry(exp), replaced_by=issued_jti):
+        if _retry_within_grace(db, jti, issued_jti):
+            logger.info("Refresh retried within the grace period jti=%s", jti[:8])
+        else:
+            # Someone else holds a copy: every session of the user ends.
+            db.rollback()
+            revoke_all_sessions(user)
+            db.commit()
+            logger.warning(
+                "Revoked refresh token reuse attempt jti=%s; sessions revoked for user_id=%s",
+                jti[:8],
+                user.id,
+            )
+            raise credentials_exception
     db.commit()
 
     # Opportunistically drop revocation rows that are already expired.
     _purge_expired_revoked_tokens(db)
-
-    # Issue new token pair
-    new_access, new_refresh = security.token_pair_for(user)
 
     return TokenPair(
         access_token=new_access,
@@ -230,12 +291,9 @@ def logout(
             detail="Invalid token",
         )
 
-    # Idempotent: if already revoked, just return success
-    existing = db.query(RevokedToken).filter(RevokedToken.jti == jti).first()
-    if not existing:
-        expires_at = datetime.fromtimestamp(exp, tz=timezone.utc) if exp else datetime.now(timezone.utc)
-        db.add(RevokedToken(jti=jti, expires_at=expires_at))
-        db.commit()
+    # Idempotent: a token revoked already (a double tap, a retry) is fine.
+    _revoke_once(db, jti, _expiry(exp))
+    db.commit()
 
     # Also revoke the refresh token when the client provides it, so the
     # session is fully terminated. Best-effort: a malformed or expired refresh
@@ -244,23 +302,9 @@ def logout(
         try:
             refresh_payload = security.decode_token(body.refresh_token)
             refresh_jti = refresh_payload.get("jti")
-            refresh_type = refresh_payload.get("type")
-            refresh_exp = refresh_payload.get("exp")
-
-            if refresh_jti and refresh_type == "refresh":
-                already_revoked = (
-                    db.query(RevokedToken)
-                    .filter(RevokedToken.jti == refresh_jti)
-                    .first()
-                )
-                if not already_revoked:
-                    refresh_expires_at = (
-                        datetime.fromtimestamp(refresh_exp, tz=timezone.utc)
-                        if refresh_exp
-                        else datetime.now(timezone.utc)
-                    )
-                    db.add(RevokedToken(jti=refresh_jti, expires_at=refresh_expires_at))
-                    db.commit()
+            if refresh_jti and refresh_payload.get("type") == "refresh":
+                _revoke_once(db, refresh_jti, _expiry(refresh_payload.get("exp")))
+                db.commit()
         except PyJWTError:
             # Invalid/expired refresh token — nothing to revoke, ignore.
             pass

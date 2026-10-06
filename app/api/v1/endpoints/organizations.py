@@ -110,6 +110,14 @@ def create_organization(
 
         # Single commit: org + admin succeed or fail together.
         db.commit()
+    except IntegrityError:
+        # The checks above passed, but a simultaneous request created the same
+        # organization name or administrator email first.
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The organization or its administrator email already exists.",
+        )
     except Exception:
         db.rollback()
         logger.exception(
