@@ -113,12 +113,15 @@ def test_the_new_password_follows_the_policy(client, db_session, people, new):
 
 
 def test_password_changes_are_rate_limited(client, db_session, people):
+    """Guessing the current password counts against the account like a sign-in."""
     tokens = _login(client, "doc@clinic.org").json()
 
-    codes = [_change(client, tokens, current="no es la actual").status_code for _ in range(11)]
+    responses = [_change(client, tokens, current="no es la actual") for _ in range(6)]
 
-    assert codes[:10] == [400] * 10
-    assert codes[10] == 429
+    assert [r.status_code for r in responses[:5]] == [400] * 5
+    assert responses[5].status_code == 429
+    assert responses[5].json()["code"] == "login_paused"
+    assert _login(client, "doc@clinic.org").status_code == 429  # the sign-in is paused too
 
 
 def test_an_admin_reset_gives_a_temporary_password_and_ends_every_session(
@@ -157,6 +160,18 @@ def test_resets_follow_the_management_guards(client, db_session, people, actor, 
 
     assert response.status_code == code
     assert _login(client, "doc@clinic.org").status_code == 200  # nothing was reset
+
+
+def test_a_reset_lifts_the_pause_of_a_user_who_forgot_their_password(client, db_session, people):
+    for _ in range(5):
+        assert _login(client, "doc@clinic.org", "no la recuerdo").status_code == 401
+    assert _login(client, "doc@clinic.org").status_code == 429
+    admin = _login(client, "admin@clinic.org").json()
+
+    reset = client.post(f"/api/v1/users/{people['doctor']}/reset-password", headers=_auth(admin))
+
+    temporary = reset.json()["temporary_password"]
+    assert _login(client, "doc@clinic.org", temporary).status_code == 200
 
 
 def test_a_superadmin_can_reset_an_org_admin(client, db_session, people):

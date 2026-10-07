@@ -21,6 +21,8 @@ from app.core.rate_limit import limiter
 from app.db.models import RevokedToken
 from app.db.session import get_db
 from app.schemas.token import LogoutRequest, RefreshRequest, TokenPair
+from app.services import login_throttle
+from app.services.login_throttle import ensure_login_not_paused
 
 logger = logging.getLogger(__name__)
 
@@ -136,18 +138,27 @@ def login_access_token(
     - `401` with `code` `user_inactive` / `organization_inactive`: the account
       or its organization is deactivated (only after a correct password).
     - `422`: Missing required form fields.
+    - `429` with `code` `login_paused`: too many failed attempts for this
+      account (from any address); `Retry-After` says when to try again. Also
+      `429` past the per-address limit.
     """
+    # 0. An account with too many recent failures is paused, whatever the
+    # password: answering a correct one would let the guessing go on.
+    ensure_login_not_paused(db, form_data.username)
+
     # 1. Authenticate User
     user = find_user_by_email(db, form_data.username)
     hashed_password = user.hashed_password if user else DUMMY_PASSWORD_HASH
     password_is_valid = security.verify_password(form_data.password, hashed_password)
 
     if not user or not password_is_valid:
+        login_throttle.record_failure(db, form_data.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
         )
-        
+    login_throttle.clear_failures(db, form_data.username)
+
     ensure_account_is_active(user, status.HTTP_401_UNAUTHORIZED)
 
     # 2. Create token pair

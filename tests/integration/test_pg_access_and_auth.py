@@ -163,3 +163,24 @@ def test_simultaneous_refreshes_keep_the_sessions(api, staff):
 
     assert sorted(r.status_code for r in responses) == [200, 200]
     assert _me(api, other_device).status_code == 200
+
+
+def test_simultaneous_failed_logins_are_all_counted(api, staff, db):
+    """The per-account count is one atomic upsert: no failure is lost to a race."""
+    from app.core.rate_limit import limiter
+    from app.services.login_throttle import account_key
+
+    limiter.reset()  # the staff fixture already used part of the per-address limit
+    codes = _at_once(5, lambda client: client.post(
+        "/api/v1/login/access-token",
+        data={"username": "doc@a.org", "password": "no es esta"},
+    ).status_code)
+
+    assert codes == [401] * 5
+    failures = db.execute(
+        text("SELECT failures FROM login_failures WHERE key = :key"), {"key": account_key("doc@a.org")}
+    ).scalar_one()
+    assert failures == 5
+    paused = api.post("/api/v1/login/access-token", data={"username": "doc@a.org", "password": PASSWORD})
+    assert paused.status_code == 429
+    assert paused.json()["code"] == "login_paused"

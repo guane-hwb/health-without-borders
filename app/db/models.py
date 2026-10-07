@@ -442,6 +442,26 @@ class RevokedToken(Base):
     )
 
 
+class LoginFailure(Base):
+    """
+    Failed sign-ins per account, shared by every instance (see
+    app/services/login_throttle.py). One row per account with recent failures.
+    """
+    __tablename__ = "login_failures"
+
+    key = Column(
+        String(64), primary_key=True,
+        comment="HMAC-SHA256 of the normalized email: no email is stored",
+    )
+    failures = Column(Integer, nullable=False, comment="Failures in the current streak")
+    first_failure_at = Column(DateTime(timezone=True), nullable=False)
+    last_failure_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    blocked_until = Column(
+        DateTime(timezone=True), nullable=True,
+        comment="Sign-in is paused for this account until then",
+    )
+
+
 class EmergencyAccessLog(Base):
     """
     Central, append-only audit ledger of break-glass (emergency) accesses to a
