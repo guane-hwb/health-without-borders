@@ -134,7 +134,11 @@ valid for up to 7 days and would receive the replacement key. In this order:
    `{"is_active": false}`) has the same effect on sessions, and reactivating it
    later does **not** bring them back.
 2. **Revoke the key version** the device held, as above.
-3. **Change the password** if it may have been exposed.
+3. **Change the password** if it may have been exposed:
+   `POST /api/v1/users/{id}/reset-password` (same roles as step 1) returns a
+   new temporary password once and also ends every session, so it can replace
+   step 1. Give it to the user, who replaces it with their own
+   (`POST /api/v1/users/me/password`).
 
 If the whole organization is compromised, deactivate the organization: that
 blocks all its users at once and revokes all their sessions.

@@ -14,6 +14,25 @@ def check_password_length(password: str) -> str:
     return password
 
 
+#: A password the user chooses: longer than the temporary ones an admin sets.
+MIN_CHOSEN_PASSWORD_LENGTH = 12
+#: Rejected whatever their length rules say (compared case-insensitively).
+COMMON_PASSWORDS = frozenset({
+    "123456789012", "1234567890123", "password1234", "contraseña123", "contrasena123",
+    "qwertyuiop12", "change_me_now", "health-without-borders", "healthwithoutborders",
+})
+
+
+def check_chosen_password(password: str) -> str:
+    if len(password) < MIN_CHOSEN_PASSWORD_LENGTH:
+        raise ValueError(
+            f"Password must be at least {MIN_CHOSEN_PASSWORD_LENGTH} characters."
+        )
+    if password.strip().casefold() in COMMON_PASSWORDS:
+        raise ValueError("This password is too common; choose another one.")
+    return check_password_length(password)
+
+
 def normalize_email(email: str) -> str:
     """Emails are case-insensitive: store and compare them in lower case."""
     return email.strip().lower()
@@ -40,12 +59,40 @@ class UserUpdate(BaseModel):
     """Payload to toggle a user's active state (soft deactivate)."""
     is_active: bool = Field(..., description="New active state for the user")
 
+class PasswordChange(BaseModel):
+    """Body of POST /users/me/password."""
+    current_password: str = Field(..., description="The password in use now")
+    new_password: str = Field(
+        ...,
+        description=(
+            f"At least {MIN_CHOSEN_PASSWORD_LENGTH} characters, at most "
+            f"{MAX_PASSWORD_BYTES} bytes, not a common password"
+        ),
+    )
+
+    _check_new = field_validator("new_password")(check_chosen_password)
+
+
+class PasswordResetResponse(BaseModel):
+    """Response of POST /users/{id}/reset-password: shown once, never stored in clear."""
+    temporary_password: str = Field(
+        ..., description="Give it to the user; they should replace it with their own"
+    )
+
+
 class UserResponse(UserBase):
     """
     Schema for returning user data (hides the password).
     """
-    id: str               
+    id: str
     organization_id: str
+    must_change_password: bool = Field(
+        False,
+        description=(
+            "The password was set by an administrator; the app should ask the "
+            "user to choose their own (POST /users/me/password)"
+        ),
+    )
     nfc_encryption_key: Optional[str] = Field(
         None, description="Current version's hex AES-256 NFC key (backward compatible)"
     )

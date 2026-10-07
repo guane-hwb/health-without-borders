@@ -1,16 +1,32 @@
 import logging
+from datetime import datetime, timezone
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import find_user_by_email, get_current_user, revoke_all_sessions
-from app.core.security import get_password_hash, nfc_key_claims
+from app.core.config import settings
+from app.core.rate_limit import limiter
+from app.core.security import (
+    generate_temporary_password,
+    get_password_hash,
+    nfc_key_claims,
+    token_pair_for,
+    verify_password,
+)
 from app.db.models import Organization, User, UserRole
 from app.db.session import get_db
-from app.schemas.user import UserCreate, UserResponse, UserUpdate
+from app.schemas.token import TokenPair
+from app.schemas.user import (
+    PasswordChange,
+    PasswordResetResponse,
+    UserCreate,
+    UserResponse,
+    UserUpdate,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -89,7 +105,8 @@ def create_user(
         hashed_password=get_password_hash(user_in.password),
         role=user_in.role,
         is_active=user_in.is_active,
-        organization_id=target_org_id
+        organization_id=target_org_id,
+        must_change_password=True,  # the administrator chose it
     )
     
     db.add(db_user)
@@ -156,6 +173,7 @@ def get_current_user_profile(
         role=current_user.role,
         is_active=current_user.is_active,
         organization_id=current_user.organization_id,
+        must_change_password=bool(current_user.must_change_password),
         **nfc_key_claims(role=current_user.role, db=db),
     )
 
@@ -247,6 +265,90 @@ def update_user_status(
         current_user.id, target.id, target.is_active,
     )
     return target
+
+
+@router.post("/me/password", response_model=TokenPair)
+@limiter.limit(settings.RATE_LIMIT_LOGIN)
+def change_own_password(
+    request: Request,
+    body: PasswordChange,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Change the caller's own password.
+
+    Every other session of the user ends (a password that may have been exposed
+    must not leave a stolen device signed in); this device gets a new token
+    pair in the response, so it stays signed in. Clears `must_change_password`.
+
+    - **Allowed roles:** any authenticated user.
+    - **Responses:**
+    - `200`: Password changed; new token pair (same shape as the login response).
+    - `400`: The current password is wrong, or the new one equals it.
+    - `422`: The new password breaks the policy (at least 12 characters, at most
+      72 bytes, not a common password).
+    - `429`: Too many attempts (same limit as the login).
+    """
+    # 400, not 401: a 401 makes the app refresh its session and retry.
+    if not verify_password(body.current_password, current_user.hashed_password):
+        logger.warning("Password change with a wrong current password user_id=%s", current_user.id)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The current password is not correct.",
+        )
+    if verify_password(body.new_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The new password must be different from the current one.",
+        )
+
+    current_user.hashed_password = get_password_hash(body.new_password)
+    current_user.must_change_password = False
+    current_user.password_changed_at = datetime.now(timezone.utc)
+    revoke_all_sessions(current_user)
+    db.commit()
+    logger.info("user_id=%s changed their password; other sessions revoked", current_user.id)
+
+    access, refresh = token_pair_for(current_user)
+    return TokenPair(
+        access_token=access,
+        refresh_token=refresh,
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        must_change_password=False,
+        **nfc_key_claims(role=current_user.role, db=db),
+    )
+
+
+@router.post("/{user_id}/reset-password", response_model=PasswordResetResponse)
+def reset_user_password(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Give a user a new temporary password (forgotten, or possibly exposed).
+
+    The server generates it and returns it once; give it to the user, who
+    should replace it with their own (`must_change_password` is set). Every
+    session of the user ends, so a stolen device stops working too.
+
+    - **Allowed roles:** `superadmin`, `org_admin` (scoped like PATCH).
+    - **Responses:**
+    - `200`: `{"temporary_password": "..."}`.
+    - `400`: Attempt on own account (use POST /users/me/password).
+    - `403`: Not enough privileges, cross-org, or targeting a superadmin/admin.
+    - `404`: User not found.
+    """
+    target = _load_manageable_target(user_id, db, current_user, action="reset the password of")
+    temporary = generate_temporary_password()
+    target.hashed_password = get_password_hash(temporary)
+    target.must_change_password = True
+    target.password_changed_at = datetime.now(timezone.utc)
+    revoke_all_sessions(target)
+    db.commit()
+    logger.info("actor_id=%s reset the password of user_id=%s", current_user.id, user_id)
+    return PasswordResetResponse(temporary_password=temporary)
 
 
 @router.post("/{user_id}/revoke-sessions", status_code=status.HTTP_204_NO_CONTENT)

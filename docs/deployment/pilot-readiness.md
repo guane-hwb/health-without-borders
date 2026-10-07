@@ -39,7 +39,7 @@ The site's `org_admin` creates `doctor` and `nurse` accounts for the healthcare 
 
 **Step 4 — Distribute credentials:**
 
-Provide each user with their email and temporary password. Users authenticate via `POST /api/v1/login/access-token` to obtain an access and a refresh token (`POST /api/v1/login/refresh` renews them).
+Provide each user with their email and temporary password. Users authenticate via `POST /api/v1/login/access-token` to obtain an access and a refresh token (`POST /api/v1/login/refresh` renews them). The login response carries `must_change_password: true` for an account an administrator created or reset; the user then chooses their own password with `POST /api/v1/users/me/password` (at least 12 characters). An administrator can issue a new temporary password with `POST /api/v1/users/{id}/reset-password`. The flag is informational for now: nothing is blocked until the app has a password-change screen.
 
 For the full RBAC matrix (who can do what), see [Database Schema § RBAC](../infrastructure/database.md#4-role-based-access-control-rbac-matrix).
 

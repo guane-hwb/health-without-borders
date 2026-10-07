@@ -1,4 +1,5 @@
 import logging
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Union
@@ -103,6 +104,16 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     Compares a raw string (e.g., "123456") against the stored hash.
     """
     return pwd_context.verify(plain_password, hashed_password)
+
+
+#: No 0/O, 1/l/I: a temporary password is read out or copied by hand.
+_TEMPORARY_ALPHABET = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+TEMPORARY_PASSWORD_LENGTH = 16
+
+
+def generate_temporary_password() -> str:
+    """A random password for an administrator's reset (about 93 bits)."""
+    return "".join(secrets.choice(_TEMPORARY_ALPHABET) for _ in range(TEMPORARY_PASSWORD_LENGTH))
 
 
 def get_password_hash(password: str) -> str:
