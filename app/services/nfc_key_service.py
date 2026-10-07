@@ -439,10 +439,9 @@ def keyring_status(db: Session) -> dict:
     """
     Versions and their state, with no key material.
 
-    With no KEK configured the tables may not even exist yet — they are created
-    by ``scripts/create_tables.py``, not at startup — so this reports the
-    environment's view without querying them. Otherwise merging this feature
-    would break the endpoint on every deployment until someone ran the script.
+    With no KEK configured the keyring lives in the environment, not in the
+    tables (which the startup migrations create but leave empty), so this
+    reports the environment's view without querying them.
     """
     if kek_wrapper() is None:
         env_ring = settings.nfc_keyring()

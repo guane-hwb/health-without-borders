@@ -27,11 +27,11 @@ Each pilot site operates as its own organization for staff and administration. P
 
 **Step 1 — Create the organization:**
 
-A `superadmin` user creates the organization via `POST /api/v1/organizations` with the provider's name, REPS code, and NIT.
+A `superadmin` user creates the organization via `POST /api/v1/organizations` with its `name` (and `is_active`). The request may also carry an `admin` object (`email`, `full_name`, `password`) to create the site's `org_admin` in the same transaction, which replaces Step 2. The provider's REPS code and NIT are not organization fields: the app sends them with each visit (`provider.repsCode`, `provider.nitNumber`), and they go to the RDA from there.
 
 **Step 2 — Create an `org_admin` user:**
 
-The `superadmin` provisions an `org_admin` for the new organization via `POST /api/v1/users`. This admin will manage the site's clinical staff.
+If it was not created in Step 1, the `superadmin` provisions an `org_admin` for the new organization via `POST /api/v1/users` (with `organization_id`). This admin will manage the site's clinical staff.
 
 **Step 3 — The `org_admin` creates clinical users:**
 
@@ -84,7 +84,7 @@ Before going live with real patients, validate the full pipeline with synthetic 
 
 1. Sync a patient as above.
 2. Write the patient's triage data to an NFC wristband.
-3. On a different device, scan the wristband via `GET /api/v1/patients/scan/{device_uid}`.
+3. On a different device, scan the wristband via `POST /api/v1/patients/scan` (`{"device_uid": ..., "guardian_device_uid": ...}`). The legacy `GET /api/v1/patients/scan/{device_uid}` still works, but it leaves the bracelet UID in Cloud Run's request logs.
 4. Verify the patient record is returned correctly.
 
 ### 4.3. Guardian 2FA test
@@ -155,7 +155,7 @@ For log access, see [GCP Deployment § Monitoring](../infrastructure/gcp-deploy.
 If a critical issue is discovered during the pilot:
 
 1. **Immediate:** Revert Cloud Run to the previous revision: `gcloud run services update-traffic <SERVICE> --to-revisions=<PREVIOUS_REVISION>=100 --region=<REGION>`.
-2. **If data is affected:** The FHIR Store has resource versioning enabled — previous versions of resources are preserved. Cloud SQL can be restored via point-in-time recovery (production tier).
+2. **If data is affected:** The FHIR Store has resource versioning enabled — previous versions of resources are preserved. Cloud SQL can be restored from a backup or to a point in time only if they were enabled on the instance; on the pilot instance they are (daily backups, 14 kept, point-in-time recovery for 7 days, since 2026-10-02). Restore into a new instance and point the service at it, and restore the matching `NFC_KEK` with it (see [NFC Key Management](../infrastructure/nfc-key-management.md)). The restore procedure has not been rehearsed yet.
 3. **If the issue is in the mobile app:** Distribute a hotfix APK or revert to the previous build.
 
 ---

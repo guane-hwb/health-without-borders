@@ -61,7 +61,10 @@ gcloud healthcare fhir-stores create hwb-fhir-store \
 
 ## 4. IAM Configuration
 
-The backend authenticates using a service account with minimal permissions:
+The backend calls the Healthcare API as its Cloud Run service account. The recommended setup is a dedicated account (here `hwb-backend@`) holding only what the service needs: `roles/healthcare.fhirResourceEditor` on the FHIR store (below), `roles/cloudsql.client`, `roles/aiplatform.user` and `roles/secretmanager.secretAccessor` on its secrets, and the service deployed with `--service-account`.
+
+> **The pilot deployment (`hwb-backend-dev`) does not do this yet:** `cloudbuild.yaml` sets no `--service-account`, so the service runs as the Compute Engine default account, which holds `roles/editor` on the whole project.
+
 
 ```bash
 gcloud healthcare fhir-stores add-iam-policy-binding hwb-fhir-store \

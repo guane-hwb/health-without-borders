@@ -120,17 +120,7 @@ identifier, no clinical data, no key material.
 
 ### 2.7. Standard Clinical Catalogs
 
-#### Vaccines Catalog (`catalog_vaccines`)
-Based on the **CVX** (Code for Vaccine Administered) standard.
-* **`code` (PK):** The numeric CVX code (e.g., `90707` for MMR).
-* **`name`:** The official descriptive name of the vaccine.
-* **`is_active`:** Boolean flag.
-
-#### Diagnosis Catalog (`catalog_cie10`)
-*Note: While this table exists for historical reference, the primary assignment of ICD-10 and ICD-11 codes is now performed dynamically via the LLM service (Vertex AI) during the sync process.*
-* **`code` (PK):** The alphanumeric code (e.g., `A09.9`).
-* **`description`:** The official Spanish translation.
-* **`is_common`:** Boolean flag.
+There are no catalog tables (the former `catalog_vaccines` and `catalog_cie10` were removed). The ICD catalogs used to validate the codes the LLM suggests are JSON files loaded into memory at startup: `app/data/icd10_codes.json` and `app/data/icd11_codes.json` (WHO ICD; source, languages and license status in `THIRD_PARTY_NOTICES.md` and [AI Integration](../architecture/ai-integration.md) § 5). Vaccine codes are stored as the app sends them (CVX); statistics group them after normalizing (`03` and `3` are one vaccine), but there is no vaccine catalog on the server.
 
 ---
 
@@ -198,9 +188,11 @@ Deactivation (`PATCH` with `is_active: false`) is the way to retire a user or an
 
 | Endpoint | `superadmin` | `org_admin` | `doctor` | `nurse` |
 |---|---|---|---|---|
-| `GET /patients/scan/{device_uid}` | ❌ | ✅ | ✅ Global | ✅ Global |
-| `POST /patients/sync` | ❌ | ❌ | ✅ Full record | ✅ Vaccines only¹ |
-| `GET /patients/search` | ❌ | ✅ | ✅ Global | ✅ Global |
+| `POST /patients/scan` (and the legacy `GET /patients/scan/{device_uid}`) | ❌ | ✅ | ✅ Global | ✅ Global |
+| `POST /patients/sync` | ❌ | ❌ | ✅ Full record | ✅ All but new visits¹ |
+| `POST /patients/search` | ❌ | ✅ | ✅ Global | ✅ Global |
+
+¹ A `nurse` cannot add a visit the server does not hold yet (`403`). Everything else in the record — vaccinations, allergies, background, guardians, demographics — a nurse can add or change, as a doctor can.
 
 > Patients are global — any authenticated professional from any organization
 > can read and update any patient. The `organization_id` on the patient record
