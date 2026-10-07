@@ -99,6 +99,7 @@ def test_get_me_returns_current_user_profile(client: TestClient):
         role = UserRole.doctor
         organization_id = "org-123"
         is_active = True
+        must_change_password = True
 
     app.dependency_overrides[get_current_user] = lambda: MockDoctor()
 
@@ -110,6 +111,7 @@ def test_get_me_returns_current_user_profile(client: TestClient):
     assert data["full_name"] == "Dr. House"
     assert data["role"] == UserRole.doctor
     assert data["organization_id"] == "org-123"
+    assert data["must_change_password"] is True
 
 
 def test_get_me_works_for_all_roles(client: TestClient):
@@ -123,6 +125,7 @@ def test_get_me_works_for_all_roles(client: TestClient):
             full_name = f"User {role}"
             organization_id = "org-123"
             is_active = True
+            must_change_password = False
 
         MockUser.role = role
         app.dependency_overrides[get_current_user] = lambda u=MockUser(): u

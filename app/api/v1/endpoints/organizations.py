@@ -105,6 +105,7 @@ def create_organization(
                 role=UserRole.org_admin,
                 is_active=True,
                 organization_id=new_org.id,
+                must_change_password=True,  # the superadmin chose it
             )
             db.add(admin_user)
 

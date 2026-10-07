@@ -78,6 +78,17 @@ class User(Base):
         default=lambda: datetime.now(timezone.utc),
         comment="Account creation time; NULL for accounts created before September 2026",
     )
+    must_change_password = Column(
+        Boolean, nullable=False, default=False, server_default="false",
+        comment=(
+            "Set for an account created or reset by an administrator (who knows "
+            "the password); cleared when the user chooses their own."
+        ),
+    )
+    password_changed_at = Column(
+        DateTime(timezone=True), nullable=True,
+        comment="Last change or reset of the password; NULL if never changed",
+    )
 
     # Relationships
     organization = relationship("Organization", back_populates="users")

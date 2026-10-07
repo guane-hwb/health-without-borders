@@ -159,6 +159,7 @@ def login_access_token(
         token_type="bearer",
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         **security.nfc_key_claims(role=user.role, db=db),
+        must_change_password=bool(user.must_change_password),
     )
 
 
@@ -245,6 +246,7 @@ def refresh_access_token(
         # refresh is what renews its right to hold the keys — and it picks up a
         # rotated current version without an extra /users/me round-trip.
         **security.nfc_key_claims(role=user.role, db=db),
+        must_change_password=bool(user.must_change_password),
     )
 
 

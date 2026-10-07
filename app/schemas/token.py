@@ -26,6 +26,9 @@ class TokenPair(BaseModel):
     nfc_encryption_key: Optional[str] = None
     nfc_key_version: Optional[int] = None
     nfc_keyring: Optional[dict[str, str]] = None
+    # The password was set by an administrator (new account or reset): the app
+    # should ask the user to choose their own through POST /users/me/password.
+    must_change_password: bool = False
 
 
 class RefreshRequest(BaseModel):

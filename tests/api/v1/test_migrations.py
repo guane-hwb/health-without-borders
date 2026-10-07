@@ -18,7 +18,7 @@ def _engine():
     return create_engine("sqlite://")
 
 
-HEAD = "0006"
+HEAD = "0007"
 
 
 def _upgrade(engine, revision: str) -> None:
