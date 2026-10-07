@@ -123,6 +123,13 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     BACKEND_CORS_ORIGINS: str = ""
     RATE_LIMIT_LOGIN: str = "10/minute"
+    # Per account, in the database (shared by every instance): after this many
+    # failed sign-ins within the window, the account is paused for the base
+    # delay, doubling with each further failure up to the maximum.
+    LOGIN_FAILURES_BEFORE_DELAY: int = 5
+    LOGIN_FAILURE_WINDOW_SECONDS: int = 900
+    LOGIN_DELAY_BASE_SECONDS: int = 60
+    LOGIN_DELAY_MAX_SECONDS: int = 900
     RATE_LIMIT_PATIENT_SEARCH: str = "30/minute"
     # Number of trusted reverse proxies that append to X-Forwarded-For.
     # The client IP is read from the entry these proxies added, never from
