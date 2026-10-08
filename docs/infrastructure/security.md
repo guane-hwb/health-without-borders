@@ -38,7 +38,7 @@ Role-Based Access Control (RBAC). Tenant isolation applies to **organization and
 | `superadmin` | Global | Create organizations and provision `org_admin` users |
 | `org_admin` | Organization | Manage `doctor` and `nurse` accounts within their organization |
 | `doctor` | Organization | Full clinical access: read records, create patients, add medical history |
-| `nurse` | Organization | Restricted: read records, add vaccines. Cannot add medical history |
+| `nurse` | Organization | Read records; add vaccines and change allergies, background, guardians and demographics. Cannot add visits (consultations) |
 
 ### 2.2. Patient Authorization (Hardware 2FA)
 
@@ -54,7 +54,7 @@ For physical security in refugee or transit camps:
 ### 3.1. Encryption at Rest
 - PostgreSQL on Google Cloud SQL encrypted with AES-256 (Google-managed keys).
 - NFC chip payloads encrypted with AES-256-GCM using a versioned keyring. See [NFC Key Management](nfc-key-management.md) for configuration, rotation and retirement.
-- Automated backups are identically encrypted.
+- Cloud SQL backups are encrypted the same way. Backups are not on by default: enable them when creating the instance (see [GCP Deployment](gcp-deploy.md) § 2). On the pilot instance, daily backups (14 kept), point-in-time recovery (7 days) and deletion protection are on since 2026-10-02. A database backup is only usable together with a backup of `NFC_KEK` (see [Database](database.md) § 2.5).
 
 ### 3.2. Encryption in Transit
 - **External:** TLS 1.3 (HTTPS) between mobile clients and Cloud Run.
@@ -62,7 +62,7 @@ For physical security in refugee or transit camps:
 
 ### 3.3. Clinical Interoperability Security (FHIR)
 FHIR RDA bundles sent to the Google Cloud Healthcare API are protected by:
-- **IAM Service Accounts:** Scoped to `roles/healthcare.fhirResourceEditor`.
+- **IAM Service Accounts:** The service calls the Healthcare API as its Cloud Run service account. **The pilot deployment uses the Compute Engine default account**, which holds `roles/editor` on the whole project (and reads the four secrets), so its reach is much wider than FHIR; the database user is `postgres`. The least-privilege setup is a dedicated account with `roles/healthcare.fhirResourceEditor` on the FHIR store, `roles/cloudsql.client`, `roles/aiplatform.user` and `roles/secretmanager.secretAccessor` on the four secrets, deployed with `--service-account` (see [Healthcare API](healthcare-api.md) § 4).
 - **Cloud Audit Logs:** Every bundle ingestion triggers an immutable audit log entry.
 - **Referential Integrity:** Enabled on the FHIR Store to prevent malformed references.
 - **Resource Versioning:** Enabled to maintain a complete audit trail of all changes.
@@ -92,7 +92,7 @@ Use `POST /api/v1/patients/scan` (UIDs in the body) rather than `GET /api/v1/pat
 
 API endpoints that are vulnerable to brute-force attacks (`/login/access-token`, `/patients/search`) enforce per-client request limits using [SlowAPI](https://github.com/laurents/slowapi).
 
-- **Backend Storage:** Redis when `REDIS_URL` is set, shared across all Cloud Run instances. **The current deployment does not set it**, so each instance counts in its own memory (the effective limit is multiplied by the number of instances and resets on cold start). Provisioning Redis is pending.
+- **Backend Storage:** Redis when `REDIS_URL` is set, shared across all Cloud Run instances. **The current deployment does not set it**, so each instance counts in its own memory (the effective limit is multiplied by the number of instances and resets on cold start). Redis is not provisioned on purpose: the per-account limit below, kept in PostgreSQL, is what stops guessing an account's password from many addresses or instances.
 - **Client IP Detection:** Extracted from the `X-Forwarded-For` header set by Cloud Run's load balancer, ensuring rate limits apply per real client rather than per proxy.
 - **Default Limits:** `10/minute` for login, `30/minute` for patient search. Configurable via `RATE_LIMIT_LOGIN` and `RATE_LIMIT_PATIENT_SEARCH` environment variables.
 

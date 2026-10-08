@@ -106,6 +106,10 @@ gcloud sql instances create <DB_INSTANCE_NAME> \
     --no-storage-auto-increase \
     --network=default \
     --no-assign-ip \
+    --backup-start-time=07:00 \
+    --retained-backups-count=14 \
+    --enable-point-in-time-recovery \
+    --deletion-protection \
     --root-password="<DB_PASSWORD>"
 
 ```
@@ -122,6 +126,9 @@ gcloud sql instances create <DB_INSTANCE_NAME> \
     --storage-type=SSD \
     --storage-auto-increase \
     --enable-point-in-time-recovery \
+    --backup-start-time=07:00 \
+    --retained-backups-count=14 \
+    --deletion-protection \
     --network=default \
     --no-assign-ip \
     --root-password="<DB_PASSWORD>"
@@ -129,6 +136,8 @@ gcloud sql instances create <DB_INSTANCE_NAME> \
 ```
 
 *(Note: Production uses a dedicated 2-core 8GB RAM machine, is replicated across two zones for High Availability, and enables Point-in-Time recovery).*
+
+**Backups are off unless you ask for them, even in development.** Without the backup flags above, the instance has no backup at all: any incident or a deleted instance loses every record, consent and access log. `--backup-start-time` is UTC (07:00 UTC is 02:00 in Colombia). On an existing instance, add them with `gcloud sql instances patch` (the same flags); enabling point-in-time recovery restarts the instance for a few minutes. The pilot instance (`hwb-db-cluster`) was created without them and has had them since 2026-10-02.
 
 **3. Create the Logical Database:**
 
@@ -251,6 +260,12 @@ Create a trigger for merges/pushes to `develop`:
 - **Branch regex:** `^develop$`
 - **Configuration file:** `/cloudbuild.yaml`
 - **Behavior:** Run tests, build image, push image, deploy to Cloud Run.
+
+### What the pilot project actually has
+
+- **`hwb-backend-dev-deploy`:** push to `^develop$`, runs `cloudbuild.yaml`, as the Compute Engine default account, with no approval step. Every merge to `develop` is a deployment.
+- **`develop` is not protected on GitHub.** A direct push would deploy without a pull request or the GitHub Actions checks. `cloudbuild.yaml` re-runs lint and tests, but not coverage, `pip-audit`, `alembic check` or the PostgreSQL suite. Protecting the branch (pull request required, `Lint & Test (Python 3.11)` and `Integration (PostgreSQL 15)` as required checks) needs an admin of the repository.
+- **`hwb-pr-quality-gate`:** pull requests to `^develop$`, pointing to `cloudbuild.pr.yaml`, a file removed from the repository. It is obsolete: pull requests are checked by GitHub Actions. Delete it.
 
 ### Service account for triggers
 

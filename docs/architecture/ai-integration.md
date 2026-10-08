@@ -75,16 +75,18 @@ Every diagnosis the LLM produces is stored with `source` (`ai_suggested`, or `ai
 
 ## 5. Terminology Validation
 
-All LLM-generated ICD codes pass through a post-LLM validation step powered by `app/services/terminology.py`. This service loads the ICD-10 and ICD-11 catalogs from the Vulcano IHCE Implementation Guide at application startup.
+All LLM-generated ICD codes pass through a post-LLM validation step powered by `app/services/terminology.py`. This service loads the ICD-10 and ICD-11 catalogs (`app/data/`) into memory at application startup.
 
 ### Catalog Source
 
-The catalogs are FHIR CodeSystem resources published by the Ministry of Health at [vulcano.ihcecol.gov.co](https://vulcano.ihcecol.gov.co/). They are downloaded and transformed into compact `{code: display}` JSON files using `scripts/sync_terminology.py`.
+The catalogs come from the **WHO ICD API** and are written as compact `{code: display}` JSON files by `scripts/sync_terminology.py`. The WHO API has no Spanish ICD-10, so ICD-10 displays are in English except where the Ministry of Health's Vulcano IHCE fragment ([vulcano.ihcecol.gov.co](https://vulcano.ihcecol.gov.co/), `CodeSystem-ICD10CO.json`) provides a Spanish name; ICD-11 is downloaded in Spanish. The ICD is © WHO; the terms for redistributing these files are pending legal review (see `THIRD_PARTY_NOTICES.md`).
 
 | File | Source | Contents |
 |---|---|---|
-| `app/data/icd10_codes.json` | `CodeSystem-ICD10CO.json` | ~12,000 ICD-10 codes (WHO, no dots) |
-| `app/data/icd11_codes.json` | `CodeSystem-ICD11CO.json` | ~1,000 ICD-11 codes |
+| `app/data/icd10_codes.json` | WHO ICD-10, 2019 edition (+ Spanish names from Vulcano where available) | 12,597 entries, codes without dots, chapters and blocks included |
+| `app/data/icd11_codes.json` | WHO ICD-11 MMS, release 2024-01, Spanish | 34,691 entries, chapters and blocks included |
+
+Chapters, blocks and ICD-11 extension codes are in the files but never accepted as a diagnosis code (see `terminology.py`).
 
 ### ICD-10 Code Format
 
