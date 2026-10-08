@@ -3,7 +3,7 @@ Contract tests: payloads shaped exactly as the Flutter app serializes them.
 
 The fixtures in ./fixtures follow the app's toJson methods
 (health-without-borders-frontend, lib/src/features/nfc/domain/patient_record.dart
-at develop f14d662): optional fields are omitted when null rather than sent as
+at develop f14d662; consent.policyVersion as of develop 43b0411): optional fields are omitted when null rather than sent as
 null, the address carries an alpha-3 country, ethnicCommunity is sent twice
 (camelCase and snake_case), times carry an offset, the guardian may still carry
 the legacy docType/docNumber keys, and so on. A backend change that rejects or
@@ -88,6 +88,8 @@ def test_every_field_the_app_sends_is_kept(client, db_session):
     stored = _record(db_session).full_record_json
     assert fields_not_kept(payload, stored) == []
     assert stored["patientInfo"]["ethnicCommunity"] == "Comunidad Sintetica"
+    # The accepted policy's version was dropped until 2026-10 (19 syncs in 14 days).
+    assert stored["guardianInfo"]["consent"]["policyVersion"] == "v1.1"
 
 
 def test_a_field_the_server_does_not_keep_is_logged_by_name(client, db_session, app_log):
@@ -135,6 +137,7 @@ def test_scan_returns_what_the_app_reads(client, db_session, registered):
     assert body["patientId"] == payload["patientId"]
     assert body["recordVersion"] == 1
     assert body["patientInfo"]["ethnicCommunity"] == "Comunidad Sintetica"
+    assert body["guardianInfo"]["consent"]["policyVersion"] == "v1.1"
 
 
 def test_minor_scan_without_card_uses_the_text_the_app_matches(client, db_session, registered):

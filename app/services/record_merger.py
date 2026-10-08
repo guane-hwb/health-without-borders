@@ -112,14 +112,14 @@ def merge_patient_records(
         merged["guardian2Info"] = server_record.get("guardian2Info")
         return merged
 
-    merged["guardianInfo"] = _preserve_consent_signature(
-        server_guardian=server_record.get("guardianInfo"),
-        incoming_guardian=incoming_record.get("guardianInfo"),
-    )
-    merged["guardian2Info"] = _preserve_consent_signature(
-        server_guardian=server_record.get("guardian2Info"),
-        incoming_guardian=incoming_record.get("guardian2Info"),
-    )
+    for slot in ("guardianInfo", "guardian2Info"):
+        merged[slot] = _preserve_policy_version(
+            server_record.get(slot),
+            _preserve_consent_signature(
+                server_guardian=server_record.get(slot),
+                incoming_guardian=incoming_record.get(slot),
+            ),
+        )
 
     return merged
 
@@ -303,6 +303,28 @@ def _preserve_consent_signature(
         "incoming payload"
     )
     return restored
+
+
+def _preserve_policy_version(server_guardian: Any, guardian: Any) -> Any:
+    """
+    Keep the stored ``policyVersion`` of a consent the device re-sends without it.
+
+    Builds that predate the field send the same consent back without it, which
+    would erase the version of the policy the guardian accepted (evidence under
+    Ley 1581). Only for the same acceptance (same ``acceptedAt``): a new
+    acceptance from such a build must not inherit an earlier policy's version.
+    ``guardian`` is the incoming guardian after the signature was restored.
+    """
+    if not isinstance(guardian, dict) or not isinstance(server_guardian, dict):
+        return guardian
+    consent, stored = guardian.get("consent"), server_guardian.get("consent")
+    if not isinstance(consent, dict) or not isinstance(stored, dict):
+        return guardian
+    if consent.get("policyVersion") or not stored.get("policyVersion"):
+        return guardian
+    if consent.get("acceptedAt") != stored.get("acceptedAt"):
+        return guardian
+    return {**guardian, "consent": {**consent, "policyVersion": stored["policyVersion"]}}
 
 
 def _merge_items_by_key(

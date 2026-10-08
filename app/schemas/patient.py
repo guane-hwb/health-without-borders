@@ -349,6 +349,13 @@ class GuardianConsent(BaseModel):
     acceptedAt: datetime = Field(..., description="Timestamp ISO 8601 del momento de aceptación")
     email: Optional[str] = Field(None, description="Correo para envío del comprobante de consentimiento")
     signatureBase64: Optional[str] = Field(None, description="Firma biométrica como imagen PNG en base64")
+    policyVersion: Optional[str] = Field(
+        None,
+        description=(
+            "Versión de la política de tratamiento de datos que aceptó el acudiente "
+            "(p. ej. 'v1.1'). Ausente en consentimientos anteriores a este campo."
+        ),
+    )
 
 
 class GuardianInfo(BaseModel):
