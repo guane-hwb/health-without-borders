@@ -519,3 +519,58 @@ def test_merging_without_a_conflicts_list_still_keeps_the_stored_item():
     merged = merge_patient_records(server, _payload(medicalHistory=[edited]))
 
     assert merged["medicalHistory"][0]["diagnosisType"] == "01"
+
+
+# ---------------------------------------------------------------------------
+# The accepted policy's version (consent.policyVersion)
+# ---------------------------------------------------------------------------
+
+ACCEPTED = "2026-09-25T10:15:30-05:00"
+
+
+def _consenting_guardian(policy_version=None, accepted_at=ACCEPTED):
+    consent = {"accepted": True, "acceptedAt": accepted_at, "signatureBase64": "iVBORw0KGgo="}
+    if policy_version:
+        consent["policyVersion"] = policy_version
+    return _guardian("Maria Perez", doc="CC-1", uid="CARD-1", consent=consent)
+
+
+def test_an_older_build_resending_the_consent_keeps_its_policy_version():
+    server = {"guardianInfo": _consenting_guardian("v1.1")}
+    incoming = {"guardianInfo": _consenting_guardian()}  # no policyVersion
+
+    merged = merge_patient_records(server, incoming)
+
+    assert merged["guardianInfo"]["consent"]["policyVersion"] == "v1.1"
+
+
+def test_a_new_acceptance_does_not_inherit_the_previous_policy_version():
+    server = {"guardianInfo": _consenting_guardian("v1.1")}
+    incoming = {"guardianInfo": _consenting_guardian(accepted_at="2026-10-08T09:00:00-05:00")}
+
+    merged = merge_patient_records(server, incoming)
+
+    assert "policyVersion" not in merged["guardianInfo"]["consent"]
+
+
+def test_a_sent_policy_version_wins_and_a_missing_consent_is_left_alone():
+    server = {"guardianInfo": _consenting_guardian("v1.0")}
+
+    sent = merge_patient_records(server, {"guardianInfo": _consenting_guardian("v1.1")})
+    assert sent["guardianInfo"]["consent"]["policyVersion"] == "v1.1"
+    assert merge_patient_records(server, {"guardianInfo": None})["guardianInfo"] is None
+    no_stored_consent = {"guardianInfo": {**_consenting_guardian(), "consent": None}}
+    incoming = {"guardianInfo": _consenting_guardian()}
+    assert merge_patient_records(no_stored_consent, incoming)["guardianInfo"] == incoming["guardianInfo"]
+
+
+def test_the_policy_version_does_not_change_the_rda_paciente_hash():
+    from app.services.patient_service import compute_background_hash
+
+    record = deepcopy(MOCK_PATIENT_PAYLOAD)
+    record["guardianInfo"]["consent"] = {"accepted": True, "acceptedAt": ACCEPTED}
+    before = compute_background_hash(record)
+
+    record["guardianInfo"]["consent"]["policyVersion"] = "v1.1"
+
+    assert compute_background_hash(record) == before

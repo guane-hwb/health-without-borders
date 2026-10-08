@@ -36,6 +36,7 @@
     "consent": {
       "accepted": true,
       "acceptedAt": "2026-09-25T10:15:30.123456-05:00",
+      "policyVersion": "v1.1",
       "signatureBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
     }
   },

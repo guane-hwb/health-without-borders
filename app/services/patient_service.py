@@ -156,6 +156,17 @@ def mirror_columns(record: dict) -> dict:
     }
 
 
+def _without_policy_version(guardian):
+    """
+    The consent's policyVersion is not in the RDA either; leaving it out keeps
+    every stored hash valid now that the field is kept.
+    """
+    if not isinstance(guardian, dict) or not isinstance(guardian.get("consent"), dict):
+        return guardian
+    consent = {k: v for k, v in guardian["consent"].items() if k != "policyVersion"}
+    return {**guardian, "consent": consent}
+
+
 def compute_background_hash(record: dict) -> str:
     """
     Compute a SHA-256 hash over the patient fields that are part of the
@@ -184,8 +195,8 @@ def compute_background_hash(record: dict) -> str:
         patient_info = {k: v for k, v in patient_info.items() if k not in _NOT_IN_RDA_PACIENTE}
     background_fields = {
         "patientInfo": patient_info,
-        "guardianInfo": record.get("guardianInfo"),
-        "guardian2Info": record.get("guardian2Info"),
+        "guardianInfo": _without_policy_version(record.get("guardianInfo")),
+        "guardian2Info": _without_policy_version(record.get("guardian2Info")),
         "backgroundHistory": record.get("backgroundHistory"),
         "allergies": record.get("allergies"),
     }
