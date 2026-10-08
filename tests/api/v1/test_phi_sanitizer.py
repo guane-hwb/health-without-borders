@@ -6,6 +6,7 @@ Unit tests for app/core/phi_sanitizer.py
 from app.core.phi_sanitizer import (
     mask_id,
     mask_name,
+    pseudonym,
     safe_doc_ref,
     safe_patient_ref,
     sanitize_error_body,
@@ -96,11 +97,12 @@ class TestSafePatientRef:
 class TestSafeDocRef:
     def test_normal_document(self):
         result = safe_doc_ref("CC", "1098765432")
-        assert result == "CC:109***432"
+        assert result.startswith("CC:ref:") and len(result) == len("CC:ref:") + 10
+        assert "1098765432" not in result
 
     def test_short_document(self):
         result = safe_doc_ref("PT", "VZ-12")
-        assert result == "PT:***"
+        assert result.startswith("PT:ref:")
 
     def test_none_type(self):
         result = safe_doc_ref(None, None)
@@ -197,3 +199,31 @@ class TestSanitizeErrorBody:
         result = sanitize_error_body(body, max_length=500)
         assert "Perez" not in result
         assert "truncated" in result
+
+
+# ============================================================================
+# pseudonym (be-oct26-mask-id-conserva-parte-del-uid)
+# ============================================================================
+
+
+class TestPseudonym:
+    UID = "04:5B:2C:9A:71:3E:80"
+
+    def test_no_character_of_the_value_is_kept(self):
+        ref = pseudonym(self.UID)
+        assert ref.startswith("ref:") and len(ref) == 14
+        assert "04:" not in ref and ":80" not in ref
+
+    def test_the_same_value_gives_the_same_reference(self):
+        assert pseudonym(self.UID) == pseudonym(f" {self.UID} ")
+        assert pseudonym(self.UID) != pseudonym("04:5B:2C:9A:71:3E:81")
+
+    def test_it_depends_on_the_secret_key(self, monkeypatch):
+        from app.core.config import settings
+
+        before = pseudonym(self.UID)
+        monkeypatch.setattr(settings, "SECRET_KEY", "otra-clave-de-prueba-muy-larga-0123456789")
+        assert pseudonym(self.UID) != before
+
+    def test_empty_values(self):
+        assert pseudonym(None) == pseudonym("  ") == "unknown"

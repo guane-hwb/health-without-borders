@@ -7,9 +7,12 @@ snake_case to mirror both the app's local columns and the existing
 ``PatientSearchRequest`` body convention.
 """
 
+from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.timezone import reporting_timezone
 
 
 class EmergencyAccessEntry(BaseModel):
@@ -35,8 +38,24 @@ class EmergencyAccessEntry(BaseModel):
     )
     occurred_at: str = Field(
         ..., min_length=1,
-        description="ISO 8601 timestamp as recorded on the device",
+        description=(
+            "ISO 8601 timestamp as recorded on the device. Without an offset it is "
+            "read as local time in the reporting zone (older app builds); it is "
+            "stored with its offset."
+        ),
     )
+
+    @field_validator("occurred_at")
+    @classmethod
+    def _iso_8601(cls, value: str) -> str:
+        """Free text made the device time impossible to compare or sort."""
+        try:
+            moment = datetime.fromisoformat(value.strip())
+        except ValueError:
+            raise ValueError("occurred_at must be an ISO 8601 date and time.") from None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=reporting_timezone())
+        return moment.isoformat()
 
 
 class EmergencyAccessSyncRequest(BaseModel):

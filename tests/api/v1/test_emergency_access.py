@@ -8,6 +8,7 @@ Locks in that the endpoint:
   * is restricted to doctor/nurse, and rejects an empty batch (422).
 """
 
+import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_current_user
@@ -85,7 +86,8 @@ def test_sync_stores_entries(client, db_session):
     )
     assert row.patient_uid == "TAG-PATIENT-001"
     assert row.organization_id == "org-123"          # from the token, not the body
-    assert row.occurred_at == "2026-08-20T14:30:00.000"  # client time preserved
+    # Client time preserved; without an offset it is local time in Colombia.
+    assert row.occurred_at == "2026-08-20T14:30:00-05:00"
     assert row.received_at is not None                # server stamps its own time
 
 
@@ -139,11 +141,8 @@ def test_empty_batch_rejected(client):
     assert resp.status_code == 422
 
 
-def test_concurrent_insert_race_counts_as_duplicate(db_session, monkeypatch):
-    """If an entry slips past the pre-check and the insert races into an
-    IntegrityError (two devices syncing the same client_event_id at once), it is
-    absorbed and counted as a duplicate — never surfaced as a 500, and nothing
-    partial is left behind."""
+def _flush_raising(db_session, monkeypatch, message):
+    """Make the insert flush fail once with an IntegrityError carrying ``message``."""
     real_flush = db_session.flush
     state = {"raised": False}
 
@@ -156,12 +155,20 @@ def test_concurrent_insert_race_counts_as_duplicate(db_session, monkeypatch):
         )
         if pending and not state["raised"]:
             state["raised"] = True
-            raise IntegrityError(
-                "flush", {}, Exception("UNIQUE constraint failed")
-            )
+            raise IntegrityError("flush", {}, Exception(message))
         return real_flush(*args, **kwargs)
 
     monkeypatch.setattr(db_session, "flush", flaky_flush)
+
+
+def test_concurrent_insert_race_counts_as_duplicate(db_session, monkeypatch):
+    """If an entry slips past the pre-check and the insert races into an
+    IntegrityError (two devices syncing the same client_event_id at once), it is
+    absorbed and counted as a duplicate — never surfaced as a 500, and nothing
+    partial is left behind."""
+    _flush_raising(
+        db_session, monkeypatch, "UNIQUE constraint failed: emergency_access_log.client_event_id"
+    )
 
     stored, duplicates = store_emergency_access_entries(
         db_session,
@@ -172,6 +179,35 @@ def test_concurrent_insert_race_counts_as_duplicate(db_session, monkeypatch):
 
     assert (stored, duplicates) == (0, 1)
     assert db_session.query(EmergencyAccessLog).count() == 0
+
+
+def test_any_other_integrity_error_is_not_counted_as_a_duplicate(db_session, monkeypatch):
+    """be-oct26-integrityerror-mal-clasificado: a foreign key failure was 'a duplicate'
+    and the entry was dropped without a word."""
+    _flush_raising(db_session, monkeypatch, "FOREIGN KEY constraint failed")
+
+    with pytest.raises(IntegrityError):
+        store_emergency_access_entries(
+            db_session,
+            [EmergencyAccessEntry(**_entry("evt-fk"))],
+            organization_id="org-123",
+            uploaded_by="test-user-id",
+        )
+
+
+@pytest.mark.parametrize(("sent", "stored"), [
+    ("2026-08-20T14:30:00-05:00", "2026-08-20T14:30:00-05:00"),
+    ("2026-08-20T19:30:00Z", "2026-08-20T19:30:00+00:00"),
+    ("2026-08-20T14:30:00.287683", "2026-08-20T14:30:00.287683-05:00"),
+])
+def test_occurred_at_is_stored_with_its_offset(sent, stored):
+    assert EmergencyAccessEntry(**{**_entry("evt"), "occurred_at": sent}).occurred_at == stored
+
+
+@pytest.mark.parametrize("sent", ["ayer", "20/08/2026 14:30", "2026-13-01T00:00:00"])
+def test_occurred_at_must_be_iso_8601(sent):
+    with pytest.raises(ValueError, match="ISO 8601"):
+        EmergencyAccessEntry(**{**_entry("evt"), "occurred_at": sent})
 
 
 def test_emergency_log_repr():

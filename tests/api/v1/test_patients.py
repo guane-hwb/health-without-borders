@@ -438,7 +438,11 @@ def test_create_duplicate_identity_raises_domain_error(db_session):
 
 
 def _raise_integrity_error(*args, **kwargs):
-    raise IntegrityError("commit", {}, Exception("UNIQUE constraint failed"))
+    raise IntegrityError("commit", {}, Exception("UNIQUE constraint failed: patients.device_uid"))
+
+
+def _raise_foreign_key_error(*args, **kwargs):
+    raise IntegrityError("commit", {}, Exception("FOREIGN KEY constraint failed"))
 
 
 def test_create_patient_integrity_error_maps_to_conflict(db_session, monkeypatch):
@@ -469,6 +473,57 @@ def test_bracelet_replacement_integrity_error_maps_to_conflict(
 
     with pytest.raises(DeviceUidConflictError):
         create_or_update_patient(db_session, updated, org_id="org-123")
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_other_integrity_errors_are_not_bracelet_conflicts(db_session, monkeypatch, existing):
+    """be-oct26-integrityerror-mal-clasificado: every IntegrityError was a 409."""
+    record = PatientFullRecord.model_validate(MOCK_PATIENT_PAYLOAD)
+    if existing:
+        create_or_update_patient(db_session, record, org_id="org-123")
+    monkeypatch.setattr(db_session, "commit", _raise_foreign_key_error)
+
+    with pytest.raises(IntegrityError):
+        create_or_update_patient(db_session, record, org_id="org-123")
+
+
+@pytest.mark.parametrize("message", [
+    "UNIQUE constraint failed: patients.device_uid",
+    "UNIQUE constraint failed: patients.frontend_patient_id, patients.organization_id",
+])
+def test_a_new_patient_created_meanwhile_by_the_same_sync_is_a_transient_error(
+    db_session, message
+):
+    """The app retried while its first attempt was still running: retrying is right."""
+    from app.services.patient_service import (
+        ConcurrentSyncError,
+        _raise_for_new_patient_conflict,
+    )
+
+    record = PatientFullRecord.model_validate(MOCK_PATIENT_PAYLOAD)
+    create_or_update_patient(db_session, record, org_id="org-123")  # the first attempt
+
+    with pytest.raises(ConcurrentSyncError):
+        _raise_for_new_patient_conflict(
+            db_session, IntegrityError("commit", {}, Exception(message)), record
+        )
+
+
+def test_the_concurrent_sync_error_is_a_503_the_app_retries(client: TestClient, monkeypatch):
+    from app.api.v1.endpoints import patients
+    from app.services.patient_service import ConcurrentSyncError
+
+    def racing(*args, **kwargs):
+        raise ConcurrentSyncError("created meanwhile")
+
+    monkeypatch.setattr(patients, "create_or_update_patient", racing)
+    _override_doctor()
+    response = client.post("/api/v1/patients/sync", json=MOCK_PATIENT_PAYLOAD)
+    _clear_overrides()
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "sync_in_progress"
+    assert response.headers["retry-after"] == "5"
 
 
 def test_sync_patient_with_visit_generates_multiple_bundles(client: TestClient):

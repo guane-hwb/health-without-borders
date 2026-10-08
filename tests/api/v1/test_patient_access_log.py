@@ -270,3 +270,111 @@ def test_emergency_entries_record_the_authenticated_uploader(client, db_session,
     assert row.uploaded_by == people["doc_a"][0]
     assert row.user_id == people["doc_b"][0]  # kept, never trusted instead
     assert row.patient_name is None  # minimisation: the UID identifies the record
+
+
+# ---------------------------------------------------------------------------
+# Emergency entries in the ledger (be-oct26-bitacora-emergencia-sin-lectura)
+# ---------------------------------------------------------------------------
+
+
+def _emergency(client, people, who, event_id, uid=MINOR_UID):
+    _as(people, who)
+    response = client.post("/api/v1/patients/emergency-access", json={"entries": [{
+        "client_event_id": event_id, "patient_uid": uid, "reason": "guardian_absent_offline",
+        "occurred_at": "2026-10-01T09:15:00",
+    }]})
+    assert response.status_code == 200
+
+
+def test_the_ledger_shows_the_emergency_openings(client, db_session, people):
+    """They were written but no endpoint read them."""
+    _register(client, people)
+    _emergency(client, people, "doc_a", "evt-a")
+    _emergency(client, people, "doc_b", "evt-b")
+    _emergency(client, people, "doc_b", "evt-other", uid="04:OTRO:PACIENTE")
+
+    _as(people, "sa")
+    every = _read_log(client, device_uid=MINOR_UID).json()["emergency_entries"]
+    _as(people, "admin_a")
+    own_staff = _read_log(client, device_uid=MINOR_UID).json()["emergency_entries"]
+
+    assert sorted(e["uploaded_by"] for e in every) == sorted([people["doc_a"][0], people["doc_b"][0]])
+    assert [e["uploaded_by"] for e in own_staff] == [people["doc_a"][0]]
+    assert own_staff[0]["occurred_at"] == "2026-10-01T09:15:00-05:00"
+    assert own_staff[0]["reason"] == "guardian_absent_offline"
+
+
+def test_openings_on_a_retired_bracelet_still_belong_to_the_patient(client, db_session, people):
+    _register(client, people)
+    _emergency(client, people, "doc_a", "evt-old")  # read on the bracelet that was then lost
+    _as(people, "doc_a")
+    replaced = deepcopy(MOCK_PATIENT_PAYLOAD)
+    replaced.update(device_uid="04:PULSERA:NUEVA", retiredDeviceReason="lost")
+    assert client.post("/api/v1/patients/sync", json=replaced).status_code == 201
+
+    _as(people, "sa")
+    entries = _read_log(client, device_uid="04:PULSERA:NUEVA").json()["emergency_entries"]
+
+    assert [e["patient_uid"] for e in entries] == [MINOR_UID]
+
+
+# ---------------------------------------------------------------------------
+# A stored record that no longer validates (be-oct26-registro-almacenado-invalido)
+# ---------------------------------------------------------------------------
+
+
+def _break_stored_record(db_session):
+    patient = db_session.query(Patient).one()
+    record = deepcopy(patient.full_record_json)
+    del record["patientInfo"]["address"]  # required today, absent in older records
+    patient.full_record_json = record
+    db_session.commit()
+
+
+@pytest.mark.parametrize("read", ["scan", "search"])
+def test_an_unreadable_record_is_not_recorded_as_read(client, db_session, people, app_log, read):
+    """It gave a 500 after the ledger row was written."""
+    _register(client, people)
+    _break_stored_record(db_session)
+    rows_before = len(_log(db_session))
+    _as(people, "doc_b")
+
+    if read == "scan":
+        response = client.post("/api/v1/patients/scan", json={
+            "device_uid": MINOR_UID, "guardian_device_uid": GUARDIAN_UID})
+    else:
+        response = client.post("/api/v1/patients/search", json=SEARCH)
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "stored_record_invalid"
+    assert len(_log(db_session)) == rows_before
+    logged = [r.getMessage() for r in app_log.records if "does not validate" in r.getMessage()]
+    assert logged and logged[0].endswith("fields=patientInfo.address")
+
+
+def test_a_sync_onto_a_record_missing_an_identity_field_repairs_it(client, db_session, people):
+    """Restoring the immutable fields indexed the stored record and raised a KeyError."""
+    _register(client, people)
+    patient = db_session.query(Patient).one()
+    record = deepcopy(patient.full_record_json)
+    del record["patientInfo"]["biologicalSex"]
+    patient.full_record_json = record
+    db_session.commit()
+    _as(people, "doc_a")
+
+    response = client.post("/api/v1/patients/sync", json=deepcopy(MOCK_PATIENT_PAYLOAD))
+
+    assert response.status_code == 201
+    db_session.expire_all()
+    stored = db_session.query(Patient).one().full_record_json["patientInfo"]
+    assert stored["biologicalSex"] == MOCK_PATIENT_PAYLOAD["patientInfo"]["biologicalSex"]
+
+
+def test_bracelet_uids_do_not_reach_the_logs(client, db_session, people, app_log):
+    """be-oct26-mask-id-conserva-parte-del-uid: 6 of the UID's characters were logged."""
+    _as(people, "doc_a")
+    client.post("/api/v1/patients/scan", json={"device_uid": "04:5B:2C:9A:71:3E:80"})
+
+    logged = " ".join(r.getMessage() for r in app_log.records)
+    assert "ref:" in logged
+    assert "04:" not in logged and ":80" not in logged

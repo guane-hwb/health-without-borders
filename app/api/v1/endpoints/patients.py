@@ -16,9 +16,11 @@ from app.core.errors import (
     GUARDIAN_MISMATCH,
     GUARDIAN_REQUIRED,
     IDENTITY_MISMATCH,
+    STORED_RECORD_INVALID,
+    SYNC_IN_PROGRESS,
     ApiError,
 )
-from app.core.phi_sanitizer import mask_id
+from app.core.phi_sanitizer import mask_id, pseudonym
 from app.core.rate_limit import limiter
 from app.db.models import Patient, User, UserRole
 from app.db.session import get_db
@@ -38,6 +40,7 @@ from app.schemas.nfc_key_version import (
 )
 from app.schemas.patient import (
     CodeSource,
+    EmergencyAccessView,
     PatientAccessEntry,
     PatientAccessQuery,
     PatientAccessResponse,
@@ -52,6 +55,7 @@ from app.services.access_log_service import (
     SCAN,
     SEARCH,
     SYNC,
+    list_emergency_access,
     list_patient_access,
     record_patient_access,
 )
@@ -70,6 +74,7 @@ from app.services.nfc_key_version_service import (
     summarize_key_version_usage,
 )
 from app.services.patient_service import (
+    ConcurrentSyncError,
     DeviceRetiredError,
     DeviceUidConflictError,
     DuplicateIdentityError,
@@ -171,7 +176,7 @@ async def _scan(
         "Patient scan request actor_id=%s org_id=%s device_ref=%s",
         actor_id,
         actor_org_id,
-        mask_id(device_uid),
+        pseudonym(device_uid),
     )
     
     # Wrap synchronous DB call in to_thread to avoid blocking the event loop
@@ -186,7 +191,7 @@ async def _scan(
             logger.info(
                 "Scan of retired device tag org_id=%s device_ref=%s reason=%s",
                 actor_org_id,
-                mask_id(device_uid),
+                pseudonym(device_uid),
                 retired.reason,
             )
             raise HTTPException(
@@ -203,7 +208,7 @@ async def _scan(
         logger.warning(
             "Patient scan not found org_id=%s device_ref=%s",
             actor_org_id,
-            mask_id(device_uid),
+            pseudonym(device_uid),
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -244,6 +249,7 @@ async def _scan(
             )
         guardian_factor = True
 
+    _ensure_readable(record, patient_id)
     # Recorded before the record is returned: no trace, no access.
     await asyncio.to_thread(
         record_patient_access,
@@ -255,6 +261,34 @@ async def _scan(
         guardian_factor=guardian_factor,
     )
     return record
+
+
+def _ensure_readable(record: dict, patient_id: str) -> None:
+    """
+    Check a stored record against the response schema before it is audited.
+
+    FastAPI validated the response only after the access was recorded, so a
+    record that no longer validates (a field that became required) gave a
+    500 and still left a row saying it had been read. The log names the
+    failing fields, never their values.
+    """
+    try:
+        PatientFullRecord.model_validate(record)
+    except ValidationError as exc:
+        fields = sorted({
+            ".".join(str(part) for part in error["loc"] if not isinstance(part, int))
+            for error in exc.errors()
+        })
+        logger.error(
+            "Stored record does not validate patient_ref=%s fields=%s",
+            mask_id(patient_id),
+            ", ".join(fields),
+        )
+        raise ApiError(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "The stored record could not be read; the error was logged.",
+            code=STORED_RECORD_INVALID,
+        ) from None
 
 
 def _stamp_new_items(
@@ -419,6 +453,15 @@ async def sync_patient(
 
     **Device tag conflict:** If the record's `device_uid` is already registered to a
     different patient, the endpoint returns `409` and no record is created or modified.
+
+    **Simultaneous first syncs:** If another request created this same new
+    patient (same `patientId`) a moment before, the endpoint returns
+    `503` with `code` `sync_in_progress` and `Retry-After`; the retry merges
+    into that record.
+
+    **Unreadable stored record:** `/scan` and `/search` answer `500` with `code`
+    `stored_record_invalid`, and record no access, when the stored record no
+    longer validates; the log names the failing fields.
 
     **Duplicate identity:** If the record would create a NEW patient whose identity
     document (`documentType` + `documentNumber`) already belongs to another record,
@@ -623,6 +666,20 @@ async def sync_patient(
             detail="The patient record contains a value the server cannot store.",
         )
 
+    except ConcurrentSyncError:
+        logger.warning(
+            "Patient sync raced another request creating the same patient actor_id=%s org_id=%s",
+            actor_id,
+            actor_org_id,
+        )
+        # Transient on purpose: the app retries 5xx, and the retry merges into
+        # the record the other request created. A 409 would be permanent.
+        raise ApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "This patient is being saved by another request; retry in a few seconds.",
+            SYNC_IN_PROGRESS,
+            headers={"Retry-After": "5"},
+        )
     except DeviceUidConflictError:
         logger.warning(
             "Patient sync device tag conflict actor_id=%s org_id=%s",
@@ -752,7 +809,7 @@ async def search_patient(
         current_user.id,
         current_user.role,
         current_user.organization_id,
-        mask_id(criteria.document_number),
+        pseudonym(criteria.document_number),
     )
 
     # Wrap synchronous DB call in to_thread to avoid blocking the event loop
@@ -773,6 +830,7 @@ async def search_patient(
         )
 
     record = {**(patient.full_record_json or {}), "recordVersion": patient.record_version}
+    _ensure_readable(record, patient.id)
     # Recorded before the record is returned: no trace, no access. Search
     # never presents the guardian's card, even for a minor.
     await asyncio.to_thread(
@@ -1137,6 +1195,10 @@ async def get_patient_access_log(
     the time, the channel, whether the guardian's card was presented and the
     reason given (search).
 
+    `emergency_entries` lists the openings without the guardian's card that a
+    device made offline (break-glass) and synced later, for the patient's
+    current and retired bracelets.
+
     Identify the patient by server `patient_id` or by the bracelet's current
     `device_uid`, in the body (never the URL).
 
@@ -1173,14 +1235,23 @@ async def get_patient_access_log(
         actor_organization_id=scope,
         limit=query.limit,
     )
+    emergencies = await asyncio.to_thread(
+        list_emergency_access,
+        db,
+        patient=patient,
+        actor_organization_id=scope,
+        limit=query.limit,
+    )
     logger.info(
-        "Access log read actor_id=%s patient_ref=%s entries=%d",
+        "Access log read actor_id=%s patient_ref=%s entries=%d emergency=%d",
         current_user.id,
         mask_id(patient.id),
         len(rows),
+        len(emergencies),
     )
     return PatientAccessResponse(
         patient_id=patient.id,
         entries=[PatientAccessEntry.model_validate(row) for row in rows],
+        emergency_entries=[EmergencyAccessView.model_validate(row) for row in emergencies],
     )
 
