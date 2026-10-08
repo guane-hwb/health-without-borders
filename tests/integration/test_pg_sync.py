@@ -195,3 +195,30 @@ def test_no_connection_is_held_while_waiting_on_the_llm_or_fhir(api, staff, db, 
         thread.join()
 
     assert samples == [0] * 6
+
+
+def test_integrity_errors_name_the_constraints_the_code_expects(api, staff, db):
+    """be-oct26-integrityerror-mal-clasificado: the names checked on PostgreSQL are real."""
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from app.db.errors import violates
+
+    doc = staff["tokens"]["doc_a"]
+    assert _sync(api, doc, _payload()).status_code == 201
+    org = staff["ids"]["org_a"]
+
+    cases = [
+        ("INSERT INTO patients (id, frontend_patient_id, organization_id, device_uid, full_record_json) "
+         "VALUES ('p2', 'OTHER', :org, :uid, '{}')", "ix_patients_device_uid", "patients.device_uid"),
+        ("INSERT INTO patients (id, frontend_patient_id, organization_id, device_uid, full_record_json) "
+         "VALUES ('p3', :pid, :org, 'UID-NEW', '{}')", "uq_patient_frontend_id_org", "-"),
+        ("INSERT INTO emergency_access_log (id, client_event_id, patient_uid, organization_id, reason, "
+         "occurred_at) VALUES ('e1', 'evt', 'u', :org, 'r', 't'), ('e2', 'evt', 'u', :org, 'r', 't')",
+         "ix_emergency_access_log_client_event_id", "-"),
+    ]
+    for statement, constraint, columns in cases:
+        with pytest.raises(IntegrityError) as caught:
+            db.execute(text(statement), {"org": org, "uid": UID, "pid": MOCK_PATIENT_PAYLOAD["patientId"]})
+        db.rollback()
+        assert violates(caught.value, constraint, columns)

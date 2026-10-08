@@ -188,3 +188,24 @@ def test_get_by_document_without_type_or_number_returns_none(db_session):
     assert get_patient_by_document(db_session, "PT", None) is None
     # Only separators: normalizes to an empty number.
     assert get_patient_by_document(db_session, "PT", " - . ") is None
+
+
+def test_a_strict_lookup_with_more_candidates_than_the_cap_is_denied(db_session):
+    """be-oct26-busqueda-estricta-limit-sin-orden: ten rows in no fixed order."""
+    from datetime import date
+
+    from app.db.models import Patient
+    from app.services.patient_service import _CANDIDATE_LIMIT, find_patient_strict
+
+    for i in range(_CANDIDATE_LIMIT + 1):
+        db_session.add(Patient(
+            frontend_patient_id=f"DUP-{i}", organization_id="org-1", device_uid=f"UID-DUP-{i}",
+            document_type="PA", document_number="VZ-123", first_name="Ana", last_name="Diaz",
+            birth_date=date(2020, 1, 1), full_record_json={},
+        ))
+    db_session.commit()
+
+    assert find_patient_strict(
+        db_session, document_number="VZ-123", birth_date=date(2020, 1, 1),
+        first_name="Ana", last_name="Diaz",
+    ) is None

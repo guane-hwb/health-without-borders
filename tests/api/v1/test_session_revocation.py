@@ -199,7 +199,7 @@ def test_a_concurrent_duplicate_user_is_a_400_not_a_500(client, db_session, acco
     })
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "The user with this email already exists in the system."
+    assert response.json()["detail"] == "This email cannot be used for a new account."
 
 
 def test_a_concurrent_duplicate_organization_admin_is_a_400(client, db_session, accounts, monkeypatch):

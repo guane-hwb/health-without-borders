@@ -9,13 +9,14 @@ from sqlalchemy import func
 from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.phi_sanitizer import mask_id, safe_patient_ref
+from app.core.phi_sanitizer import pseudonym, safe_patient_ref
 from app.core.text_normalizer import (
     DOCUMENT_SEPARATORS,
     normalize_document_number,
     normalize_text,
     text_matches,
 )
+from app.db.errors import violates
 from app.db.models import Patient, RetiredDeviceUid
 from app.schemas.patient import UNKNOWN_NATIONALITY_CODE, PatientFullRecord
 from app.services.iso3166 import to_alpha3
@@ -34,6 +35,16 @@ class DeviceUidConflictError(Exception):
     reusing an existing tag and a bracelet replacement that points an existing
     patient at a tag owned by someone else. The API layer maps this to a
     ``409 Conflict`` instead of a generic ``500``.
+    """
+
+
+class ConcurrentSyncError(Exception):
+    """
+    Raised when another request created the same new patient (same
+    ``patientId``) between this sync's checks and its commit: the app retried
+    while its first attempt was still running. Retrying is right — the next
+    attempt merges into the record the first one created — so the API maps
+    this to a transient ``503 sync_in_progress``, never to a permanent ``409``.
     """
 
 
@@ -85,6 +96,41 @@ class DuplicateIdentityError(Exception):
 
 #: patientInfo fields stored and returned to the app but absent from the RDA.
 _NOT_IN_RDA_PACIENTE = frozenset({"ethnicCommunity"})
+
+
+_DEVICE_UID_INDEX = "ix_patients_device_uid"
+_FRONTEND_ID_CONSTRAINT = "uq_patient_frontend_id_org"
+
+
+def _raise_for_new_patient_conflict(
+    db: Session, exc: IntegrityError, patient_in: PatientFullRecord
+) -> None:
+    """
+    Name what made the insert of a new patient fail (the session is rolled back).
+
+    The checks before the insert passed, so another request committed in
+    between. If it created this very patient (same ``patientId``), it is the
+    app's own retry racing its first attempt: retrying is right. A bracelet
+    taken by a different patient is the usual conflict. Anything else is not a
+    conflict the client can resolve and propagates as a server error.
+    """
+    on_device_uid = violates(exc, _DEVICE_UID_INDEX, "patients.device_uid")
+    on_patient_id = violates(
+        exc, _FRONTEND_ID_CONSTRAINT, "patients.frontend_patient_id, patients.organization_id"
+    )
+    if not (on_device_uid or on_patient_id):
+        raise exc
+    same_sync = (
+        db.query(Patient.id).filter(Patient.frontend_patient_id == patient_in.patientId).first()
+        is not None
+    )
+    if same_sync:
+        raise ConcurrentSyncError(
+            "This patient was created by another request a moment ago; retry."
+        ) from exc
+    raise DeviceUidConflictError(
+        "A patient is already registered with this device tag."
+    ) from exc
 
 
 def mirror_columns(record: dict) -> dict:
@@ -252,7 +298,7 @@ def _ensure_device_uid_available(
         logger.warning(
             "Device tag already registered to another patient existing_ref=%s device=%s",
             safe_patient_ref(owner.id),
-            mask_id(device_uid),
+            pseudonym(device_uid),
         )
         raise DeviceUidConflictError(
             "A patient is already registered with this device tag."
@@ -340,7 +386,7 @@ def _ensure_identity_available(
             "Identity document already registered existing_ref=%s type=%s doc=%s",
             safe_patient_ref(owner.id),
             document_type,
-            mask_id(document_number or ""),
+            pseudonym(document_number or ""),
         )
         raise DuplicateIdentityError(
             "A patient is already registered with this identity document."
@@ -429,9 +475,19 @@ def find_patient_strict(
             == normalize_document_number(document_number),
             Patient.birth_date == birth_date,
         )
-        .limit(_CANDIDATE_LIMIT)
+        # One more than the cap, so a set the cap would cut is seen as such:
+        # without an order, which ten rows came back depended on the query
+        # plan, and the one that made the lookup ambiguous could be left out.
+        .limit(_CANDIDATE_LIMIT + 1)
         .all()
     )
+    if len(candidates) > _CANDIDATE_LIMIT:
+        logger.warning(
+            "Ambiguous patient lookup doc=%s — more than %d candidates, access denied",
+            pseudonym(document_number),
+            _CANDIDATE_LIMIT,
+        )
+        return None
 
     results = [
         patient
@@ -445,7 +501,7 @@ def find_patient_strict(
     if len(results) > 1:
         logger.warning(
             "Ambiguous patient lookup doc=%s — %d matches, access denied",
-            mask_id(document_number),
+            pseudonym(document_number),
             len(results),
         )
 
@@ -650,7 +706,7 @@ def create_or_update_patient(
         logger.warning(
             "Sync tag identity mismatch existing_ref=%s device=%s",
             safe_patient_ref(existing_patient.id),
-            mask_id(patient_in.device_uid or ""),
+            pseudonym(patient_in.device_uid or ""),
         )
         raise IdentityMismatchError(
             "This device tag is registered to a patient with a different identity."
@@ -720,14 +776,15 @@ def create_or_update_patient(
         rda_paciente_sent = existing_patient.rda_paciente_sent
 
         # RULE 1: PROTECT IMMUTABLE FIELDS (Name, DOB, document, sex)
-        new_record_dump["patientInfo"]["firstName"] = old_record_dump["patientInfo"]["firstName"]
-        new_record_dump["patientInfo"]["firstLastName"] = old_record_dump["patientInfo"]["firstLastName"]
-        new_record_dump["patientInfo"]["secondLastName"] = old_record_dump["patientInfo"].get("secondLastName")
-        new_record_dump["patientInfo"]["secondName"] = old_record_dump["patientInfo"].get("secondName")
-        new_record_dump["patientInfo"]["dob"] = old_record_dump["patientInfo"]["dob"]
-        new_record_dump["patientInfo"]["biologicalSex"] = old_record_dump["patientInfo"]["biologicalSex"]
-        # new_record_dump["patientInfo"]["bloodType"] = old_record_dump["patientInfo"].get("bloodType")
-        new_record_dump["patientInfo"]["identification"] = old_record_dump["patientInfo"]["identification"]
+        # A stored record that lacks one (written by an older version) takes
+        # the payload's instead of failing every sync of the patient with a
+        # KeyError, which the app retries forever.
+        old_info = old_record_dump.get("patientInfo") or {}
+        new_info = new_record_dump["patientInfo"]
+        for field in ("firstName", "firstLastName", "dob", "biologicalSex", "identification"):
+            new_info[field] = old_info.get(field, new_info[field])
+        new_info["secondLastName"] = old_info.get("secondLastName")
+        new_info["secondName"] = old_info.get("secondName")
 
         keep_guardians = stale or resolved_by_tag
 
@@ -804,12 +861,15 @@ def create_or_update_patient(
 
         try:
             db.commit()
-        except IntegrityError:
-            # Safety net for the race between the pre-check above and this commit.
+        except IntegrityError as exc:
             db.rollback()
-            raise DeviceUidConflictError(
-                "A patient is already registered with this device tag."
-            )
+            # Safety net for the race between the bracelet pre-check above and
+            # this commit. Any other integrity error is not a bracelet conflict.
+            if violates(exc, _DEVICE_UID_INDEX, "patients.device_uid"):
+                raise DeviceUidConflictError(
+                    "A patient is already registered with this device tag."
+                ) from exc
+            raise
         except DataError:
             db.rollback()
             raise InvalidPatientDataError("A value does not fit its database column.")
@@ -859,12 +919,9 @@ def create_or_update_patient(
         db.add(db_patient)
         try:
             db.commit()
-        except IntegrityError:
-            # Safety net for the race between the pre-check above and this commit.
+        except IntegrityError as exc:
             db.rollback()
-            raise DeviceUidConflictError(
-                "A patient is already registered with this device tag."
-            )
+            _raise_for_new_patient_conflict(db, exc, patient_in)
         except DataError:
             db.rollback()
             raise InvalidPatientDataError("A value does not fit its database column.")

@@ -13,9 +13,13 @@ Usage:
     logger.warning("Name mismatch for %s", mask_name("Juan Pérez"))
 """
 
+import hashlib
+import hmac
 import json
 import re
 from typing import Optional
+
+from app.core.config import settings
 
 
 def mask_id(value: Optional[str]) -> str:
@@ -34,6 +38,24 @@ def mask_id(value: Optional[str]) -> str:
     if len(value) <= 6:
         return "***"
     return f"{value[:3]}***{value[-3:]}"
+
+
+def pseudonym(value: Optional[str]) -> str:
+    """
+    A stable reference for an identifier that is PHI on its own (bracelet or
+    guardian-card UID, document number): the first 10 hex characters of an
+    HMAC keyed with ``SECRET_KEY``.
+
+    Log lines about the same value share it, so they can still be correlated,
+    but no character of the value appears: ``mask_id`` kept 6 of the ~14
+    characters of a UID (audit be-oct26-mask-id-conserva-parte-del-uid).
+    """
+    if not value or not value.strip():
+        return "unknown"
+    digest = hmac.new(
+        settings.SECRET_KEY.encode(), value.strip().encode(), hashlib.sha256
+    ).hexdigest()
+    return f"ref:{digest[:10]}"
 
 
 def mask_name(value: Optional[str]) -> str:
@@ -63,12 +85,10 @@ def safe_doc_ref(doc_type: Optional[str], doc_number: Optional[str]) -> str:
     """
     Produce a safe log-friendly reference for a document type + number pair.
 
-    Examples:
-        safe_doc_ref("CC", "1098765432")  → "CC:109***432"
-        safe_doc_ref("PT", "VZ-123")      → "PT:***"
+    The number is replaced by its ``pseudonym``: ``"CC:ref:3f9a0c1b2d"``.
     """
     dtype = doc_type or "?"
-    return f"{dtype}:{mask_id(doc_number)}"
+    return f"{dtype}:{pseudonym(doc_number)}"
 
 
 # JSON keys whose string values may carry names, identifiers, dates or free

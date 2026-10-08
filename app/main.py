@@ -18,6 +18,7 @@ from app.core.logging import setup_logging
 from app.core.nfc_startup import prepare_nfc_keyring_at_startup
 from app.core.rate_limit import limiter
 from app.core.request_limits import BodySizeLimitMiddleware
+from app.core.security import report_weak_secret_key_at_startup
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.db.migrations import run_migrations_at_startup
 from app.db.schema_check import report_schema_drift_at_startup
@@ -41,6 +42,7 @@ if _nfc_keyring_errors:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """Migrate, report schema drift, then prepare the NFC keyring, before serving traffic."""
+    report_weak_secret_key_at_startup()
     # A failed migration stops the revision from starting; Cloud Run keeps
     # serving the previous one.
     run_migrations_at_startup()

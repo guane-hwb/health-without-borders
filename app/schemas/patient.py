@@ -962,7 +962,24 @@ class PatientAccessEntry(BaseModel):
     accessed_at: datetime
 
 
+class EmergencyAccessView(BaseModel):
+    """A break-glass opening recorded offline by the device and synced later."""
+    model_config = ConfigDict(from_attributes=True)
+
+    patient_uid: str = Field(..., description="Bracelet the device read (may be a retired one)")
+    user_id: Optional[str] = Field(None, description="Actor the device declared")
+    uploaded_by: Optional[str] = Field(None, description="Authenticated user who synced it")
+    organization_id: str = Field(..., description="Organization of that user")
+    reason: str
+    occurred_at: str = Field(..., description="Device time (ISO 8601)")
+    received_at: datetime = Field(..., description="Server receipt time")
+
+
 class PatientAccessResponse(BaseModel):
     patient_id: str
     entries: List[PatientAccessEntry]
+    emergency_entries: List[EmergencyAccessView] = Field(
+        default_factory=list,
+        description="Openings without the guardian's card, made offline (newest received first)",
+    )
 

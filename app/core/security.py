@@ -99,6 +99,35 @@ def decode_token(token: str) -> dict:
     )
 
 
+#: HS256 keys shorter than the hash output make token forgery cheaper to brute force.
+MIN_SECRET_KEY_BYTES = 32
+#: Values published in the repository (.env.example), never fit for a deployment.
+_EXAMPLE_SECRET_KEYS = frozenset({"super_secret_development_key_change_me_in_production"})
+
+
+def report_weak_secret_key_at_startup() -> None:
+    """
+    Warn (never fail) when SECRET_KEY is short or is the published example.
+
+    Audit finding (2026-10-02): be-oct26-secret-key-sin-longitud-minima. A warning
+    rather than a refusal to start: the deployed key cannot be checked from
+    here, and a deployment must not go down because its key is shorter than
+    this rule. The log never shows the key or its length.
+    """
+    key = settings.SECRET_KEY
+    if key in _EXAMPLE_SECRET_KEYS:
+        logger.warning(
+            "SECRET_KEY is the example value from .env.example: anyone can forge "
+            "tokens. Generate a new one (e.g. openssl rand -hex 32)."
+        )
+    elif len(key.encode("utf-8")) < MIN_SECRET_KEY_BYTES:
+        logger.warning(
+            "SECRET_KEY is shorter than %d bytes; tokens are easier to forge. "
+            "Generate a longer one (e.g. openssl rand -hex 32).",
+            MIN_SECRET_KEY_BYTES,
+        )
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """
     Compares a raw string (e.g., "123456") against the stored hash.

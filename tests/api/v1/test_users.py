@@ -268,7 +268,36 @@ def test_create_user_duplicate_email_returns_400(client, db_session):
 
     resp = client.post("/api/v1/users/", json=_new_user_payload("taken@clinic.org"))
     assert resp.status_code == 400, resp.text
-    assert "already exists" in resp.json()["detail"]
+    assert resp.json()["detail"] == "This email cannot be used for a new account."
+
+
+def test_an_org_admin_is_not_told_another_organization_has_the_email(client, db_session, app_log):
+    """be-oct26-oraculo-de-correos-entre-organizaciones: the same answer for both, and a probe is logged."""
+    org, other = _seed_org(db_session), _seed_org(db_session, "Other NGO")
+    admin = _mk_user(db_session, org.id, "admin@clinic.org", UserRole.org_admin)
+    _mk_user(db_session, org.id, "ours@clinic.org", UserRole.doctor)
+    _mk_user(db_session, other.id, "theirs@other.org", UserRole.doctor)
+    app.dependency_overrides[get_current_user] = lambda: admin
+
+    ours = client.post("/api/v1/users/", json=_new_user_payload("ours@clinic.org"))
+    theirs = client.post("/api/v1/users/", json=_new_user_payload("theirs@other.org"))
+
+    assert ours.status_code == theirs.status_code == 400
+    assert ours.json() == theirs.json()
+    probes = [r for r in app_log.records if "belongs to another organization" in r.getMessage()]
+    assert len(probes) == 1
+
+
+def test_a_superadmin_still_gets_the_explicit_message(client, db_session):
+    hq, org = _seed_org(db_session, "HQ"), _seed_org(db_session, "Clinic B")
+    sa = _mk_user(db_session, hq.id, "sa@hq.org", UserRole.superadmin)
+    _mk_user(db_session, org.id, "taken@clinic.org", UserRole.doctor)
+    app.dependency_overrides[get_current_user] = lambda: sa
+
+    resp = client.post("/api/v1/users/", json={**_new_user_payload("taken@clinic.org"),
+                                               "organization_id": org.id})
+
+    assert resp.json()["detail"] == "The user with this email already exists in the system."
 
 
 def test_create_user_superadmin_requires_organization_id(client, db_session):

@@ -32,6 +32,17 @@ from app.services import login_throttle
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+def _duplicate_email_detail(current_user: User) -> str:
+    """
+    An org admin is told nothing about where the email is used: "already exists
+    in the system" told them another NGO had the person on its staff (audit
+    be-oct26-oraculo-de-correos-entre-organizaciones).
+    """
+    if current_user.role == UserRole.org_admin:
+        return "This email cannot be used for a new account."
+    return "The user with this email already exists in the system."
+
+
 @router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(
     user_in: UserCreate,
@@ -76,9 +87,20 @@ def create_user(
     # 3. Check if email already exists globally
     user = find_user_by_email(db, user_in.email)
     if user:
+        if (
+            current_user.role == UserRole.org_admin
+            and user.organization_id != current_user.organization_id
+        ):
+            # Emails are unique across organizations, so a refusal cannot be
+            # hidden; but an org admin probing for other NGOs' staff is logged.
+            logger.warning(
+                "org_admin actor_id=%s tried to create a user whose email belongs "
+                "to another organization",
+                current_user.id,
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The user with this email already exists in the system."
+            detail=_duplicate_email_detail(current_user),
         )
 
     ## 4. Enforce Multi-Tenancy based on Role
@@ -119,7 +141,7 @@ def create_user(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The user with this email already exists in the system."
+            detail=_duplicate_email_detail(current_user),
         )
     db.refresh(db_user)
 

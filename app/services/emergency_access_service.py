@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.phi_sanitizer import mask_id
+from app.db.errors import violates
 from app.db.models import EmergencyAccessLog
 from app.schemas.emergency_access import EmergencyAccessEntry
 
@@ -75,9 +76,15 @@ def store_emergency_access_entries(
                     "Emergency access entry declares another actor uploaded_by=%s "
                     "declared=%s", uploaded_by, entry.user_id,
                 )
-        except IntegrityError:
-            # Concurrent insert of the same client_event_id — treat as duplicate.
+        except IntegrityError as exc:
             savepoint.rollback()
+            # Only a concurrent insert of the same client_event_id is a
+            # duplicate; anything else must not drop the entry without a word.
+            if not violates(
+                exc, "ix_emergency_access_log_client_event_id",
+                "emergency_access_log.client_event_id",
+            ):
+                raise
             duplicates += 1
 
     db.commit()

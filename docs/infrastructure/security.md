@@ -72,7 +72,9 @@ Patient records are global: any `doctor`, `nurse` or `org_admin` can read any re
 
 `POST /api/v1/patients/access-log` returns that history for one patient (by server `patient_id` or current bracelet `device_uid`, in the body): all of it for a `superadmin`, the accesses made by their own organization's users for an `org_admin`.
 
-Offline break-glass accesses (a minor's record opened on the device without the guardian) are synced by the app to `emergency_access_log`, which stores the device-declared actor next to the authenticated user whose session uploaded the entry (`uploaded_by`).
+Offline break-glass accesses (a minor's record opened on the device without the guardian) are synced by the app to `emergency_access_log`, which stores the device-declared actor next to the authenticated user whose session uploaded the entry (`uploaded_by`). `occurred_at` must be ISO 8601; a value without an offset is read as local time in the reporting zone, and it is stored with its offset. `POST /api/v1/patients/access-log` returns these entries too (`emergency_entries`, for the patient's current and retired bracelets, scoped like the rest of the ledger).
+
+Logs never carry a bracelet or guardian-card UID or a document number, not even in part: they show a reference (`ref:` plus 10 hex characters of an HMAC keyed with `SECRET_KEY`), the same for every line about the same value. At startup, the log warns when `SECRET_KEY` is shorter than 32 bytes or is the example value from `.env.example` (never showing the key).
 
 Use `POST /api/v1/patients/scan` (UIDs in the body) rather than `GET /api/v1/patients/scan/{device_uid}`: a bracelet UID in the URL ends up in Cloud Run's request logs.
 
