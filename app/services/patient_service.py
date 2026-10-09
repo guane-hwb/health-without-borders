@@ -598,6 +598,27 @@ def _guardians_differ(stored_record: Optional[dict], patient_in: PatientFullReco
     )
 
 
+#: What a stale payload is kept from changing (see merge_patient_records): the
+#: bracelet, the guardians and the declarative lists.
+_STALE_PROTECTED_KEYS = (
+    "device_uid", "guardianInfo", "guardian2Info", "allergies", "backgroundHistory",
+)
+
+
+def _stale_rule_changes_nothing(stored_record: dict, incoming_record: dict) -> bool:
+    """
+    Whether the payload says the same as the stored record about everything
+    the stale merge protects.
+
+    Then the old base loses nothing: merged conservatively or not, the result
+    is the same. It is what a retry looks like when its first attempt was
+    saved but the answer never reached the device (a client timeout).
+    """
+    return all(
+        stored_record.get(key) == incoming_record.get(key) for key in _STALE_PROTECTED_KEYS
+    )
+
+
 def _same_person(existing: Patient, patient_in: PatientFullRecord) -> bool:
     """
     Whether a payload that reached ``existing`` through its bracelet UID is the
@@ -773,7 +794,11 @@ def create_or_update_patient(
         # The general case: the device says which version its copy is based on.
         # Without baseVersion (apps that predate it) nothing changes.
         current_version = existing_patient.record_version or 1
-        if patient_in.baseVersion is not None and patient_in.baseVersion < current_version:
+        if (
+            patient_in.baseVersion is not None
+            and patient_in.baseVersion < current_version
+            and not _stale_rule_changes_nothing(old_record_dump, new_record_dump)
+        ):
             logger.warning(
                 "Stale sync payload (baseVersion %s < %s) patient=%s",
                 patient_in.baseVersion,

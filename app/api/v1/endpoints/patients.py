@@ -475,6 +475,11 @@ async def sync_patient(
     `visit_edit_not_applied:<encounterIdentifier>` or
     `vaccination_edit_not_applied:<vaccinationId>`; the rest of the record syncs.
 
+    **The stored record back:** when `conflicts` is not empty and the payload is
+    the device's own copy (same `patientId`), `record` carries the record as
+    stored after this sync, with its `recordVersion`. Not for a copy matched by
+    the bracelet: that would read a minor's record without the guardian card.
+
     **Allowed roles:** `doctor`, `nurse`.
     """
     # A field the app sends that the schema does not know is dropped without
@@ -574,8 +579,12 @@ async def sync_patient(
         saved_patient_id = str(saved_patient.id)
         saved_record_version = saved_patient.record_version
         stored_record = saved_patient.full_record_json
+        # Matched by the device's own patientId, not resolved by the bracelet.
+        own_record = saved_patient.frontend_patient_id == patient_data.patientId
+        stored_model: Optional[PatientFullRecord] = None
         try:
-            rda_source = PatientFullRecord.model_validate(stored_record)
+            stored_model = PatientFullRecord.model_validate(stored_record)
+            rda_source = stored_model
         except ValidationError:
             logger.warning(
                 "Stored record does not validate; building the RDA from the payload "
@@ -642,6 +651,14 @@ async def sync_patient(
             db, saved_patient_id, accepted_encounter_ids, sent_background_hash,
         )
 
+        # The server kept part of its own copy: send it back, so the device
+        # shows (and writes to the chips) what HWB holds instead of asking for
+        # another scan.
+        merged_record = (
+            stored_model.model_copy(update={"recordVersion": saved_record_version})
+            if conflicts and own_record and stored_model is not None
+            else None
+        )
         return PatientSyncResponse(
             status="success",
             internal_id=saved_patient_id,
@@ -650,6 +667,7 @@ async def sync_patient(
             message="Patient synced and processed successfully",
             record_version=saved_record_version,
             conflicts=conflicts,
+            record=merged_record,
         )
 
     except HTTPException:
