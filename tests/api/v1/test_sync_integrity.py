@@ -297,6 +297,10 @@ def test_same_child_resolved_by_tag_adds_visits_but_keeps_guardians(client, db_s
 
     assert response.status_code == 201
     assert response.json()["conflicts"] == ["guardians_not_changed_by_tag_resolved_sync"]
+    # Matched by the bracelet, not by its own patientId: the stored record is
+    # not sent back, or the bracelet UID would read a minor's record without
+    # the guardian card.
+    assert response.json()["record"] is None
     record = _stored(db_session).full_record_json
     assert record["guardianInfo"]["device_uid"] == "GUARDIAN-UID-001"
     assert len(record["medicalHistory"]) == 1

@@ -6,10 +6,14 @@ build before this contract — behaves exactly as before; the conservative merge
 applies only when the device says its copy is older.
 """
 from copy import deepcopy
+from unittest.mock import patch
+
+from pydantic import ValidationError
 
 from app.api.deps import get_current_user
 from app.db.models import Patient
 from app.main import app
+from app.schemas.patient import PatientFullRecord
 from tests.api.v1.test_patients import MOCK_PATIENT_PAYLOAD, VISIT_1, MockUser
 
 UID = MOCK_PATIENT_PAYLOAD["device_uid"]
@@ -115,3 +119,53 @@ def test_version_alone_flags_a_stale_copy(client, db_session):
         "Penicilina"
     ]
 
+
+def test_a_retry_of_a_saved_sync_is_not_a_stale_copy(client, db_session):
+    """The first attempt was saved but its answer never reached the device (a
+    client timeout): the retry carries the same copy on the same base, and
+    nothing the stale rule protects differs from what is stored."""
+    _sync(client)
+    first = _sync(client, allergies=PENICILINA, baseVersion=1)
+
+    retry = _sync(client, allergies=PENICILINA, baseVersion=1)
+
+    assert first.json()["conflicts"] == []
+    assert retry.json()["conflicts"] == []
+    assert retry.json()["record"] is None
+    assert retry.json()["record_version"] == 3
+
+
+def test_a_stale_copy_gets_the_stored_record_back(client, db_session):
+    _sync(client)
+    _sync(client, allergies=PENICILINA, baseVersion=1)
+
+    body = _sync(client, allergies=[], baseVersion=1).json()
+
+    assert body["conflicts"] == ["stale_payload_base_version"]
+    assert body["record"]["patientId"] == MOCK_PATIENT_PAYLOAD["patientId"]
+    assert body["record"]["recordVersion"] == body["record_version"] == 3
+    assert [a["allergen"] for a in body["record"]["allergies"]] == ["Penicilina"]
+
+
+def test_no_record_without_conflicts(client, db_session):
+    assert _sync(client).json()["record"] is None
+    assert _sync(client, baseVersion=1).json()["record"] is None
+
+
+def test_no_record_when_the_stored_copy_does_not_validate(client, db_session):
+    _sync(client)
+    _sync(client, allergies=PENICILINA, baseVersion=1)
+    try:
+        PatientFullRecord.model_validate({})
+    except ValidationError as exc:
+        invalid = exc
+
+    with patch(
+        "app.api.v1.endpoints.patients.PatientFullRecord.model_validate",
+        side_effect=invalid,
+    ):
+        response = _sync(client, allergies=[], baseVersion=1)
+
+    assert response.status_code == 201
+    assert response.json()["conflicts"] == ["stale_payload_base_version"]
+    assert response.json()["record"] is None

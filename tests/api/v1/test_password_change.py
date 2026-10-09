@@ -88,6 +88,7 @@ def test_a_wrong_current_password_changes_nothing(client, db_session, people):
 
     assert response.status_code == 400  # not 401: the app would refresh and retry
     assert response.json()["detail"] == "The current password is not correct."
+    assert response.json()["code"] == "current_password_incorrect"
     assert _me(client, tokens).status_code == 200
     assert _login(client, "doc@clinic.org").status_code == 200
 
@@ -100,6 +101,7 @@ def test_the_new_password_must_differ(client, db_session, people):
 
     assert response.status_code == 400
     assert "different" in response.json()["detail"]
+    assert response.json()["code"] == "password_unchanged"
 
 
 @pytest.mark.parametrize("new", ["corta", "Password1234", "contraseña123", "ñ" * 37])

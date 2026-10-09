@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import find_user_by_email, get_current_user, revoke_all_sessions
 from app.core.config import settings
+from app.core.errors import CURRENT_PASSWORD_INCORRECT, PASSWORD_UNCHANGED, ApiError
 from app.core.rate_limit import limiter
 from app.core.security import (
     generate_temporary_password,
@@ -308,7 +309,8 @@ def change_own_password(
     - **Allowed roles:** any authenticated user.
     - **Responses:**
     - `200`: Password changed; new token pair (same shape as the login response).
-    - `400`: The current password is wrong, or the new one equals it.
+    - `400`: The current password is wrong (`code` `current_password_incorrect`),
+      or the new one equals it (`password_unchanged`).
     - `422`: The new password breaks the policy (at least 12 characters, at most
       72 bytes, not a common password).
     - `429`: Too many attempts (same limit as the login).
@@ -319,14 +321,16 @@ def change_own_password(
     if not verify_password(body.current_password, current_user.hashed_password):
         logger.warning("Password change with a wrong current password user_id=%s", current_user.id)
         login_throttle.record_failure(db, current_user.email)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The current password is not correct.",
+        raise ApiError(
+            status.HTTP_400_BAD_REQUEST,
+            "The current password is not correct.",
+            code=CURRENT_PASSWORD_INCORRECT,
         )
     if verify_password(body.new_password, current_user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The new password must be different from the current one.",
+        raise ApiError(
+            status.HTTP_400_BAD_REQUEST,
+            "The new password must be different from the current one.",
+            code=PASSWORD_UNCHANGED,
         )
 
     login_throttle.clear_failures(db, current_user.email)
