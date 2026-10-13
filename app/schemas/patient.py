@@ -885,6 +885,17 @@ class PatientSyncResponse(BaseModel):
             "record was synced."
         ),
     )
+    record: Optional[PatientFullRecord] = Field(
+        None,
+        description=(
+            "The record as stored after this sync, with its recordVersion, so "
+            "the device can show and write to the chips what the server "
+            "actually holds. Sent only when `conflicts` is not empty and the "
+            "payload is the device's own copy (matched by patientId, not by the "
+            "bracelet: that match must not read a minor's record without the "
+            "guardian card)."
+        ),
+    )
 
 
 # ============================================================================

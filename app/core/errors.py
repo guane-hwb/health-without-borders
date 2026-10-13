@@ -36,3 +36,6 @@ IDENTITY_MISMATCH = "identity_mismatch"
 LOGIN_PAUSED = "login_paused"
 SYNC_IN_PROGRESS = "sync_in_progress"
 STORED_RECORD_INVALID = "stored_record_invalid"
+# Error codes, not passwords.
+CURRENT_PASSWORD_INCORRECT = "current_password_incorrect"  # noqa: S105
+PASSWORD_UNCHANGED = "password_unchanged"  # noqa: S105
