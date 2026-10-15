@@ -1,8 +1,7 @@
 # NFC Key Management
 
 How the AES-256 keys that encrypt NFC chip payloads are configured, rotated and
-retired. Until now these rules lived only in pull request descriptions; this is
-the reference.
+retired.
 
 ---
 
