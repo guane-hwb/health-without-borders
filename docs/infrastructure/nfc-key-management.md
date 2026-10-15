@@ -22,8 +22,9 @@ resolve the patient from the backend even when it cannot decrypt the payload.
 ## 2. The keyring
 
 There is not one key but a **keyring**: a map of `version -> key`. The backend
-delivers the whole ring at login, refresh and `/users/me`. Devices decrypt with
-whichever version a chip names and encrypt with the current one.
+delivers the whole ring at login, refresh, `/users/me` and in the response to a
+password change (`POST /users/me/password`). Devices decrypt with whichever
+version a chip names and encrypt with the current one.
 
 | Setting | Meaning |
 |---|---|
@@ -37,8 +38,9 @@ the payload header.
 
 The application **refuses to start** if any key is malformed or if
 `NFC_CURRENT_KEY_VERSION` has no matching key. The error names the offending
-variable and never prints its value. A deployment with no NFC key at all is
-valid; NFC is simply unavailable.
+variable and never prints its value. Without `NFC_KEK`, a deployment with no
+NFC key at all is valid; NFC is simply unavailable. With `NFC_KEK` it is not:
+the first start needs `NFC_MASTER_KEY` (§ 4).
 
 ### Wire format
 
@@ -59,14 +61,24 @@ Recorded so the state of chips already in circulation is not guesswork.
 
 **Every chip written in the field to date is key version 0, in the headerless
 format.** No build carrying the versioned wire format was distributed to any
-device between 3 and 8 September 2026, so nothing was ever written with a
-version header, and no rotation has taken place: `NFC_CURRENT_KEY_VERSION` has
-been `0` throughout.
+device between 3 and 8 September 2026, so nothing was written with a version
+header then, and no rotation has taken place since.
+
+**Since 14 September 2026 the pilot keeps the ring in the database** (§ 4):
+`cloudbuild.yaml` mounts `NFC_KEK` since that day's deploy, and the first
+start with it imported `NFC_MASTER_KEY` as version 0. From then on
+`NFC_CURRENT_KEY_VERSION` is ignored; the current version is the one in
+`nfc_keyring_state`. As of
+15 October 2026 every start of the service logs
+`NFC keyring ready: versions [0], current 0.` — no version has been generated,
+rotated or revoked (any of those would have created version 1), and
+`NFC_AUTO_ROTATE` is not set, so automatic rotation is off.
 
 That means the two formats never coexisted in the field, and the wire format is
-frozen from the current build onwards. It also means the key in
-`NFC_MASTER_KEY` is the only key any existing chip can be read with — losing or
-changing it makes every chip in circulation unreadable offline.
+frozen from the current build onwards. It also means version 0 is the only key
+any existing chip can be read with. It now lives in `nfc_keys`, sealed under
+the KEK: losing the KEK (§ 10) makes every chip in circulation unreadable
+offline.
 
 ## 4. Where the ring lives
 
@@ -82,14 +94,24 @@ KEK sealed each row). On first start the environment's `NFC_MASTER_KEY` is
 imported as version 0 and the table becomes the source of truth. That is what
 makes revocation an API call instead of a redeploy.
 
-Importing version 0 also closes the `hwb-nfc-master-key:latest` hazard — adding a
-Secret Manager version there can no longer silently change what version 0 *is*.
+Importing version 0 also closes most of the `hwb-nfc-master-key:latest`
+hazard — adding a Secret Manager version there can no longer silently change
+what version 0 *is*. Not all of it: the import runs whenever the table is
+empty, so pointing the service at an empty database (a new instance, a restore
+that went wrong) imports whatever `NFC_MASTER_KEY` holds at that moment. The
+secret must keep its original value.
+
 The trade is that the KEK then guards every version, version 0 included: losing
 it costs offline reads across the whole fleet, not just for rotated chips.
 **The KEK backup procedure is a precondition for setting `NFC_KEK`.**
 
 The backend refuses to start if the KEK cannot unwrap the current version. A
 wrong KEK would otherwise surface as devices quietly receiving an empty ring.
+
+It also refuses to start when the table is empty and `NFC_MASTER_KEY` is not
+set: nothing is imported, and there is no endpoint that creates the first
+version. An organisation starting fresh with a KEK sets both — a new
+`NFC_MASTER_KEY` (`openssl rand -hex 32`) becomes version 0.
 
 ### Revoking a compromised key
 
@@ -103,10 +125,12 @@ anything less is useless against a leak, since the leaked key is the one that
 reads. If it was the current version, a replacement is generated and becomes
 current. Every operation is recorded in `nfc_key_events` with actor and reason.
 
-**It is not instant on the device.** Revocation stops *delivery*. A device that
-already holds the ring keeps it until its next refresh: up to an hour online, up
-to the refresh-token window (7 days) offline. There is no way to reach an
-offline device sooner.
+**It is not instant on the device.** Revocation stops *delivery*: at once on
+the instance that handled the request, within 60 seconds on the others (each
+instance reuses the ring it read for that long). A device that already holds
+the ring keeps it until its next refresh: up to an hour online, up to the
+refresh-token window (7 days) offline. There is no way to reach an offline
+device sooner.
 
 **Chips on the revoked version become online-only** until rewritten. No data is
 lost: the UID resolves the patient through the backend and the next save
@@ -127,21 +151,25 @@ Revoking a key alone does **not** cut the stolen device: its refresh token stays
 valid for up to 7 days and would receive the replacement key. In this order:
 
 1. **Revoke the user's sessions:** `POST /api/v1/users/{id}/revoke-sessions`
-   (`superadmin`, or the `org_admin` of that user's organization). Every access
+   (`superadmin`; an `org_admin` only for the doctors and nurses of their own
+   organization, so a lost `org_admin` tablet — which also holds the keyring —
+   needs a `superadmin`; nobody can do it on their own account). Every access
    and refresh token issued to that user stops working at once, on every
    device; the account stays active and the person signs in again on a trusted
    device. Deactivating the account (`PATCH /users/{id}` with
    `{"is_active": false}`) has the same effect on sessions, and reactivating it
-   later does **not** bring them back.
+   later does **not** bring them back. The stolen device wipes its keyring as
+   soon as it is online and its refresh is refused; while it stays offline it
+   keeps the ring until its refresh token expires (up to 7 days).
 2. **Revoke the key version** the device held, as above.
 3. **Change the password** if it may have been exposed:
-   `POST /api/v1/users/{id}/reset-password` (same roles as step 1) returns a
-   new temporary password once and also ends every session, so it can replace
+   `POST /api/v1/users/{id}/reset-password` (same roles and limits as step 1)
+   returns a new temporary password once and also ends every session, so it can replace
    step 1. Give it to the user, who replaces it with their own
    (`POST /api/v1/users/me/password`).
 
-If the whole organization is compromised, deactivate the organization: that
-blocks all its users at once and revokes all their sessions.
+If the whole organization is compromised, a `superadmin` deactivates the
+organization: that blocks all its users at once and revokes all their sessions.
 
 A refresh token presented twice (the device's copy and a stolen copy) is
 treated the same way: the second use revokes every session of that user.
@@ -162,15 +190,23 @@ into an issue or a chat.
 Rotation limits how long a leaked key stays useful. It does **not** re-encrypt
 existing chips: those migrate when they are next written.
 
+The four steps below are for the environment mode (no `NFC_KEK`). **They have
+no effect on the pilot**, which keeps the ring in the database (§ 3): the
+backend would only log a warning. There, use
+[Rotating with the keyring in the database](#rotating-with-the-keyring-in-the-database).
+
 1. Generate a new key and create a **new** secret, e.g. `hwb-nfc-key-v1`.
 2. Mount it in `cloudbuild.yaml` under `--update-secrets` as `NFC_KEY_V1`.
 3. Set `NFC_CURRENT_KEY_VERSION=1` under `--update-env-vars`.
 4. Deploy. New writes use version 1; version 0 stays in the ring for reading.
 
 > **Never add a new version to an existing secret.** `NFC_MASTER_KEY` is mounted
-> as `hwb-nfc-master-key:latest`. Adding a Secret Manager version to that secret
-> silently changes what version 0 is, and **every existing chip becomes
-> unreadable**. Rotation always means a new secret with a new name.
+> as `hwb-nfc-master-key:latest`, and Cloud Run reads `:latest` every time an
+> instance starts — no deploy needed. In environment mode, adding a Secret
+> Manager version to that secret silently changes what version 0 is, and
+> **every existing chip becomes unreadable**. (With a KEK the damage is
+> narrower, see § 4; the KEK's own secret has the same trap, see § 10.)
+> Rotation always means a new secret with a new name.
 
 > **Do not set `NFC_CURRENT_KEY_VERSION` above `0` until every device runs a
 > build that understands the keyring.** An older build takes the current key and
@@ -193,10 +229,11 @@ versions keep being delivered, so chips written under them stay readable
 offline and migrate as they are rewritten.
 
 **Automatically:** set `NFC_AUTO_ROTATE=true` and the current key is replaced
-once it reaches `NFC_ROTATION_PERIOD_DAYS` (default 90). The check runs on the
-request path, not on a schedule — the project has no scheduler, and an adopting
-organisation should not have to stand one up for key rotation to happen. It is
-evaluated at most once a minute per instance, on its own database session so a
+once it reaches `NFC_ROTATION_PERIOD_DAYS` (default 90). The check runs when the
+service starts and on the request path (login, refresh, `/users/me`), not on a
+schedule — the project has no scheduler, and an adopting organisation should
+not have to stand one up for key rotation to happen. It is evaluated at most
+once a minute per instance, on its own database session so a
 rotation never commits anything an in-flight login had pending. A failed
 rotation is logged and retried later; it never breaks a login.
 
@@ -261,7 +298,10 @@ GET /api/v1/patients/nfc-key-versions/usage?window_days=90
 
 Requires `org_admin` or `superadmin`. It reports how many **distinct chips** were
 last seen on each version, split by `patient` and `guardian`, plus
-`retirable_versions` — versions with no sighting inside the window.
+`retirable_versions` — versions chips were last seen on, but none inside the
+window. Both come from the telemetry alone: a version no chip is currently
+attributed to (never reported, or every chip seen on it has since moved on)
+appears in neither, even if it is still in the ring.
 
 **Read `retirable_versions` as a veto, not a clearance.** A version missing from
 the telemetry may still have chips in the field whose patients have not come
@@ -286,7 +326,13 @@ retention policy it would need — remains open.
 
 ## 8. On the device
 
-- The keyring lives in the platform secure store (Keystore / Keychain).
+- The keyring lives in the platform secure store (Keystore / Keychain). The
+  web build has none: there it is kept in memory only and is gone when the tab
+  closes.
+- A login or refresh response without keys (a backend that could not read the
+  ring, § 4) leaves the ring the device already holds in place. A refused
+  refresh (`401`) signs the device out and wipes the ring with the rest of the
+  secure store.
 - It is **bounded by the session window**: it is only served while the refresh
   token's `exp` is in the future, checked locally so it holds offline. Outside
   the window it is wiped from memory and disk and NFC is refused.
@@ -328,7 +374,21 @@ of the deploying organization. Who they are is recorded in the team's internal
 register, not in this public document: naming them here only gives an attacker
 two targets.
 
-**Primary copy:** Secret Manager, as the value of `NFC_KEK`.
+**Primary copy:** Secret Manager, secret `nfc-kek`, mounted by `cloudbuild.yaml`
+as `NFC_KEK=nfc-kek:latest`.
+
+> **Never add a version to `nfc-kek`.** Cloud Run reads `:latest` every time an
+> instance starts. A new value cannot unwrap the rows, so every instance started
+> after it — a new revision, but also a scale-up or a restart of the current
+> one — refuses to start, and the service goes down as running instances are
+> recycled. Disabling the new version does not help: `latest` is the most
+> recently *created* version, enabled or not. To recover, add the original value
+> back as a new version, from the backup below:
+> `age -d kek.age | gcloud secrets versions add nfc-kek --data-file=-`.
+> (Pinning the old version on the service, `--update-secrets=NFC_KEK=nfc-kek:<n>`,
+> also works at once, but the next deploy from `cloudbuild.yaml` puts `:latest`
+> back.) Changing the KEK means re-wrapping every row of `nfc_keys` under the
+> new one; there is no tool or procedure for that yet.
 
 **Backup:** the KEK encrypted with `age` under a six-word passphrase known to
 both custodians, stored in two separate, access-controlled locations — one per
@@ -343,7 +403,7 @@ age -p -a -o kek.age kek.txt            # prompts for the passphrase
 age -d kek.age > kek-check.txt          # verify BEFORE deleting anything
 diff kek.txt kek-check.txt && echo "BACKUP OK"
 
-# kek.txt  -> Secret Manager, as NFC_KEK
+gcloud secrets create nfc-kek --data-file=kek.txt   # -> NFC_KEK
 # kek.age  -> each custodian's backup location
 
 shred -u kek.txt kek-check.txt          # macOS: rm -P
