@@ -156,8 +156,14 @@ To avoid hardcoded credentials in environment variables, store sensitive data in
 ```bash
 printf "<DB_PASSWORD>" | gcloud secrets create hwb-db-pass --data-file=-
 printf "<SECRET_KEY>" | gcloud secrets create hwb-secret-key --data-file=-
+openssl rand -hex 32 | tr -d '\n' | gcloud secrets create hwb-nfc-master-key --data-file=-
 
 ```
+
+The fourth secret, `nfc-kek`, is created only by following the KEK custody
+procedure ([NFC Key Management](nfc-key-management.md) § 10): its backup must
+exist before the service ever reads it. `cloudbuild.yaml` mounts all four as
+`:latest`; never add a version to an existing one (same document, § 6 and § 10).
 
 **2. Grant read access to Cloud Run's default service account:**
 *(Replace `<PROJECT_NUMBER>` with your actual numeric project ID)*
@@ -170,6 +176,15 @@ gcloud secrets add-iam-policy-binding hwb-db-pass \
     --role="roles/secretmanager.secretAccessor"
 
 gcloud secrets add-iam-policy-binding hwb-secret-key \
+    --member="serviceAccount:${COMPUTE_SA}" \
+    --role="roles/secretmanager.secretAccessor"
+
+gcloud secrets add-iam-policy-binding hwb-nfc-master-key \
+    --member="serviceAccount:${COMPUTE_SA}" \
+    --role="roles/secretmanager.secretAccessor"
+
+# Once nfc-kek exists (see above)
+gcloud secrets add-iam-policy-binding nfc-kek \
     --member="serviceAccount:${COMPUTE_SA}" \
     --role="roles/secretmanager.secretAccessor"
 
