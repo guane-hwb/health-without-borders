@@ -1,0 +1,27 @@
+{
+  "_comment": "Shared with the app (health-without-borders-frontend, retiredDeviceHash). hash = sha256 hex of prefix + normalized, where normalized keeps only the hex digits of the UID, in upper case (the app's normalizeNfcUid). A UID with no hex digit has no hash. Hashes checked with `printf 'hwb-retired-device:v1:04A1B2C3D4E5F6' | sha256sum`.",
+  "prefix": "hwb-retired-device:v1:",
+  "vectors": [
+    {
+      "uid": "04:a1:b2:c3:d4:e5:f6",
+      "normalized": "04A1B2C3D4E5F6",
+      "hash": "8e1e4ddbca4b0de60ef17c3d47d3b98abdadf688147d26760451bd41e26976de"
+    },
+    {
+      "uid": "04A1B2C3D4E5F6",
+      "normalized": "04A1B2C3D4E5F6",
+      "hash": "8e1e4ddbca4b0de60ef17c3d47d3b98abdadf688147d26760451bd41e26976de"
+    },
+    {
+      "uid": "04 a1-b2.c3:d4 e5 f6",
+      "normalized": "04A1B2C3D4E5F6",
+      "hash": "8e1e4ddbca4b0de60ef17c3d47d3b98abdadf688147d26760451bd41e26976de"
+    },
+    {
+      "uid": "53:8C:2E:91",
+      "normalized": "538C2E91",
+      "hash": "55d2ccd1cb9bb77c9d1c134328bdef18038084479a22fdb052fff3a067ca42b2"
+    }
+  ],
+  "no_hash": ["", "  ", "::-", "XYZ"]
+}

@@ -57,6 +57,12 @@ minor's record without the card, and both leave a trace (§ 3.4):
 `POST /patients/search` (lookup by document, for a lost bracelet) and the app's
 offline emergency access (break-glass), uploaded later to `emergency_access_log`.
 
+A retired patient or guardian device (lost, damaged or replaced) is refused online
+with `410 device_retired`. Offline, the app reads the devices without the server;
+`GET /patients/retired-devices` gives it the list of retired devices to check
+them against (hashes of the UIDs, downloaded on each sync; see
+[Database](database.md) § 3.1).
+
 ---
 
 ## 3. Data & Clinical Security

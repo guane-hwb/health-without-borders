@@ -3,7 +3,7 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -51,6 +51,7 @@ from app.schemas.patient import (
     PatientSyncResponse,
     fields_not_kept,
 )
+from app.schemas.retired_device import RetiredDevicesResponse
 from app.services.access_log_service import (
     SCAN,
     SEARCH,
@@ -89,6 +90,7 @@ from app.services.patient_service import (
     record_fhir_delivery,
 )
 from app.services.record_merger import adopt_stored_item_ids
+from app.services.retired_device_service import list_retired_device_hashes
 
 logger = logging.getLogger(__name__)
 
@@ -862,6 +864,71 @@ async def search_patient(
         reason=criteria.access_reason,
     )
     return record
+
+
+@router.get(
+    "/retired-devices",
+    response_model=RetiredDevicesResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_retired_devices(
+    since: Optional[datetime] = Query(
+        None,
+        description=(
+            "`server_time` of the previous call. Without it, every retired "
+            "device is returned. A value without an offset is read as UTC."
+        ),
+    ),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    List the retired patient and guardian devices, as hashes, so the app can
+    refuse them offline.
+
+    A lost, damaged or replaced device still holds its data. Online, `/scan`
+    answers `410 device_retired`; offline, the app opens a record from the
+    devices alone and needs this list to know a device was retired. It
+    downloads the list on every sync and keeps it.
+
+    Each entry is `sha256("hwb-retired-device:v1:" + UID)` in hex, where the
+    UID keeps only its hex digits, in upper case (`04:a1:b2` → `04A1B2`), as
+    the app's `normalizeNfcUid` does. The UIDs themselves are not sent.
+
+    **Incremental:** pass the previous response's `server_time` as `since`
+    to get only the devices retired after it (with a few minutes of overlap,
+    so some hashes repeat). The list only grows: the ledger it comes from is
+    append-only.
+
+    **Allowed roles:** `doctor`, `nurse`, `org_admin` — everyone whose phone
+    holds the NFC keyring and reads devices.
+
+    **Responses:**
+    - `200`: `uid_hashes` (sorted, no duplicates) and `server_time`.
+    - `403`: Caller is not `doctor`, `nurse` or `org_admin`.
+    - `422`: `since` is not a date-time.
+    """
+    if current_user.role not in {
+        UserRole.doctor,
+        UserRole.nurse,
+        UserRole.org_admin,
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Access Denied: Only clinical staff and organization admins "
+                "can list retired devices."
+            ),
+        )
+
+    uid_hashes, server_time = list_retired_device_hashes(db, since)
+    logger.info(
+        "Retired device list served actor_id=%s incremental=%s count=%d",
+        current_user.id,
+        since is not None,
+        len(uid_hashes),
+    )
+    return RetiredDevicesResponse(uid_hashes=uid_hashes, server_time=server_time)
 
 
 @router.post(
