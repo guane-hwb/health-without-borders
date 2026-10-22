@@ -118,7 +118,8 @@ API endpoints that are vulnerable to brute-force attacks (`/login/access-token`,
 **Per-account limit on failed sign-ins.** Independent of the address and of the instance: failures are counted per account in PostgreSQL (`login_failures`, shared by every instance, no Redis needed).
 
 - After `LOGIN_FAILURES_BEFORE_DELAY` (5) failures within `LOGIN_FAILURE_WINDOW_SECONDS` (15 min), the account is **paused** for `LOGIN_DELAY_BASE_SECONDS` (60 s). Each further failure doubles the pause, up to `LOGIN_DELAY_MAX_SECONDS` (15 min).
-- While paused, every attempt gets `429` with `code: login_paused` and `Retry-After`, even with the right password, so the guessing cannot go on.
+- While paused, every attempt gets `429` with `code: login_paused` and `Retry-After`, even with the right password, so the guessing cannot go on. A refused attempt is not counted, so it does not lengthen the pause.
+- Each attempt is counted **before** its password is checked, under a lock on the account's row. A burst of simultaneous guesses, from any number of addresses or instances, therefore gets at most 5 evaluations; the rest get `429` without their password being checked.
 - A wrong current password in `POST /users/me/password` counts the same way.
 - A successful sign-in, or an administrator's reset (`POST /users/{id}/reset-password`), clears the count.
 - **Trade-off:** someone who knows a user's email can delay that user's sign-in by up to 15 minutes at a time, but never lock the account for good. That is why it is a pause and not a lockout.

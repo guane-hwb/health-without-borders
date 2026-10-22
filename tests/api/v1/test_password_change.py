@@ -126,6 +126,21 @@ def test_password_changes_are_rate_limited(client, db_session, people):
     assert _login(client, "doc@clinic.org").status_code == 429  # the sign-in is paused too
 
 
+def test_the_right_current_password_clears_the_count_even_if_nothing_changes(
+    client, db_session, people
+):
+    """Every attempt is counted before it is checked; the right password clears it."""
+    from app.db.models import LoginFailure
+
+    tokens = _login(client, "doc@clinic.org").json()
+    for _ in range(4):
+        assert _change(client, tokens, current="no es la actual").status_code == 400
+
+    assert _change(client, tokens, new=TEMPORARY).json()["code"] == "password_unchanged"
+
+    assert db_session.query(LoginFailure).count() == 0
+
+
 def test_an_admin_reset_gives_a_temporary_password_and_ends_every_session(
     client, db_session, people, app_log
 ):

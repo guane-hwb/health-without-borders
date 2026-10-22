@@ -315,17 +315,18 @@ def change_own_password(
       72 bytes, not a common password).
     - `429`: Too many attempts (same limit as the login).
     """
-    # Guessing the current password counts against the account like a sign-in.
-    login_throttle.ensure_login_not_paused(db, current_user.email)
+    # Guessing the current password counts against the account like a sign-in,
+    # and is counted before it is checked.
+    login_throttle.reserve_attempt(db, current_user.email)
     # 400, not 401: a 401 makes the app refresh its session and retry.
     if not verify_password(body.current_password, current_user.hashed_password):
         logger.warning("Password change with a wrong current password user_id=%s", current_user.id)
-        login_throttle.record_failure(db, current_user.email)
         raise ApiError(
             status.HTTP_400_BAD_REQUEST,
             "The current password is not correct.",
             code=CURRENT_PASSWORD_INCORRECT,
         )
+    login_throttle.clear_failures(db, current_user.email)
     if verify_password(body.new_password, current_user.hashed_password):
         raise ApiError(
             status.HTTP_400_BAD_REQUEST,
@@ -333,7 +334,6 @@ def change_own_password(
             code=PASSWORD_UNCHANGED,
         )
 
-    login_throttle.clear_failures(db, current_user.email)
     current_user.hashed_password = get_password_hash(body.new_password)
     current_user.must_change_password = False
     current_user.password_changed_at = datetime.now(timezone.utc)

@@ -184,3 +184,38 @@ def test_simultaneous_failed_logins_are_all_counted(api, staff, db):
     paused = api.post("/api/v1/login/access-token", data={"username": "doc@a.org", "password": PASSWORD})
     assert paused.status_code == 429
     assert paused.json()["code"] == "login_paused"
+
+
+def test_a_burst_of_guesses_gets_no_more_evaluations_than_the_limit(api, staff, monkeypatch):
+    """
+    F1 (security review 2026-10-15): the pause was checked before bcrypt and
+    the failure recorded after it, so every guess in a simultaneous burst was
+    evaluated. From many addresses the per-address limit does not help either.
+    """
+    from app.core import security
+    from app.core.config import settings
+
+    evaluated = []
+    lock = threading.Lock()
+    real_verify = security.verify_password
+
+    def counting_verify(plain, hashed):
+        with lock:
+            evaluated.append(plain)
+        return real_verify(plain, hashed)
+
+    monkeypatch.setattr(security, "verify_password", counting_verify)
+    addresses = iter(f"198.51.100.{i}" for i in range(1, 13))
+
+    responses = _at_once(12, lambda client: client.post(
+        "/api/v1/login/access-token",
+        data={"username": "doc@a.org", "password": "no es esta"},
+        headers={"X-Forwarded-For": next(addresses)},
+    ))
+
+    assert len(evaluated) == settings.LOGIN_FAILURES_BEFORE_DELAY
+    assert sorted(r.status_code for r in responses) == (
+        [401] * settings.LOGIN_FAILURES_BEFORE_DELAY
+        + [429] * (12 - settings.LOGIN_FAILURES_BEFORE_DELAY)
+    )
+    assert {r.json()["code"] for r in responses if r.status_code == 429} == {"login_paused"}
