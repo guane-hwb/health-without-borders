@@ -190,6 +190,23 @@ def test_get_by_document_without_type_or_number_returns_none(db_session):
     assert get_patient_by_document(db_session, "PT", " - . ") is None
 
 
+def test_a_strict_lookup_with_an_empty_document_never_matches(db_session):
+    """Only separators normalize to "", the number of every undocumented patient."""
+    from datetime import date
+
+    from app.services.patient_service import find_patient_strict
+
+    p = _persist(db_session, frontend_id="APP-NODOC", device_uid="TAG-NODOC", doc="")
+    p.birth_date = date(2020, 1, 1)
+    db_session.commit()
+
+    for document_number in ("---", " - . ", ""):
+        assert find_patient_strict(
+            db_session, document_number=document_number, birth_date=date(2020, 1, 1),
+            first_name="Is", last_name="Ma",
+        ) is None
+
+
 def test_a_strict_lookup_with_more_candidates_than_the_cap_is_denied(db_session):
     """be-oct26-busqueda-estricta-limit-sin-orden: ten rows in no fixed order."""
     from datetime import date
