@@ -478,12 +478,17 @@ def find_patient_strict(
       - guardian_name:   if provided, partial match against either guardian
 
     Returns None if zero or more than one patient matches (ambiguous = denied).
+    A number made only of separators ("---") never matches: it normalizes to
+    an empty string, which would otherwise find every patient stored without a
+    document number.
     """
+    normalized_document = normalize_document_number(document_number)
+    if not normalized_document:
+        return None
     candidates = (
         db.query(Patient)
         .filter(
-            _normalized_document_column(Patient.document_number)
-            == normalize_document_number(document_number),
+            _normalized_document_column(Patient.document_number) == normalized_document,
             Patient.birth_date == birth_date,
         )
         # One more than the cap, so a set the cap would cut is seen as such:

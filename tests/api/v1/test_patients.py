@@ -1172,6 +1172,28 @@ def test_search_wrong_document_returns_404(client: TestClient):
     assert "No patient found" in response.json()["detail"]
 
 
+def test_search_with_only_separators_does_not_match_an_undocumented_patient(client: TestClient):
+    """
+    "---" passes the length check but normalizes to an empty number. It must
+    not match a stored patient whose number is empty too: that is a child with
+    no document, found otherwise from a birth date and two name prefixes.
+    """
+    payload = deepcopy(MOCK_PATIENT_PAYLOAD)
+    payload["patientInfo"]["identification"] = {"documentType": "MS", "documentNumber": ""}
+    assert _sync_patient(client, payload).status_code == 201
+
+    params = {
+        "document_number": "---",
+        "birth_date": "2020-01-01",
+        "first_name": "Sa",
+        "last_name": "Ro",
+    }
+    response = client.post("/api/v1/patients/search", json=params)
+    _clear_overrides()
+
+    assert response.status_code == 404
+
+
 def test_search_wrong_name_returns_404(client: TestClient):
     """Correct document but wrong first name returns 404."""
     _sync_patient(client)
