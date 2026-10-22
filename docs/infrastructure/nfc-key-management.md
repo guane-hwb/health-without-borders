@@ -27,7 +27,7 @@ version a chip names and encrypt with the current one.
 
 | Setting | Meaning |
 |---|---|
-| `NFC_MASTER_KEY` | The original key. Registered as **version 0**. |
+| `NFC_MASTER_KEY` | The original key. Registered as **version 0**. With `NFC_KEK`, only read by the first-start import (§ 4). |
 | `NFC_KEY_V<n>` | The key for version `n`. One environment variable per key. |
 | `NFC_CURRENT_KEY_VERSION` | The version new writes are encrypted with. Defaults to `0`. |
 
@@ -39,7 +39,7 @@ The application **refuses to start** if any key is malformed or if
 `NFC_CURRENT_KEY_VERSION` has no matching key. The error names the offending
 variable and never prints its value. Without `NFC_KEK`, a deployment with no
 NFC key at all is valid; NFC is simply unavailable. With `NFC_KEK` it is not:
-the first start needs `NFC_MASTER_KEY` (§ 4).
+the first start needs `NFC_MASTER_KEY` and `NFC_BOOTSTRAP_IMPORT=true` (§ 4).
 
 ### Wire format
 
@@ -73,6 +73,10 @@ start with it imported `NFC_MASTER_KEY` as version 0. From then on
 rotated or revoked (any of those would have created version 1), and
 `NFC_AUTO_ROTATE` is not set, so automatic rotation is off.
 
+Since October 2026 `cloudbuild.yaml` no longer mounts `NFC_MASTER_KEY`: the
+deploy removes it (`--remove-secrets`), so version 0 exists in clear only in the
+`hwb-nfc-master-key` secret, not in the environment of every instance.
+
 That means the two formats never coexisted in the field, and the wire format is
 frozen from the current build onwards. It also means version 0 is the only key
 any existing chip can be read with. It now lives in `nfc_keys`, sealed under
@@ -89,16 +93,26 @@ always was. Nothing changes on upgrade.
 
 **With `NFC_KEK`** the ring lives in the `nfc_keys` table, with each key sealed
 under the KEK (AES-256-GCM, version as associated data, `kek_id` recording which
-KEK sealed each row). On first start the environment's `NFC_MASTER_KEY` is
-imported as version 0 and the table becomes the source of truth. That is what
-makes revocation an API call instead of a redeploy.
+KEK sealed each row). On the first start the environment's `NFC_MASTER_KEY`
+is imported as version 0 and the table becomes the source of truth. That is
+what makes revocation an API call instead of a redeploy.
 
-Importing version 0 also closes most of the `hwb-nfc-master-key:latest`
-hazard — adding a Secret Manager version there can no longer silently change
-what version 0 *is*. Not all of it: the import runs whenever the table is
-empty, so pointing the service at an empty database (a new instance, a restore
-that went wrong) imports whatever `NFC_MASTER_KEY` holds at that moment. The
-secret must keep its original value.
+The import needs `NFC_BOOTSTRAP_IMPORT=true`. An empty `nfc_keys` table is also
+what a restore from a backup older than the KEK, or a table emptied by mistake,
+looks like; importing then would make version 0 current again even if it had
+been revoked after a leak, and drop every later version, with nothing said. So:
+
+- **Empty table, flag not set:** the backend refuses to start and says why.
+- **Empty table, but `nfc_key_events` has rows:** the ring existed and its rows
+  are missing. The backend refuses to start even with the flag. Restore
+  `nfc_keys` and `nfc_keyring_state` from a backup instead.
+- **Table already filled, flag still set:** nothing is imported, and the start
+  logs a warning to remove it.
+
+Once imported, `NFC_MASTER_KEY` is not read again. Remove it and the flag from
+the service; the pilot's `cloudbuild.yaml` does both on every deploy. Keep the
+`hwb-nfc-master-key` secret's original value: it is the plaintext of version 0,
+which every chip in the field is written with.
 
 The trade is that the KEK then guards every version, version 0 included: losing
 it costs offline reads across the whole fleet, not just for rotated chips.
@@ -109,8 +123,21 @@ wrong KEK would otherwise surface as devices quietly receiving an empty ring.
 
 It also refuses to start when the table is empty and `NFC_MASTER_KEY` is not
 set: nothing is imported, and there is no endpoint that creates the first
-version. An organisation starting fresh with a KEK sets both — a new
-`NFC_MASTER_KEY` (`openssl rand -hex 32`) becomes version 0.
+version. An organisation starting fresh with a KEK sets, for the first start
+only, a new `NFC_MASTER_KEY` (`openssl rand -hex 32`, it becomes version 0) and
+`NFC_BOOTSTRAP_IMPORT=true`. On Cloud Run, before the first deploy that mounts
+`NFC_KEK`:
+
+```bash
+gcloud run services update <SERVICE> --region <REGION> \
+    --update-secrets=NFC_MASTER_KEY=hwb-nfc-master-key:latest,NFC_KEK=nfc-kek:latest \
+    --update-env-vars=NFC_BOOTSTRAP_IMPORT=true
+```
+
+Check that the start logs `Imported NFC_MASTER_KEY into the keyring as version
+0.` and `NFC keyring ready: versions [0], current 0.`, then remove both
+(`--remove-secrets=NFC_MASTER_KEY --remove-env-vars=NFC_BOOTSTRAP_IMPORT`, which
+the next deploy from `cloudbuild.yaml` also does).
 
 ### Revoking a compromised key
 

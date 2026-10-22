@@ -103,7 +103,7 @@ Use `POST /api/v1/patients/scan` (UIDs in the body) rather than `GET /api/v1/pat
 - Cloud Run instances are ephemeral (no persistent attack surface).
 
 ### 4.2. Secret Management
-- Sensitive configurations injected at runtime via Google Secret Manager: `hwb-db-pass` (`DB_PASS`), `hwb-secret-key` (`SECRET_KEY`), `hwb-nfc-master-key` (`NFC_MASTER_KEY`) and `nfc-kek` (`NFC_KEK`), all mounted as `:latest` by `cloudbuild.yaml`.
+- Sensitive configurations injected at runtime via Google Secret Manager: `hwb-db-pass` (`DB_PASS`), `hwb-secret-key` (`SECRET_KEY`) and `nfc-kek` (`NFC_KEK`), mounted as `:latest` by `cloudbuild.yaml`. `hwb-nfc-master-key` (`NFC_MASTER_KEY`) holds version 0 of the NFC keyring in clear; it was mounted only for the first import into the database and is no longer in the service's environment ([NFC Key Management](nfc-key-management.md) § 4).
 - Cloud Run reads `:latest` every time an instance starts, so a new version of one of these secrets reaches every instance started afterwards, without a deploy. Never add a version to rotate one of them in place: for `SECRET_KEY`, instances would disagree on token signatures until all of them restart; for the NFC secrets, see [NFC Key Management](nfc-key-management.md) § 6 and § 10.
 - No secrets committed to the Git repository.
 

@@ -42,6 +42,7 @@ def clean_keyring_state(monkeypatch):
     monkeypatch.setattr(settings, "NFC_MASTER_KEY", MASTER)
     monkeypatch.setattr(settings, "NFC_CURRENT_KEY_VERSION", 0)
     monkeypatch.setattr(settings, "NFC_KEK", "")
+    monkeypatch.setattr(settings, "NFC_BOOTSTRAP_IMPORT", False)
     nfc_key_service.invalidate_cache()
     yield
     nfc_key_service.invalidate_cache()
@@ -96,8 +97,10 @@ def doctor(client: TestClient, db_session):
 def with_kek(monkeypatch, db_session):
     """A configured KEK with version 0 imported, as a live deployment would be."""
     monkeypatch.setattr(settings, "NFC_KEK", KEK)
+    monkeypatch.setattr(settings, "NFC_BOOTSTRAP_IMPORT", True)
     nfc_key_service.invalidate_cache()
     nfc_key_service.ensure_initialised(db_session)
+    monkeypatch.setattr(settings, "NFC_BOOTSTRAP_IMPORT", False)
     return KEK
 
 
@@ -475,6 +478,7 @@ class TestRingEdgeCases:
     ):
         monkeypatch.setattr(settings, "NFC_KEK", KEK)
         monkeypatch.setattr(settings, "NFC_MASTER_KEY", "not-hex-at-all")
+        monkeypatch.setattr(settings, "NFC_BOOTSTRAP_IMPORT", True)
         nfc_key_service.invalidate_cache()
 
         nfc_key_service.ensure_initialised(db_session)
@@ -500,11 +504,24 @@ class TestStartupPreparation:
 
     def test_imports_and_validates_with_a_kek(self, monkeypatch, db_session):
         monkeypatch.setattr(settings, "NFC_KEK", KEK)
+        monkeypatch.setattr(settings, "NFC_BOOTSTRAP_IMPORT", True)
         nfc_key_service.invalidate_cache()
 
         prepare_nfc_keyring(db_session)
 
         assert db_session.query(NfcKey).count() == 1
+
+    def test_an_empty_table_without_the_bootstrap_flag_refuses_to_start(
+        self, monkeypatch, db_session
+    ):
+        # A restore from a backup older than the KEK looks exactly like this.
+        monkeypatch.setattr(settings, "NFC_KEK", KEK)
+        nfc_key_service.invalidate_cache()
+
+        with pytest.raises(RuntimeError, match="NFC_BOOTSTRAP_IMPORT=true"):
+            prepare_nfc_keyring(db_session)
+
+        assert db_session.query(NfcKey).count() == 0
 
     def test_a_wrong_kek_refuses_to_start(self, with_kek, monkeypatch, db_session):
         # Rows were wrapped under KEK; start with a different one.
@@ -887,6 +904,57 @@ def _revoke_v0_after_rotating(db_session):
     nfc_key_service.revoke_version(db_session, 0, actor_id=None, reason="leaked")
 
 
+def _empty_the_keyring_tables(db_session):
+    """What a mistaken DELETE leaves: no key rows, no pointer, the event log intact."""
+    db_session.query(NfcKey).delete()
+    db_session.query(NfcKeyringState).delete()
+    db_session.commit()
+    nfc_key_service.invalidate_cache()
+
+
+class TestBootstrapImport:
+    """N4: a revoked version 0 must never come back through the empty-table import."""
+
+    @pytest.mark.parametrize("bootstrap", [False, True])
+    def test_a_table_emptied_after_a_revocation_does_not_import_v0(
+        self, with_kek, db_session, monkeypatch, bootstrap
+    ):
+        _revoke_v0_after_rotating(db_session)
+        _empty_the_keyring_tables(db_session)
+        monkeypatch.setattr(settings, "NFC_BOOTSTRAP_IMPORT", bootstrap)
+
+        with pytest.raises(RuntimeError, match="event log"):
+            prepare_nfc_keyring(db_session)
+
+        assert db_session.query(NfcKey).count() == 0
+        assert db_session.query(NfcKeyringState).count() == 0
+
+    def test_the_flag_left_on_an_initialised_ring_only_warns(
+        self, with_kek, db_session, monkeypatch
+    ):
+        from unittest.mock import patch
+
+        monkeypatch.setattr(settings, "NFC_BOOTSTRAP_IMPORT", True)
+
+        with patch.object(nfc_key_service.logger, "warning") as warning:
+            nfc_key_service.ensure_initialised(db_session)
+
+        assert "NFC_BOOTSTRAP_IMPORT is set" in warning.call_args.args[0]
+        assert db_session.query(NfcKey).count() == 1
+
+    def test_an_initialised_ring_starts_without_the_master_key(
+        self, with_kek, db_session, monkeypatch
+    ):
+        # The pilot once NFC_MASTER_KEY is no longer mounted (N2).
+        monkeypatch.setattr(settings, "NFC_MASTER_KEY", "")
+        nfc_key_service.invalidate_cache()
+
+        prepare_nfc_keyring(db_session)
+
+        assert settings.nfc_keyring_errors() == []
+        assert nfc_key_service.load_keyring(db_session)["current"] == 0
+
+
 def _failing_load(db):
     raise RuntimeError("database unavailable")
 
@@ -953,6 +1021,7 @@ def test_kek_mode_warns_about_ignored_environment_versions(
     from app.core import nfc_startup
 
     monkeypatch.setattr(settings, "NFC_KEK", KEK)
+    monkeypatch.setattr(settings, "NFC_BOOTSTRAP_IMPORT", True)
     monkeypatch.setenv("NFC_KEY_V3", "22" * 32)
     nfc_key_service.invalidate_cache()
 

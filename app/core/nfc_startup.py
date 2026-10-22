@@ -20,9 +20,9 @@ def prepare_nfc_keyring(db: Session) -> None:
     """
     Seed the keyring and prove the configured KEK is the right one.
 
-    Two things happen once, in order: the environment's version 0 is imported so
-    the ring lives entirely in the database, and the current version is
-    unwrapped. A wrong KEK would otherwise surface as devices quietly receiving
+    Two things happen, in order: on the first start (``NFC_BOOTSTRAP_IMPORT``)
+    the environment's version 0 is imported so the ring lives entirely in the
+    database, and the current version is unwrapped. A wrong KEK would otherwise surface as devices quietly receiving
     an empty ring and NFC simply not working — far worse than refusing to start.
 
     Raises ``RuntimeError`` when the ring cannot be served. Does nothing at all
