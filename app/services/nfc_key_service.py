@@ -138,15 +138,43 @@ def ensure_initialised(db: Session) -> None:
     losing it costs offline reads across the whole fleet rather than only for
     rotated chips. That is a decision taken deliberately, and it is why the KEK
     backup procedure is a precondition for enabling this.
+
+    The import needs ``NFC_BOOTSTRAP_IMPORT``. An empty table is also what a
+    restore from a backup older than the KEK, or a table emptied by mistake,
+    looks like; importing then would bring back a version 0 that may have been
+    revoked after a leak, as the current version, with nothing said. Raises
+    ``RuntimeError`` instead, and also when the event log shows the ring
+    existed before, flag or not.
     """
     wrapper = kek_wrapper()
     if wrapper is None:
         return
 
     if db.query(NfcKey).count() > 0:
+        if settings.NFC_BOOTSTRAP_IMPORT:
+            logger.warning(
+                "NFC_BOOTSTRAP_IMPORT is set but the keyring is already "
+                "initialised; remove it together with NFC_MASTER_KEY."
+            )
         return
 
     master = settings.NFC_MASTER_KEY.strip()
+    if master and db.query(NfcKeyEvent).count() > 0:
+        raise RuntimeError(
+            "The NFC keyring table is empty but its event log is not: the ring "
+            "existed and its rows are missing. NFC_MASTER_KEY is not imported, "
+            "since it may be a revoked version. Restore nfc_keys and "
+            "nfc_keyring_state from a backup."
+        )
+    if master and not settings.NFC_BOOTSTRAP_IMPORT:
+        raise RuntimeError(
+            "The NFC keyring table is empty. NFC_MASTER_KEY is imported as "
+            "version 0 only with NFC_BOOTSTRAP_IMPORT=true, on the first start "
+            "with a KEK. If this database was restored or the table emptied, "
+            "restore nfc_keys instead: the key in NFC_MASTER_KEY may have been "
+            "revoked."
+        )
+
     if not master:
         logger.warning(
             "NFC_KEK is configured but there is no NFC_MASTER_KEY to import; "

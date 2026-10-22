@@ -162,8 +162,11 @@ openssl rand -hex 32 | tr -d '\n' | gcloud secrets create hwb-nfc-master-key --d
 
 The fourth secret, `nfc-kek`, is created only by following the KEK custody
 procedure ([NFC Key Management](nfc-key-management.md) § 10): its backup must
-exist before the service ever reads it. `cloudbuild.yaml` mounts all four as
-`:latest`; never add a version to an existing one (same document, § 6 and § 10).
+exist before the service ever reads it. `cloudbuild.yaml` mounts `hwb-db-pass`,
+`hwb-secret-key` and `nfc-kek` as `:latest`; never add a version to an existing
+one (same document, § 6 and § 10). `hwb-nfc-master-key` is mounted by hand for
+the first start with the KEK only, to import it as version 0 (same document,
+§ 4); each deploy from `cloudbuild.yaml` removes it.
 
 **2. Grant read access to Cloud Run's default service account:**
 *(Replace `<PROJECT_NUMBER>` with your actual numeric project ID)*

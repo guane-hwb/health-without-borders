@@ -100,6 +100,12 @@ class Settings(BaseSettings):
     # exactly as before, serving the ring straight from the environment, so no
     # existing deployment changes on upgrade.
     NFC_KEK: str = ""  # Hex-encoded 32-byte AES-256 key
+    # One-time permission to import NFC_MASTER_KEY as version 0 into an empty
+    # nfc_keys table. Without it an empty table refuses to start: after a
+    # restore from an old backup, or a table emptied by mistake, importing would
+    # make a version that may have been revoked current again. Set it for the
+    # first start with a KEK only, then remove it with NFC_MASTER_KEY.
+    NFC_BOOTSTRAP_IMPORT: bool = False
     # Fleet gate for automatic rotation. Rotating advances the current version,
     # and a device running a build that predates the keyring takes the current
     # key, ignores the ring, and loses the ability to read everything written
