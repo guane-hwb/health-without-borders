@@ -118,14 +118,20 @@ def test_deleting_a_user_with_audit_rows_is_a_409(api, staff):
     assert "Deactivate the account instead" in response.json()["detail"]
 
 
-def test_deleting_an_organization_whose_user_sent_telemetry_is_a_409(api, staff):
+def test_deleting_an_organization_whose_user_sent_telemetry_is_a_409(api, staff, monkeypatch):
     """poc08: NFC telemetry references the user; the cascade used to 500."""
+    from app.core.config import settings
+
+    # Sightings of versions that do not exist are dropped: give the ring version 0.
+    monkeypatch.setattr(settings, "NFC_KEK", "")
+    monkeypatch.setattr(settings, "NFC_MASTER_KEY", "11" * 32)
     telemetry = api.post(
         "/api/v1/patients/nfc-key-versions", headers=staff["tokens"]["doc_b"]["headers"],
         json={"entries": [{"device_uid": "04:AA", "key_version": 0,
                            "observed_at": "2026-09-25T10:00:00+00:00"}]},
     )
     assert telemetry.status_code == 202
+    assert telemetry.json()["stored"] == 1
 
     response = api.delete(
         f"/api/v1/organizations/{staff['ids']['org_b']}", headers=staff["tokens"]["sa"]["headers"]
