@@ -14,6 +14,10 @@ After ``LOGIN_FAILURES_BEFORE_DELAY`` failures within
 an email can delay that user's sign-in, but never lock them out for good. A
 successful sign-in, or an administrator's password reset, clears the count.
 
+Every attempt is counted before its password is checked (``reserve_attempt``),
+so a burst of simultaneous guesses gets no more evaluations than the limit
+(security review 2026-10-15, F1).
+
 The account is identified by an HMAC of the normalized email, so the table
 holds no email addresses (including the ones of accounts that do not exist),
 and a paused account looks the same whether it exists or not.
@@ -48,57 +52,63 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
-def seconds_paused(db: Session, email: str) -> int:
-    """Seconds until the account may try again; 0 when it is not paused."""
-    row = db.get(LoginFailure, account_key(email))
-    if row is None or row.blocked_until is None:
-        return 0
-    remaining = (_as_utc(row.blocked_until) - datetime.now(timezone.utc)).total_seconds()
-    return max(0, math.ceil(remaining))
+def _paused(wait: int) -> ApiError:
+    """``429`` + ``Retry-After`` for an account that may not try yet."""
+    return ApiError(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=(
+            "Too many failed sign-in attempts for this account. "
+            f"Try again in {wait} seconds."
+        ),
+        code=LOGIN_PAUSED,
+        headers={"Retry-After": str(wait)},
+    )
 
 
-def ensure_login_not_paused(db: Session, email: str) -> None:
-    """Refuse an attempt while the account is paused (``429`` + ``Retry-After``)."""
-    wait = seconds_paused(db, email)
-    if wait:
-        raise ApiError(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=(
-                "Too many failed sign-in attempts for this account. "
-                f"Try again in {wait} seconds."
-            ),
-            code=LOGIN_PAUSED,
-            headers={"Retry-After": str(wait)},
-        )
-
-
-def record_failure(db: Session, email: str) -> None:
+def reserve_attempt(db: Session, email: str) -> None:
     """
-    Count a failed attempt and pause the account once there are too many.
+    Count an attempt before its password is checked, or refuse it (``429``).
 
-    The count is incremented by one ``INSERT … ON CONFLICT DO UPDATE``, so
-    simultaneous failures from several instances are all counted.
+    Checking the pause first and recording the failure after bcrypt let every
+    guess of a simultaneous burst be evaluated before the first failure was
+    saved. Here the account's row is created or locked by one
+    ``INSERT … ON CONFLICT DO UPDATE`` and held until the commit, so attempts
+    on one account are counted one after another, from any instance. The
+    attempt that reaches the limit is still evaluated and starts the pause;
+    the next ones are refused without evaluating their password. A paused
+    attempt is not counted, so it does not lengthen the pause.
+
+    A correct password then calls :func:`clear_failures`; a wrong one needs
+    nothing more, it is already counted.
     """
     key = account_key(email)
     now = datetime.now(timezone.utc)
     dialect = postgresql if db.get_bind().dialect.name == "postgresql" else sqlite
     statement = (
         dialect.insert(LoginFailure)
-        .values(key=key, failures=1, first_failure_at=now, last_failure_at=now)
-        .on_conflict_do_update(
-            index_elements=["key"],
-            set_={"failures": LoginFailure.failures + 1, "last_failure_at": now},
+        .values(key=key, failures=0, first_failure_at=now, last_failure_at=now)
+        # A no-op update: it only takes the row lock.
+        .on_conflict_do_update(index_elements=["key"], set_={"key": key})
+        .returning(
+            LoginFailure.failures, LoginFailure.first_failure_at, LoginFailure.blocked_until
         )
-        .returning(LoginFailure.failures, LoginFailure.first_failure_at)
     )
-    failures, first_failure_at = db.execute(statement).one()
+    failures, first_failure_at, blocked_until = db.execute(statement).one()
+
+    if blocked_until is not None:
+        remaining = (_as_utc(blocked_until) - now).total_seconds()
+        if remaining > 0:
+            db.rollback()
+            raise _paused(math.ceil(remaining))
 
     window = timedelta(seconds=settings.LOGIN_FAILURE_WINDOW_SECONDS)
     row = db.get(LoginFailure, key, populate_existing=True)
     if now - _as_utc(first_failure_at) > window:
         # The earlier failures are too old to count: a new streak starts here.
-        failures = 1
-        row.failures, row.first_failure_at, row.blocked_until = 1, now, None
+        failures = 0
+        row.first_failure_at = now
+    failures += 1
+    row.failures, row.last_failure_at, row.blocked_until = failures, now, None
     over = failures - settings.LOGIN_FAILURES_BEFORE_DELAY
     if over >= 0:
         pause = min(

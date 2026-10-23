@@ -22,7 +22,6 @@ from app.db.models import RevokedToken
 from app.db.session import get_db
 from app.schemas.token import LogoutRequest, RefreshRequest, TokenPair
 from app.services import login_throttle
-from app.services.login_throttle import ensure_login_not_paused
 
 logger = logging.getLogger(__name__)
 
@@ -142,9 +141,10 @@ def login_access_token(
       account (from any address); `Retry-After` says when to try again. Also
       `429` past the per-address limit.
     """
-    # 0. An account with too many recent failures is paused, whatever the
-    # password: answering a correct one would let the guessing go on.
-    ensure_login_not_paused(db, form_data.username)
+    # 0. Count the attempt before the password is checked. An account with too
+    # many recent failures is paused, whatever the password: answering a
+    # correct one would let the guessing go on.
+    login_throttle.reserve_attempt(db, form_data.username)
 
     # 1. Authenticate User
     user = find_user_by_email(db, form_data.username)
@@ -152,7 +152,6 @@ def login_access_token(
     password_is_valid = security.verify_password(form_data.password, hashed_password)
 
     if not user or not password_is_valid:
-        login_throttle.record_failure(db, form_data.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",

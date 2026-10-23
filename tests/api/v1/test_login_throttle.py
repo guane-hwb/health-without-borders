@@ -58,6 +58,27 @@ def test_failed_logins_are_limited_per_account_across_ips(client, db_session, ac
     assert _login(client, "nurse@clinic.org", PASSWORD).status_code == 200  # other accounts
 
 
+def test_attempts_refused_during_a_pause_are_not_counted(client, db_session, accounts):
+    """F1: attempts are counted before bcrypt, but a refused one never lengthens the pause."""
+    for _ in range(5):
+        _login(client)
+    blocked_until = _row(db_session).blocked_until
+
+    assert [_login(client).status_code for _ in range(3)] == [429] * 3
+
+    row = _row(db_session)
+    assert row.failures == 5
+    assert row.blocked_until == blocked_until
+
+
+def test_a_right_password_is_counted_until_it_is_checked_then_cleared(client, db_session, accounts):
+    for _ in range(4):
+        _login(client)
+
+    assert _login(client, password=PASSWORD).status_code == 200
+    assert _row(db_session) is None
+
+
 def test_an_account_that_does_not_exist_is_paused_the_same_way(client, db_session, accounts):
     for _ in range(5):
         assert _login(client, "nobody@clinic.org").status_code == 401

@@ -54,14 +54,16 @@ def _refresh(client, refresh):
 def accounts(client, db_session):
     org = _org(db_session, "Clinic")
     hq = _org(db_session, "HQ")
-    admin = _user(db_session, org, "admin@clinic.org", UserRole.org_admin)
-    doctor = _user(db_session, org, "doc@clinic.org")
-    sa = _user(db_session, hq, "sa@hq.org", UserRole.superadmin)
+    org_id = org.id
+    _user(db_session, org, "admin@clinic.org", UserRole.org_admin)
+    doctor_id = _user(db_session, org, "doc@clinic.org").id
+    _user(db_session, hq, "sa@hq.org", UserRole.superadmin)
+    # Plain values: each sign-in commits, which expires the ORM objects above.
     return {
-        "org_id": org.id, "doctor_id": doctor.id,
-        "admin": _login(client, admin.email).json(),
-        "doctor": _login(client, doctor.email).json(),
-        "sa": _login(client, sa.email).json(),
+        "org_id": org_id, "doctor_id": doctor_id,
+        "admin": _login(client, "admin@clinic.org").json(),
+        "doctor": _login(client, "doc@clinic.org").json(),
+        "sa": _login(client, "sa@hq.org").json(),
     }
 
 
