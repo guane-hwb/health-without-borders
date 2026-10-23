@@ -7,7 +7,10 @@ from pydantic import AwareDatetime, BaseModel, Field
 class NfcKeyVersionEntry(BaseModel):
     """One sighting: a chip was read, and this is the version that opened it."""
 
-    device_uid: str = Field(..., min_length=1, description="Hardware tag UID")
+    device_uid: str = Field(
+        ..., min_length=1, max_length=128,
+        description="Hardware tag UID. Stored only as an HMAC (device_ref)",
+    )
     device_role: str = Field(
         "patient", description="'patient' bracelet or 'guardian' card"
     )

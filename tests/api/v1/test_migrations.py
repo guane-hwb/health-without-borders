@@ -18,7 +18,7 @@ def _engine():
     return create_engine("sqlite://")
 
 
-HEAD = "0008"
+HEAD = "0009"
 
 
 def _upgrade(engine, revision: str) -> None:
@@ -191,3 +191,37 @@ class TestStartupHook:
                 migrations.run_migrations_at_startup()
 
         assert error.call_args.args[1] == "RuntimeError"
+
+
+def test_0009_replaces_sighting_uids_with_references():
+    """N6: the raw UID of every key-version sighting becomes its HMAC reference."""
+    from alembic import command
+
+    from app.services.nfc_key_version_service import device_ref
+
+    engine = _engine()
+    _upgrade(engine, "0008")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO nfc_key_version_observations "
+            "(id, device_uid, device_role, key_version, had_header, observed_at, reported_at) "
+            "VALUES ('o1', '04:A1:B2:C3', 'patient', 0, 0, '2026-10-01', '2026-10-01')"
+        ))
+
+    migrations.upgrade_to_head(engine)
+
+    columns = {c["name"] for c in inspect(engine).get_columns("nfc_key_version_observations")}
+    assert "device_uid" not in columns
+    with engine.connect() as conn:
+        ref = conn.execute(text("SELECT device_ref FROM nfc_key_version_observations")).scalar_one()
+    assert ref == device_ref("04A1B2C3")
+    assert not schema_drift(engine).blocking
+
+    # The downgrade cannot bring the UID back: it keeps the reference.
+    config = migrations.alembic_config()
+    with engine.begin() as conn:
+        config.attributes["connection"] = conn
+        command.downgrade(config, "0008")
+    with engine.connect() as conn:
+        uid = conn.execute(text("SELECT device_uid FROM nfc_key_version_observations")).scalar_one()
+    assert uid == ref

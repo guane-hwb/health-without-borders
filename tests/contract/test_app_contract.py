@@ -197,7 +197,13 @@ def test_emergency_access_upload(client, db_session):
     assert db_session.query(EmergencyAccessLog).one().uploaded_by == MockUser.id
 
 
-def test_nfc_key_version_telemetry(client, db_session):
+def test_nfc_key_version_telemetry(client, db_session, monkeypatch):
+    from app.core.config import settings
+
+    # Sightings of versions that do not exist are dropped: give the ring the
+    # version 0 every chip in the field is on.
+    monkeypatch.setattr(settings, "NFC_KEK", "")
+    monkeypatch.setattr(settings, "NFC_MASTER_KEY", "11" * 32)
     _as(MockUser)
 
     response = client.post("/api/v1/patients/nfc-key-versions", json=fixture("nfc_key_versions"))

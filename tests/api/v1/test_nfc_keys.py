@@ -1030,3 +1030,12 @@ def test_kek_mode_warns_about_ignored_environment_versions(
 
     assert "are ignored" in warning.call_args.args[0]
     assert warning.call_args.args[1] == "3"
+
+
+def test_sightings_of_a_revoked_version_still_count(with_kek, db_session):
+    """N11: unknown versions are dropped, but a revoked one is what a retirement strands."""
+    from app.services.nfc_key_version_service import _known_key_versions
+
+    _revoke_v0_after_rotating(db_session)
+
+    assert _known_key_versions(db_session) == {0, 1}

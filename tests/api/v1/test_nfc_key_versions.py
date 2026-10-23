@@ -3,15 +3,19 @@ Tests for NFC key version telemetry.
 
 Covers storing sightings, the "latest sighting wins" attribution used by the
 usage summary, the role split between bracelets and guardian cards, the
-retirement interlock window, and role gating on both endpoints.
+retirement interlock window, and role gating on both endpoints. Also security
+review N6 (no UID stored, retention) and N11 (unknown versions, a veto that
+made-up sightings cannot clear).
 """
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.core.security import get_password_hash
-from app.db.models import Organization, User, UserRole
+from app.db.models import NfcKeyVersionObservation, Organization, User, UserRole
+from app.services.nfc_key_version_service import device_ref
 
 SYNC_URL = "/api/v1/patients/nfc-key-versions"
 USAGE_URL = "/api/v1/patients/nfc-key-versions/usage"
@@ -67,6 +71,14 @@ def _entry(uid: str, version: int, *, role="patient", days_ago=0, header=False):
         "had_header": header,
         "observed_at": when.isoformat(),
     }
+
+
+@pytest.fixture(autouse=True)
+def ring_with_versions_0_and_1(monkeypatch):
+    """The ring from the environment, with versions 0 and 1 (no KEK, whatever .env says)."""
+    monkeypatch.setattr(settings, "NFC_KEK", "")
+    monkeypatch.setattr(settings, "NFC_MASTER_KEY", "11" * 32)
+    monkeypatch.setenv("NFC_KEY_V1", "22" * 32)
 
 
 @pytest.fixture
@@ -324,8 +336,8 @@ class TestTimestampContract:
 
 class TestOrgAdminReporting:
     def test_org_admin_can_report(self, client, admin):
-        # org_admin reaches the patient profile through the lost-wristband flow
-        # and holds the keyring, so its sightings must not be dropped.
+        # org_admin no longer gets keys (N9), but a device that signed in before
+        # keeps its ring until the session ends; its batch must not bounce.
         resp = client.post(
             SYNC_URL,
             json={"entries": [_entry("uid-admin", 0)]},
@@ -362,3 +374,91 @@ class TestAttributionUsesServerClock:
         counts = {(c["key_version"], c["device_role"]): c for c in body["counts"]}
         assert (0, "patient") not in counts
         assert counts[(1, "patient")]["devices"] == 1
+
+
+class TestNoUidStored:
+    """N6: a UID resolves to its patient through /scan; the table keeps an HMAC."""
+
+    def test_rows_keep_a_reference_never_the_uid(self, client, clinician, db_session):
+        client.post(SYNC_URL, json={"entries": [_entry("04:a1:b2:c3:d4:e5:f6", 0)]},
+                    headers=_auth(clinician))
+
+        row = db_session.query(NfcKeyVersionObservation).one()
+        assert row.device_ref == device_ref("04A1B2C3D4E5F6")
+        assert len(row.device_ref) == 64
+        assert "04A1B2" not in row.device_ref.upper()
+        assert not hasattr(row, "device_uid")
+
+    def test_one_chip_written_two_ways_counts_once(self, client, clinician, admin):
+        client.post(SYNC_URL, json={"entries": [
+            _entry("04:A1:B2:C3", 0), _entry("04a1b2c3", 0),
+        ]}, headers=_auth(clinician))
+
+        body = client.get(USAGE_URL, headers=_auth(admin)).json()
+
+        assert body["counts"][0]["devices"] == 1
+
+    def test_the_reference_depends_on_the_secret_key(self, monkeypatch):
+        before = device_ref("04A1B2C3")
+        monkeypatch.setattr(settings, "SECRET_KEY", "another-secret-key-0123456789abcdef")
+        assert device_ref("04A1B2C3") != before
+
+
+class TestRetention:
+    def test_sightings_past_the_retention_are_deleted(self, client, clinician, db_session):
+        client.post(SYNC_URL, json={"entries": [_entry("uid-old", 0)]}, headers=_auth(clinician))
+        old = db_session.query(NfcKeyVersionObservation).one()
+        old.reported_at = datetime.now(timezone.utc) - timedelta(
+            days=settings.NFC_KEY_SIGHTING_RETENTION_DAYS + 1
+        )
+        db_session.commit()
+
+        client.post(SYNC_URL, json={"entries": [_entry("uid-new", 0)]}, headers=_auth(clinician))
+
+        db_session.expire_all()
+        assert [r.device_ref for r in db_session.query(NfcKeyVersionObservation)] == [
+            device_ref("uid-new")
+        ]
+
+    def test_the_window_cannot_be_longer_than_the_retention(self, client, admin):
+        longest = settings.NFC_KEY_SIGHTING_RETENTION_DAYS
+
+        assert client.get(f"{USAGE_URL}?window_days={longest}",
+                          headers=_auth(admin)).status_code == 200
+        assert client.get(f"{USAGE_URL}?window_days={longest + 1}",
+                          headers=_auth(admin)).status_code == 422
+
+
+class TestPoisoning:
+    """N11: anyone with an account can post any UID and any version."""
+
+    def test_versions_that_do_not_exist_are_dropped(self, client, clinician, admin):
+        resp = client.post(SYNC_URL, json={"entries": [
+            _entry("uid-1", 0), _entry("uid-2", 7, header=True),
+            _entry("uid-3", 255, header=True),
+        ]}, headers=_auth(clinician))
+
+        assert resp.status_code == 202
+        assert resp.json() == {"received": 3, "stored": 1}
+        body = client.get(USAGE_URL, headers=_auth(admin)).json()
+        assert {c["key_version"] for c in body["counts"]} == {0}
+
+    def test_made_up_sightings_on_the_current_version_keep_the_old_vetoed(
+        self, client, clinician, admin
+    ):
+        client.post(SYNC_URL, json={"entries": [
+            _entry("uid-rare", 0, days_ago=200),  # a patient who rarely comes back
+            *(_entry(f"uid-{i}", 0, days_ago=20) for i in range(3)),
+        ]}, headers=_auth(clinician))
+        # Then someone reports the recently seen chips as already on version 1.
+        client.post(SYNC_URL, json={"entries": [
+            _entry(f"uid-{i}", 1, header=True) for i in range(3)
+        ]}, headers=_auth(clinician))
+
+        body = client.get(f"{USAGE_URL}?window_days=90", headers=_auth(admin)).json()
+
+        # Attribution follows the latest sighting: only the rare chip is left on 0...
+        assert {(c["key_version"], c["devices"]) for c in body["counts"]} == {(0, 1), (1, 3)}
+        # ...but the real version 0 sightings inside the window still veto it.
+        # Counted by latest sighting, version 0 would have been listed here.
+        assert body["retirable_versions"] == []

@@ -1003,8 +1003,9 @@ def sync_nfc_key_versions(
     """
     Report which NFC key version each scanned chip was found on.
 
-    A chip gives no readable hint of which key encrypted it, so this is the only
-    way to learn how far a key rotation has drained. Retiring a version makes
+    Only a device that reads a chip learns which key version it is on (a
+    version 0 chip carries no hint at all), so this is the only way to learn
+    how far a key rotation has drained. Retiring a version makes
     every chip still on it unreadable offline; without these counts that number
     is unknowable and the decision is a guess.
 
@@ -1013,17 +1014,22 @@ def sync_nfc_key_versions(
     the interval between sightings is what a retention period has to be sized
     from — de-duplicating here would discard exactly that.
 
-    **Allowed roles:** `doctor`, `nurse`, `org_admin` — everyone whose device
-    holds the keyring and can therefore read a chip. `org_admin` is included
-    because it reaches the patient profile through the lost-wristband flow and
-    receives keys; excluding it would silently drop its observations.
+    **Allowed roles:** `doctor`, `nurse`, `org_admin`. `org_admin` no longer
+    receives keys, but a device that signed in before that keeps its ring until
+    its session ends; refusing it would make the app retry the batch.
 
     **Privacy:** entries carry a device UID, a role, a key version and a
-    timestamp. No patient identifier, no clinical data, no key material.
+    timestamp. A UID resolves to its patient through `/scan`, so the UID is not
+    stored: each row keeps an HMAC of it (`device_ref`), enough to count
+    distinct chips. Rows are deleted after `NFC_KEY_SIGHTING_RETENTION_DAYS`.
+    No clinical data, no key material.
+
+    **Versions that do not exist** (live or revoked) are dropped: no chip can be
+    on one. `stored` is then lower than `received`.
 
     **Responses:**
     - `202`: Batch accepted. Body reports `received` and `stored`.
-    - `403`: Caller is not `doctor` or `nurse`.
+    - `403`: Caller is not `doctor`, `nurse` or `org_admin`.
     - `422`: Missing or malformed body fields (e.g. empty `entries`).
     """
     if current_user.role not in {
@@ -1073,17 +1079,20 @@ def get_nfc_key_version_usage(
     **Responses:**
     - `200`: Summary returned.
     - `403`: Caller is not an administrator.
-    - `422`: `window_days` out of range.
+    - `422`: `window_days` out of range (1 to `NFC_KEY_SIGHTING_RETENTION_DAYS`:
+      older sightings are deleted, so a longer window would look emptier than
+      the field is).
     """
     if current_user.role not in {UserRole.org_admin, UserRole.superadmin}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access Denied: Only administrators can read NFC key version usage.",
         )
-    if window_days < 1 or window_days > 3650:
+    max_window = settings.NFC_KEY_SIGHTING_RETENTION_DAYS
+    if window_days < 1 or window_days > max_window:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="window_days must be between 1 and 3650.",
+            detail=f"window_days must be between 1 and {max_window}.",
         )
 
     return summarize_key_version_usage(db, window_days=window_days)
