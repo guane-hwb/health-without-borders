@@ -40,7 +40,7 @@ Role-Based Access Control (RBAC). Tenant isolation applies to **organization and
 | Role | Scope | Capabilities |
 |---|---|---|
 | `superadmin` | Global | Create and deactivate organizations; create users of any role in any organization; deactivate, reset the password of, revoke the sessions of and delete any non-`superadmin` user; manage the NFC keyring (`/patients/nfc-keys`, rotate, revoke); read the whole patient access log and statistics. **No clinical access**: cannot read patient records and receives no NFC keys |
-| `org_admin` | Organization | Create, deactivate, reset the password of, revoke the sessions of and delete the `doctor` and `nurse` accounts of their organization; read patient records (`/scan`, `/search`, used for the lost-bracelet flow) and receive the NFC keyring; read their organization's part of the access log and statistics, and the NFC key-version usage (all organizations: it holds no patient data). Cannot create or edit records (`/sync`) |
+| `org_admin` | Organization | Create, deactivate, reset the password of, revoke the sessions of and delete the `doctor` and `nurse` accounts of their organization; read patient records (`/scan`, `/search`, used for the lost-bracelet flow), online only: it receives **no** NFC keyring, since it never reads or writes a device; read their organization's part of the access log and statistics, and the NFC key-version usage (all organizations: it holds no patient data). Cannot create or edit records (`/sync`) |
 | `doctor` | Organization | Full clinical access: read records, create patients, add medical history |
 | `nurse` | Organization | Read records; add vaccines and change allergies, background, guardians and demographics. Cannot add visits (consultations) |
 

@@ -282,21 +282,33 @@ class TestRoleGating:
     def test_clinical_roles_still_get_the_ring(self, clean_nfc_env):
         clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
 
-        for role in (UserRole.doctor, UserRole.nurse, UserRole.org_admin):
+        for role in (UserRole.doctor, UserRole.nurse):
             claims = security.nfc_key_claims(role=role)
             assert claims["nfc_keyring"] == {"0": KEY_V0}, role
+
+    @pytest.mark.parametrize("role", [UserRole.org_admin, "org_admin"])
+    def test_org_admin_gets_no_key_material(self, clean_nfc_env, role):
+        """N9: org_admin reads records online only; a key that reads also writes."""
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+
+        assert security.nfc_key_claims(role=role) == {
+            "nfc_encryption_key": None,
+            "nfc_key_version": None,
+            "nfc_keyring": None,
+        }
 
     def test_omitting_role_still_delivers(self, clean_nfc_env):
         clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
         assert security.nfc_key_claims()["nfc_keyring"] == {"0": KEY_V0}
 
-    def test_superadmin_login_carries_no_keyring(
-        self, client: TestClient, db_session, clean_nfc_env
+    @pytest.mark.parametrize("role", [UserRole.superadmin, UserRole.org_admin])
+    def test_keyless_roles_sign_in_without_a_keyring(
+        self, client: TestClient, db_session, clean_nfc_env, role
     ):
         clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
         org = _create_org(db_session)
         user = _create_user(db_session, org.id)
-        user.role = UserRole.superadmin
+        user.role = role
         db_session.commit()
 
         data = _login(client)
