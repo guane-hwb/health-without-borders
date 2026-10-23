@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     NFC_AUTO_ROTATE: bool = False
     # How old the current key may get before automatic rotation replaces it.
     NFC_ROTATION_PERIOD_DAYS: int = 90
+    # How long key-version sightings are kept. Each one says which staff member
+    # read which chip, and when; kept forever that is a movement trail. Long
+    # enough for patients who come back once a year or less to still count
+    # against retiring their chip's version. The usage report's window cannot
+    # be longer.
+    NFC_KEY_SIGHTING_RETENTION_DAYS: int = 730
 
     # --- REPORTING ---
     # Calendar dates and month boundaries in aggregated statistics are resolved

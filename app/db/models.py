@@ -294,22 +294,27 @@ class NfcKeyVersionObservation(Base):
     """
     Append-only record of which NFC key version a chip was seen on.
 
-    A chip carries no readable hint of which key encrypted it — the version is
-    only known once a device decrypts it — so this is the only way to learn how
-    far a key rotation has actually drained. Retiring a version makes every
+    A version 0 chip carries no readable hint of which key encrypted it (from
+    version 1 on the version byte is in clear, but only a device reads the chip)
+    so this is the only way to learn how far a key rotation has actually
+    drained. Retiring a version makes every
     chip still on it unreadable offline, and without this table that count is
     unknowable.
 
     **Append-only on purpose.** The device keeps one row per chip (its current
     state); the server keeps every sighting. The gap between consecutive
-    sightings of the same UID is what a retention period has to be sized from,
-    and an upsert here would destroy exactly that.
+    sightings of the same chip is what a retention period has to be sized from,
+    and an upsert here would destroy exactly that. Rows older than
+    ``NFC_KEY_SIGHTING_RETENTION_DAYS`` are deleted.
 
     ``device_role`` separates bracelets from guardian cards. Both are written
     with the same keyring, and guardian cards are rewritten less often, so a
     version cannot be retired safely by counting bracelets alone.
 
-    No patient identifier, no clinical data and no key material is stored here.
+    The chip is stored as ``device_ref``, an HMAC of its UID, never the UID: a
+    UID resolves to its patient through ``/scan``, so with the reporter and the
+    time it would be a trail of who saw which person, and when. No clinical
+    data and no key material is stored here either.
     """
 
     __tablename__ = "nfc_key_version_observations"
@@ -318,9 +323,9 @@ class NfcKeyVersionObservation(Base):
         String, primary_key=True, index=True,
         default=lambda: str(uuid.uuid4()),
     )
-    device_uid = Column(
-        String, index=True, nullable=False,
-        comment="Hardware tag UID observed — not joined to any patient here",
+    device_ref = Column(
+        String(64), index=True, nullable=False,
+        comment="HMAC-SHA256 of the normalized chip UID: no UID is stored",
     )
     device_role = Column(
         String, nullable=False, server_default="patient",

@@ -115,8 +115,10 @@ or revoked at runtime instead of through a redeploy.
 
 Append-only record of which key version each chip was last seen on, used to
 decide whether a version can be retired without leaving chips unreadable
-offline. Holds a device UID, a role, a version and timestamps — no patient
-identifier, no clinical data, no key material.
+offline. Holds `device_ref` (an HMAC of the chip UID, never the UID, since a UID
+resolves to its patient through `/scan`), a role, a version, timestamps and the
+reporter. Rows older than `NFC_KEY_SIGHTING_RETENTION_DAYS` (730) are deleted.
+No clinical data, no key material.
 
 ### 2.7. Standard Clinical Catalogs
 

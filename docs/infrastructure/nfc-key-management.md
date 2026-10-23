@@ -305,8 +305,26 @@ online-only until someone uses it once with a signal".
 Sightings land in `nfc_key_version_observations`, created by the
 database migrations like every other table. It is **append-only**: the
 device keeps one row per chip, the server keeps every sighting, because the gap
-between consecutive sightings of the same UID is what a retention period has to
+between consecutive sightings of the same chip is what a retention period has to
 be sized from.
+
+**No UID is stored.** A UID resolves to its patient through `/scan`, so a UID
+with the reporter and the time would be a trail of who saw which person, and
+when. Each row keeps `device_ref` instead: HMAC-SHA256, keyed with
+`SECRET_KEY`, of the UID as the app compares it (hex digits, upper case). The
+same chip always gives the same reference, which is all the report needs.
+Changing `SECRET_KEY` changes every reference, so chips seen before and after
+count twice until the older sightings leave the window.
+
+**Retention:** rows older than `NFC_KEY_SIGHTING_RETENTION_DAYS` (730 days, by
+the server's clock) are deleted whenever a batch is stored. That is long enough
+for patients who come back once a year or less to still count against a
+retirement; the report's window cannot be longer.
+
+**Versions that do not exist** in the ring, live or revoked, are dropped: no
+chip can be on one, and anyone with an account could otherwise fill the report
+with them. The batch is still accepted (`stored` < `received`), so the device
+does not retry it.
 
 `observed_at` must arrive with a timezone offset. A naive value would be read as
 UTC and silently shift the sighting by the reporting device's own offset, which
@@ -325,10 +343,17 @@ GET /api/v1/patients/nfc-key-versions/usage?window_days=90
 
 Requires `org_admin` or `superadmin`. It reports how many **distinct chips** were
 last seen on each version, split by `patient` and `guardian`, plus
-`retirable_versions` — versions chips were last seen on, but none inside the
-window. Both come from the telemetry alone: a version no chip is currently
-attributed to (never reported, or every chip seen on it has since moved on)
-appears in neither, even if it is still in the ring.
+`retirable_versions`: versions with sightings, but none inside the window
+(`window_days`, at most the retention period). Both come from the telemetry
+alone: a version never reported appears in neither, even if it is still in the
+ring.
+
+The counts follow each chip's latest sighting; the veto looks at **every**
+sighting. Any account can report sightings, and counted by latest sighting,
+made-up reports of chips "already on the current version" would hide the real
+sightings of the old one and take it off the veto. A real sighting can be
+outweighed, never erased. The cost: a chip that really migrated keeps its old
+version vetoed until that sighting leaves the window.
 
 **Read `retirable_versions` as a veto, not a clearance.** A version missing from
 the telemetry may still have chips in the field whose patients have not come
