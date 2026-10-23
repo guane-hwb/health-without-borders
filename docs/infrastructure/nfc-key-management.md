@@ -21,8 +21,9 @@ resolve the patient from the backend even when it cannot decrypt the payload.
 ## 2. The keyring
 
 There is not one key but a **keyring**: a map of `version -> key`. The backend
-delivers the whole ring at login, refresh, `/users/me` and in the response to a
-password change (`POST /users/me/password`). Devices decrypt with whichever
+delivers the whole ring to `doctor` and `nurse` accounts at login, refresh,
+`/users/me` and in the response to a password change
+(`POST /users/me/password`). Devices decrypt with whichever
 version a chip names and encrypt with the current one.
 
 | Setting | Meaning |
@@ -178,9 +179,9 @@ valid for up to 7 days and would receive the replacement key. In this order:
 
 1. **Revoke the user's sessions:** `POST /api/v1/users/{id}/revoke-sessions`
    (`superadmin`; an `org_admin` only for the doctors and nurses of their own
-   organization, so a lost `org_admin` tablet — which also holds the keyring —
-   needs a `superadmin`; nobody can do it on their own account). Every access
-   and refresh token issued to that user stops working at once, on every
+   organization, so a lost `org_admin` tablet needs a `superadmin`; nobody can
+   do it on their own account). Every access and refresh token issued to that
+   user stops working at once, on every
    device; the account stays active and the person signs in again on a trusted
    device. Deactivating the account (`PATCH /users/{id}` with
    `{"is_active": false}`) has the same effect on sessions, and reactivating it
@@ -367,8 +368,14 @@ retention policy it would need — remains open.
   clock (the refresh token's `iat`) on every successful login and refresh, so a
   device whose clock ran ahead recovers by reconnecting rather than staying
   locked out.
-- `superadmin` accounts receive **no** key material: they have no clinical access
-  and never touch a chip.
+- `superadmin` and `org_admin` accounts receive **no** key material. A
+  `superadmin` has no clinical access; an `org_admin` reads records online only
+  (`/scan`, `/search`), and the app's device reader is for `doctor` and `nurse`.
+  With one symmetric key, a key that can read a chip can also write a forged
+  one, so no account holds it without a use for it. An `org_admin` device that
+  signed in before this rule keeps the ring it already had, because the app
+  keeps its ring when a response carries none. It is deleted when that session
+  ends: sign-out, a refused refresh, or the end of the 7-day window.
 
 ---
 

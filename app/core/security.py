@@ -11,8 +11,12 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Roles with no clinical access, and therefore no reason to hold NFC keys.
-NFC_KEYLESS_ROLES = frozenset({"superadmin"})
+# Roles that never read or write a device, and so get no NFC keys: superadmin
+# has no clinical access, and org_admin reads records online only (/scan and
+# /search in the device-loss flow; the app's reader is doctor and nurse only).
+# With one symmetric key, a key that reads also writes: every device holding it
+# can forge devices (security review 2026-10-15, N9).
+NFC_KEYLESS_ROLES = frozenset({"superadmin", "org_admin"})
 
 # Password hashing context using bcrypt algorithm
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
