@@ -47,6 +47,7 @@ def merge_patient_records(
     stale: bool = False,
     keep_server_guardians: bool = False,
     conflicts: Optional[List[str]] = None,
+    recorded_by: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """
     Produce a merged patient record from the server state and an incoming
@@ -76,6 +77,12 @@ def merge_patient_records(
     ``conflicts``: receives one entry per stored visit / vaccination whose
     incoming copy differs and was therefore not applied.
 
+    ``recorded_by``: the server's ``recordedBy*`` / ``recordedAt`` for this
+    sync. A visit or vaccination the server does not hold yet carries it, unless
+    it already names the same organization and user (the endpoint stamped it).
+    So client-supplied attribution is never stored, even for an item the
+    endpoint took for one the server already had (security review F4).
+
     Returns:
         A new dict representing the merged patient record.
     """
@@ -97,6 +104,7 @@ def merge_patient_records(
         key="encounterIdentifier",
         entity_label="visit",
         conflicts=conflicts,
+        recorded_by=recorded_by,
     )
 
     merged["vaccinationRecord"] = _merge_items_by_key(
@@ -105,6 +113,7 @@ def merge_patient_records(
         key="vaccinationId",
         entity_label="vaccination",
         conflicts=conflicts,
+        recorded_by=recorded_by,
     )
 
     if stale or keep_server_guardians:
@@ -327,12 +336,25 @@ def _preserve_policy_version(server_guardian: Any, guardian: Any) -> Any:
     return {**guardian, "consent": {**consent, "policyVersion": stored["policyVersion"]}}
 
 
+def _stamped(item: Dict[str, Any], recorded_by: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """``item`` with the server's attribution, unless it already carries it."""
+    if not recorded_by:
+        return item
+    if all(
+        item.get(field) == recorded_by[field]
+        for field in ("recordedByOrganizationId", "recordedByUserId")
+    ):
+        return item
+    return {**item, **recorded_by}
+
+
 def _merge_items_by_key(
     server_items: List[Dict[str, Any]],
     incoming_items: List[Dict[str, Any]],
     key: str,
     entity_label: str,
     conflicts: Optional[List[str]] = None,
+    recorded_by: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Merge two lists of items using a unique key field.
@@ -369,7 +391,7 @@ def _merge_items_by_key(
     for item in incoming_items:
         k = item.get(key)
         if k and k not in server_keys:
-            merged.append(item)
+            merged.append(_stamped(item, recorded_by))
             added += 1
         elif k and conflicts is not None:
             edited = _edited_fields(server_by_key[k], item, key)
