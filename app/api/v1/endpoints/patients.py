@@ -514,7 +514,7 @@ async def sync_patient(
         # only visits and background items the server does not have yet are
         # new, and the check below and the LLM calls must use that, not the
         # size of the payload.
-        stored_record = await asyncio.to_thread(
+        expected_patient_id, stored_record = await asyncio.to_thread(
             get_stored_record_for_sync,
             db,
             patient_data.patientId,
@@ -570,7 +570,7 @@ async def sync_patient(
             await asyncio.to_thread(
                 create_or_update_patient,
                 db, patient_data, actor_org_id,
-                actor_id, conflicts,
+                actor_id, conflicts, expected_patient_id,
             )
         )
         

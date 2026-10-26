@@ -470,3 +470,53 @@ class TestMergePreservesGuardianSignature:
             merged["guardian2Info"]["consent"]["signatureBase64"]
             == "G2-SERVER-PNG"
         )
+
+
+class TestServerAttribution:
+    """F4: a visit or vaccine new to the server never keeps client-chosen attribution."""
+
+    RECORDED_BY = {
+        "recordedByOrganizationId": "org-servidor",
+        "recordedByUserId": "user-servidor",
+        "recordedAt": "2026-10-26T12:00:00+00:00",
+    }
+
+    def test_new_items_get_the_servers_attribution(self):
+        incoming = {
+            "medicalHistory": [{"encounterIdentifier": "v1", "recordedByOrganizationId": "org-elegida",
+                                "recordedByUserId": "user-elegido", "recordedAt": "2020-01-01"}],
+            "vaccinationRecord": [{"vaccinationId": "x1"}],
+        }
+
+        merged = merge_patient_records({}, incoming, recorded_by=self.RECORDED_BY)
+
+        for item in (merged["medicalHistory"][0], merged["vaccinationRecord"][0]):
+            for field, value in self.RECORDED_BY.items():
+                assert item[field] == value
+
+    def test_items_already_stamped_by_the_endpoint_keep_their_time(self):
+        stamped = {"vaccinationId": "x1", "recordedByOrganizationId": "org-servidor",
+                   "recordedByUserId": "user-servidor", "recordedAt": "2026-10-26T11:59:58+00:00"}
+
+        merged = merge_patient_records({}, {"vaccinationRecord": [stamped]},
+                                       recorded_by=self.RECORDED_BY)
+
+        assert merged["vaccinationRecord"][0] == stamped
+
+    def test_stored_items_keep_their_attribution(self):
+        stored = {"vaccinationId": "x1", "recordedByOrganizationId": "org-original",
+                  "recordedByUserId": "user-original"}
+
+        merged = merge_patient_records(
+            {"vaccinationRecord": [stored]}, {"vaccinationRecord": [dict(stored)]},
+            recorded_by=self.RECORDED_BY,
+        )
+
+        assert merged["vaccinationRecord"] == [stored]
+
+    def test_without_attribution_nothing_is_stamped(self):
+        item = {"vaccinationId": "x1", "recordedByUserId": "user-elegido"}
+
+        merged = merge_patient_records({}, {"vaccinationRecord": [item]})
+
+        assert merged["vaccinationRecord"] == [item]

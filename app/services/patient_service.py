@@ -2,8 +2,8 @@ import copy
 import hashlib
 import json
 import logging
-from datetime import date
-from typing import Optional
+from datetime import date, datetime, timezone
+from typing import Any, Optional
 
 from sqlalchemy import func
 from sqlalchemy.exc import DataError, IntegrityError
@@ -648,23 +648,40 @@ def _same_person(existing: Patient, patient_in: PatientFullRecord) -> bool:
     )
 
 
+#: ``create_or_update_patient`` without ``expected_patient_id``: no check.
+_ANY_PATIENT = object()
+
+
+def _recorded_by(org_id: Optional[str], actor_user_id: Optional[str]) -> Optional[dict]:
+    """Who recorded the items this sync adds, for the merge to stamp."""
+    if not actor_user_id:
+        return None
+    return {
+        "recordedByOrganizationId": org_id,
+        "recordedByUserId": actor_user_id,
+        "recordedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def get_stored_record_for_sync(
     db: Session, frontend_patient_id: str, device_uid: Optional[str]
-) -> Optional[dict]:
+) -> tuple[Optional[str], Optional[dict]]:
     """
-    Return a copy of the stored record a sync would merge into, or None if the
-    patient does not exist yet.
+    Return the id of the patient a sync would merge into and a copy of its
+    stored record, or ``(None, None)`` if the patient does not exist yet.
 
     Uses the same identity resolution as the upsert (``_find_patient_for_sync``)
     so the checks that run before any expensive work — which visits are new,
     whether a nurse is adding clinical history, which background items are
     already coded — look at the same record the write will target, including
-    one first registered by a different organization.
+    one first registered by a different organization. The id goes to
+    ``create_or_update_patient`` as ``expected_patient_id``: this read takes no
+    lock, and the write must not land on another patient than the one checked.
     """
     existing = _find_patient_for_sync(db, frontend_patient_id, device_uid)
     if not existing:
-        return None
-    return copy.deepcopy(existing.full_record_json or {})
+        return None, None
+    return existing.id, copy.deepcopy(existing.full_record_json or {})
 
 
 def record_fhir_delivery(
@@ -701,6 +718,7 @@ def create_or_update_patient(
     org_id: str,
     actor_user_id: Optional[str] = None,
     conflicts: Optional[list[str]] = None,
+    expected_patient_id: Any = _ANY_PATIENT,
 ) -> tuple["Patient", list[str], str, bool]:
     """
     Persists patient data into the local PostgreSQL database.
@@ -714,6 +732,13 @@ def create_or_update_patient(
 
     ``conflicts``, when given, receives a code for every part of the payload
     that was deliberately not applied (see ``PatientSyncResponse.conflicts``).
+
+    ``expected_patient_id``: the patient (or ``None`` for a new one) that
+    ``get_stored_record_for_sync`` resolved when the caller checked the
+    payload. If the locked lookup here resolves another one, a concurrent sync
+    changed which record this payload belongs to after those checks (security
+    review F4): raises ``ConcurrentSyncError`` so the app retries and the
+    checks run again against the right record.
     """
     if conflicts is None:
         conflicts = []
@@ -727,6 +752,17 @@ def create_or_update_patient(
     existing_patient = _find_patient_for_sync(
         db, patient_in.patientId, patient_in.device_uid, lock=True
     )
+    if expected_patient_id is not _ANY_PATIENT:
+        resolved_id = existing_patient.id if existing_patient is not None else None
+        if resolved_id != expected_patient_id:
+            logger.warning(
+                "Sync target changed between the checks and the write expected=%s resolved=%s",
+                safe_patient_ref(expected_patient_id) if expected_patient_id else "new",
+                safe_patient_ref(resolved_id) if resolved_id else "new",
+            )
+            raise ConcurrentSyncError(
+                "Another sync changed which patient this payload resolves to."
+            )
 
     # Merge-by-tag guard. When the match came from the hardware tag rather than
     # this device's own record (frontend_patient_id differs), the payload was
@@ -838,6 +874,7 @@ def create_or_update_patient(
             stale=stale,
             keep_server_guardians=keep_guardians,
             conflicts=conflicts,
+            recorded_by=_recorded_by(org_id, actor_user_id),
         )
         existing_patient.full_record_json = merged_record
         # RULE 3: THE RELATIONAL COPIES FOLLOW THE STORED RECORD

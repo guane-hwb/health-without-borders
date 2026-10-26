@@ -21,6 +21,7 @@ from app.schemas.patient import (
     derived_item_id,
 )
 from app.services.patient_service import (
+    ConcurrentSyncError,
     IdentityMismatchError,
     _find_patient_for_sync,
     create_or_update_patient,
@@ -32,7 +33,12 @@ from app.services.record_merger import (
     adopt_stored_item_ids,
     merge_patient_records,
 )
-from tests.api.v1.test_patients import MOCK_PATIENT_PAYLOAD, VISIT_1, MockUser
+from tests.api.v1.test_patients import (
+    MOCK_PATIENT_PAYLOAD,
+    VISIT_1,
+    MockNurse,
+    MockUser,
+)
 
 GUARDIAN_HEADER = {"X-Guardian-Device-UID": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]}
 
@@ -578,3 +584,75 @@ def test_the_policy_version_does_not_change_the_rda_paciente_hash():
     record["guardianInfo"]["consent"]["policyVersion"] = "v1.1"
 
     assert compute_background_hash(record) == before
+
+
+def _other_new_patient(patient_id):
+    """A different child, new to the server, sent with ``patient_id``."""
+    payload = _payload(patientId=patient_id, device_uid="UID-OTRO-NINO")
+    payload["patientInfo"]["identification"]["documentNumber"] = "OTRO-123"
+    payload["patientInfo"]["firstName"] = "Otro"
+    payload["guardianInfo"]["device_uid"] = "GUARDIAN-OTRO"
+    return PatientFullRecord.model_validate(payload)
+
+
+def test_a_sync_whose_target_changes_before_the_write_is_retried(client, db_session, monkeypatch):
+    """
+    F4 (security review 2026-10-15): the checks read the target without a lock,
+    before the LLM calls; the write resolves it again under a lock. A nurse's
+    sync reuses a child's bracelet with a new patientId and that child's known
+    visit, and while it waits a second sync creates a patient with that
+    patientId. The write used to land on the new patient, appending the
+    "known" visit with the client's attribution: a nurse adding a visit. An old
+    baseVersion makes the payload stale, which skips the bracelet replacement
+    that would otherwise have refused it.
+    """
+    from app.api.v1.endpoints import patients as endpoints
+
+    assert _sync(client, _payload(medicalHistory=[deepcopy(VISIT_1)])).status_code == 201
+    visit = deepcopy(VISIT_1)
+    visit.update(recordedByOrganizationId="org-elegida", recordedByUserId="usuario-elegido")
+    nurse_payload = _payload(patientId="PID-CARRERA", medicalHistory=[visit], baseVersion=1)
+
+    real_coding = endpoints._apply_llm_coding
+
+    async def a_second_sync_lands_meanwhile(*args, **kwargs):
+        other = _other_new_patient("PID-CARRERA")
+        create_or_update_patient(db_session, other, org_id="org-123")
+        create_or_update_patient(db_session, other, org_id="org-123")  # now at version 2
+        return await real_coding(*args, **kwargs)
+
+    monkeypatch.setattr(endpoints, "_apply_llm_coding", a_second_sync_lands_meanwhile)
+    app.dependency_overrides[get_current_user] = lambda: MockNurse()
+
+    response = client.post("/api/v1/patients/sync", json=nurse_payload)
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "sync_in_progress"
+    db_session.expire_all()
+    created = db_session.query(Patient).filter(Patient.frontend_patient_id == "PID-CARRERA").one()
+    assert created.full_record_json["medicalHistory"] == []
+
+    # The app retries: the checks now see the real target, where the visit is new.
+    monkeypatch.setattr(endpoints, "_apply_llm_coding", real_coding)
+    retry = client.post("/api/v1/patients/sync", json=nurse_payload)
+    assert retry.status_code == 403
+
+
+def test_the_write_refuses_a_target_other_than_the_one_checked(db_session):
+    first, *_ = create_or_update_patient(
+        db_session, PatientFullRecord.model_validate(_payload()), org_id="org-123"
+    )
+    again = PatientFullRecord.model_validate(_payload())
+
+    # Checked as a new patient, but by the write it exists.
+    with pytest.raises(ConcurrentSyncError):
+        create_or_update_patient(db_session, again, org_id="org-123", expected_patient_id=None)
+    db_session.rollback()
+    with pytest.raises(ConcurrentSyncError):
+        create_or_update_patient(db_session, again, org_id="org-123", expected_patient_id="otro-id")
+    db_session.rollback()
+
+    saved, *_ = create_or_update_patient(
+        db_session, again, org_id="org-123", expected_patient_id=first.id
+    )
+    assert saved.id == first.id
