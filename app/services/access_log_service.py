@@ -17,6 +17,7 @@ from app.db.models import (
     Patient,
     PatientAccessLog,
     RetiredDeviceUid,
+    User,
 )
 
 logger = logging.getLogger(__name__)
@@ -119,3 +120,34 @@ def list_emergency_access(
         .limit(min(limit, MAX_ACCESS_LOG_ROWS))
         .all()
     )
+
+
+def list_device_changes(
+    db: Session,
+    *,
+    patient_id: str,
+    actor_organization_id: Optional[str] = None,
+    limit: int = MAX_ACCESS_LOG_ROWS,
+) -> list[tuple[RetiredDeviceUid, Optional[str]]]:
+    """
+    Devices retired from one patient's record, newest first, each with the
+    organization of the user who retired it (None when not recorded).
+
+    Any clinician who finds a minor through /search may replace the minor's
+    devices: the device-loss flow needs exactly that, so it is allowed by
+    design (security review V2). This is what makes each change visible. With
+    ``actor_organization_id``, only changes made by that organization's users.
+    """
+    query = (
+        db.query(RetiredDeviceUid, User.organization_id)
+        .outerjoin(User, User.id == RetiredDeviceUid.retired_by)
+        .filter(RetiredDeviceUid.patient_id == patient_id)
+    )
+    if actor_organization_id is not None:
+        query = query.filter(User.organization_id == actor_organization_id)
+    return [
+        (row, organization_id)
+        for row, organization_id in query.order_by(
+            RetiredDeviceUid.retired_at.desc(), RetiredDeviceUid.id
+        ).limit(min(limit, MAX_ACCESS_LOG_ROWS))
+    ]

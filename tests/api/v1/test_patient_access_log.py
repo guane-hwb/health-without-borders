@@ -378,3 +378,47 @@ def test_bracelet_uids_do_not_reach_the_logs(client, db_session, people, app_log
     logged = " ".join(r.getMessage() for r in app_log.records)
     assert "ref:" in logged
     assert "04:" not in logged and ":80" not in logged
+
+
+# ---------------------------------------------------------------------------
+# Device changes (security review V2)
+# ---------------------------------------------------------------------------
+
+
+def _replace_guardian_device_from_another_organization(client, people):
+    """What the device-loss flow does: found through /search, synced with its patientId."""
+    _as(people, "doc_b")
+    found = client.post("/api/v1/patients/search", json=SEARCH).json()
+    payload = deepcopy(MOCK_PATIENT_PAYLOAD)
+    payload["patientId"] = found["patientId"]
+    payload["guardianInfo"]["device_uid"] = "GUARDIAN-UID-NUEVO"
+    payload["retiredDeviceReason"] = "lost"
+    assert client.post("/api/v1/patients/sync", json=payload).status_code == 201
+
+
+def test_device_changes_are_listed_with_who_made_them(client, db_session, people):
+    _register(client, people)
+    _replace_guardian_device_from_another_organization(client, people)
+
+    _as(people, "sa")
+    body = _read_log(client, device_uid=MINOR_UID).json()
+
+    assert [
+        (c["device_role"], c["reason"], c["retired_by"], c["organization_id"])
+        for c in body["device_changes"]
+    ] == [("guardian", "lost", people["doc_b"][0], people["doc_b"][1])]
+    # No UID in the view: they are PHI and the ledger does not need them.
+    assert set(body["device_changes"][0]) == {
+        "device_role", "reason", "retired_by", "organization_id", "retired_at",
+    }
+    assert GUARDIAN_UID not in str(body["device_changes"])
+
+
+def test_an_org_admin_sees_only_their_own_staffs_device_changes(client, db_session, people):
+    _register(client, people)
+    _replace_guardian_device_from_another_organization(client, people)
+
+    _as(people, "admin_a")
+    body = _read_log(client, device_uid=MINOR_UID).json()
+
+    assert body["device_changes"] == []
