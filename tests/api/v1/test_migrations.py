@@ -225,3 +225,21 @@ def test_0009_replaces_sighting_uids_with_references():
     with engine.connect() as conn:
         uid = conn.execute(text("SELECT device_uid FROM nfc_key_version_observations")).scalar_one()
     assert uid == ref
+
+
+@pytest.mark.parametrize("index", [None, "ix_custom_sighting_uid"])
+def test_0009_runs_whatever_index_the_uid_column_has(index):
+    """hwb-backend-dev: the table predates the migrations and had no index on device_uid."""
+    engine = _engine()
+    _upgrade(engine, "0008")
+    with engine.begin() as conn:
+        conn.execute(text("DROP INDEX ix_nfc_key_version_observations_device_uid"))
+        if index:
+            conn.execute(text(f"CREATE INDEX {index} ON nfc_key_version_observations (device_uid)"))
+
+    migrations.upgrade_to_head(engine)
+
+    names = {i["name"] for i in inspect(engine).get_indexes("nfc_key_version_observations")}
+    assert "ix_nfc_key_version_observations_device_ref" in names
+    assert index not in names
+    assert _version(engine) == HEAD

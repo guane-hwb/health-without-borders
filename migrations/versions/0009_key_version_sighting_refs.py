@@ -69,8 +69,18 @@ def upgrade() -> None:
                 .values(device_ref=_device_ref(row.device_uid))
             )
 
+    # Whatever indexes the column has, by name, or none: on hwb-backend-dev the
+    # table predates the migrations (create_all) and has no index on device_uid,
+    # so dropping it by the baseline's name failed the first deploy of this
+    # revision (rolled back, the database stayed at 0008).
+    uid_indexes = [
+        index['name']
+        for index in sa.inspect(conn).get_indexes(_TABLE)
+        if index['column_names'] == ['device_uid']
+    ]
     with op.batch_alter_table(_TABLE) as batch:
-        batch.drop_index('ix_nfc_key_version_observations_device_uid')
+        for name in uid_indexes:
+            batch.drop_index(name)
         batch.drop_column('device_uid')
         batch.alter_column('device_ref', existing_type=sa.String(length=64), nullable=False)
         batch.create_index(
