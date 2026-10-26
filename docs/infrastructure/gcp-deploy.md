@@ -283,7 +283,7 @@ Create a trigger for merges/pushes to `develop`:
 
 - **`hwb-backend-dev-deploy`:** push to `^develop$`, runs `cloudbuild.yaml`, as the Compute Engine default account, with no approval step. Every merge to `develop` is a deployment.
 - **`develop` is not protected on GitHub.** A direct push would deploy without a pull request or the GitHub Actions checks. `cloudbuild.yaml` re-runs lint and tests, but not coverage, `pip-audit`, `alembic check` or the PostgreSQL suite. Protecting the branch (pull request required, `Lint & Test (Python 3.11)` and `Integration (PostgreSQL 15)` as required checks) needs an admin of the repository.
-- **`hwb-pr-quality-gate`:** pull requests to `^develop$`, pointing to `cloudbuild.pr.yaml`, a file removed from the repository. It is obsolete: pull requests are checked by GitHub Actions. Delete it.
+- **`hwb-pr-quality-gate`** (pull requests to `^develop$`, pointing to the removed `cloudbuild.pr.yaml`) was deleted on 2026-10-22. It was disabled, but it ran as a service account with `roles/editor`, and Cloud Build reads the build file from the commit that fired it. Pull requests are checked by GitHub Actions.
 
 ### Service account for triggers
 

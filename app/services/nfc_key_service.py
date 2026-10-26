@@ -246,7 +246,7 @@ def rotate_to_new_version(
     if new_version > NFC_MAX_KEY_VERSION:
         raise ValueError(
             f"Key version {NFC_MAX_KEY_VERSION} is the highest the one-byte payload header can "
-            "carry. Retire old versions before rotating again."
+            "carry, and version numbers are never reused. Plan a re-keying of the fleet."
         )
 
     _insert_key(db, wrapper, version=new_version, material=generate_key())

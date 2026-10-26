@@ -1115,8 +1115,9 @@ def revoke_nfc_key(
 
     Use this when a key is believed to be compromised — an extracted device, a
     leaked value. The version stops being delivered to any device, for reading
-    as well as writing; anything less is useless against a leak, since the
-    leaked key is precisely the one that reads.
+    as well as writing. It takes the key from legitimate devices, not from
+    whoever leaked it: chips written under it stay readable with the leaked
+    copy until they are rewritten under a newer version.
 
     **What it costs.** Chips written under the revoked version become
     *online-only* until they are rewritten. No data is lost: the chip UID is

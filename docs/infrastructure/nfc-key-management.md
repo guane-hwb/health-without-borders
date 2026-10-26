@@ -147,10 +147,19 @@ POST /api/v1/patients/nfc-keys/revoke
 {"version": 0, "reason": "...", "acknowledge_chip_impact": true}
 ```
 
-`superadmin` only. The version stops being delivered for reading *and* writing —
-anything less is useless against a leak, since the leaked key is the one that
-reads. If it was the current version, a replacement is generated and becomes
+`superadmin` only. The version stops being delivered for reading *and*
+writing. If it was the current version, a replacement is generated and becomes
 current. Every operation is recorded in `nfc_key_events` with actor and reason.
+
+**What revoking protects, and what it does not.** Revoking takes the key away
+from legitimate devices; it does not take it away from whoever leaked it. That
+copy keeps reading, and writing, every chip written under the version, for as
+long as those chips are not rewritten. Only re-encrypting a chip under a newer
+version protects it, and chips migrate only when something rewrites them (§ 6,
+"Migration is passive"); migrating on read is not implemented. So a revocation
+limits what a leaked key can be used for from then on, through the backend, and
+starts the clock on chips moving away from it. It does not re-protect the chips
+already in the field.
 
 **It is not instant on the device.** Revocation stops *delivery*: at once on
 the instance that handled the request, within 60 seconds on the others (each
@@ -176,6 +185,15 @@ variable still holds the revoked key.
 
 ### Compromised device (lost or stolen tablet)
 
+**A lost device means a leaked keyring.** The 7-day window and the clock check
+(§ 8) are enforced by the app: they stop an honest app from using a stale ring,
+not someone who reads the device's secure store directly. Whoever extracts it
+keeps the keys for good. The ring is the same for every organization and
+version 0 has never been rotated, so it reads every chip in the field and,
+since the key is symmetric, can write forged chips that every device accepts.
+Treat version 0 as exposed to every device that ever signed in, including those
+of former staff and lost tablets.
+
 Revoking a key alone does **not** cut the stolen device: its refresh token stays
 valid for up to 7 days and would receive the replacement key. In this order:
 
@@ -190,7 +208,16 @@ valid for up to 7 days and would receive the replacement key. In this order:
    later does **not** bring them back. The stolen device wipes its keyring as
    soon as it is online and its refresh is refused; while it stays offline it
    keeps the ring until its refresh token expires (up to 7 days).
-2. **Revoke the key version** the device held, as above.
+2. **Revoke the key version** the device held, as above. **On the pilot today
+   that is version 0, the only one**: revoking it makes every chip in
+   circulation online-only, and the current version may not advance past 0
+   until every device is confirmed to run a keyring-aware build (§ 6), which is
+   not recorded yet. Rotate and revoke have not been rehearsed either. So,
+   today, this step costs the whole pilot its offline reads; weigh it against
+   what the device exposes. The plan to change that: confirm and record the
+   build of every device, rehearse rotate and revoke on a staging copy, then
+   rotate once on the pilot so version 0 starts draining before an incident
+   forces it.
 3. **Change the password** if it may have been exposed:
    `POST /api/v1/users/{id}/reset-password` (same roles and limits as step 1)
    returns a new temporary password once and also ends every session, so it can replace
@@ -276,13 +303,20 @@ rotation is logged and retried later; it never breaks a login.
 > manual endpoint.
 
 Version 255 is the ceiling — the version travels in one byte of the payload
-header. Rotating past it is refused, and retiring old versions is the way out.
+header. Rotating past it is refused, and so is revoking the current version once
+255 exists. **Retiring old versions does not free numbers:** the next version is
+always one more than the highest ever created, revoked rows included, and rows
+are never deleted. A version number cannot be reused safely anyway, since old
+chips name it. Reaching 255 is a hard end that needs a re-keying of the fleet;
+at one rotation every 90 days that is more than 60 years away.
 
 ### Migration is passive
 
 A chip moves to the current version when something rewrites it — a consultation,
 a vaccine, an edit. A read alone does not migrate it. Chips belonging to people
-who never return stay on their original version indefinitely.
+who never return stay on their original version indefinitely, readable by
+anyone who holds a leaked copy of that version's key (see "Revoking a
+compromised key", § 4).
 
 ---
 
@@ -404,6 +438,19 @@ retention policy it would need — remains open.
   keeps its ring when a response carries none. It is deleted when that session
   ends: sign-out, a refused refresh, or the end of the 7-day window.
 
+### What stays on a revoked device
+
+Revoking a user's sessions (or a refused refresh) wipes the keyring and the
+tokens, but **not the local records**: unsynced work must survive a sign-out.
+Those records, and the offline emergency-access entries, are encrypted on the
+device (AES-256-GCM) under keys of their own that also stay in the secure
+store. So a stolen device that can be unlocked or rooted still holds readable
+patient data after revoke-sessions. The patient device UID is also kept in clear
+in the local tables. The lost-tablet runbook (§ 4) cuts the device off from the
+backend and from the keyring; it does not erase what the device already holds.
+A remote "wipe" signal for a device revoked because it was lost is not
+implemented.
+
 ---
 
 ## 9. Local development
@@ -482,6 +529,29 @@ local copy — and decrypts it, to prove what was uploaded works.
   database alone yields keys nobody can unwrap. This is recorded alongside the
   tables themselves in [Database Architecture](database.md), so whoever
   restores a backup meets the warning without having to know this page exists.
+
+### Version 0 in clear: `hwb-nfc-master-key`
+
+Secret Manager still holds the original version 0 key in clear, in
+`hwb-nfc-master-key`. The service no longer mounts it (it was only needed for
+the import into the keyring, § 4), but it is not just a leftover: it is the
+only copy of version 0 that does not depend on the KEK. If the KEK were lost,
+the wrapped rows would be useless, and this value would be the only way to keep
+reading the chips in the field (imported again under a new KEK with
+`NFC_BOOTSTRAP_IMPORT`).
+
+Treat it like the KEK:
+
+- **Keep an offline copy** encrypted with `age`, held by the same two custodians
+  in two separate places, made and verified with the same procedure as
+  `kek.age` above.
+- **Then disable its secret version** (`gcloud secrets versions disable`), which
+  is reversible, and remove the runtime service account's access to it. Do not
+  destroy it: every chip in the field is version 0.
+- As of 2026-10-26 the version is still enabled, until the offline copy is
+  confirmed. Its readers are the runtime service account and the project
+  owners. Revisions up to `hwb-backend-dev-00125` still mount it, so rolling
+  back to one of them needs the version enabled.
 
 ### Checking a backup matches production
 
