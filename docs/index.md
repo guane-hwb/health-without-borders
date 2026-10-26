@@ -13,7 +13,7 @@ Source code: [github.com/guane-hwb/health-without-borders](https://github.com/gu
 - **FHIR R4 Interoperability:** Generates RDA (Resumen Digital de Atención en Salud) bundles compliant with Colombia's Resolution 1888/2025 and the IHCE Implementation Guide.
 - **AI-Assisted Medical Coding:** Gemini LLM integration for automated ICD-10/11 code extraction from clinical notes, family history, and chronic condition coding — with post-LLM validation against the Vulcano IHCE terminology catalogs.
 - **Offline-First:** Optimized sync endpoints for mobile devices with limited connectivity.
-- **Robust Security:** JWT authentication, RBAC with multi-tenancy, hardware 2FA for minors via NFC bracelets.
+- **Robust Security:** JWT authentication, RBAC with multi-tenancy, a guardian device required to scan a minor's patient device (see Security § 2.2 for what it does and does not prove).
 - **Serverless Architecture:** Deployed on Google Cloud Run for automatic scalability.
 - **Delta Sync:** Only new FHIR bundles are generated and sent to the FHIR Store — no duplicate transmissions.
 

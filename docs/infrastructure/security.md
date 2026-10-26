@@ -44,13 +44,22 @@ Role-Based Access Control (RBAC). Tenant isolation applies to **organization and
 | `doctor` | Organization | Full clinical access: read records, create patients, add medical history |
 | `nurse` | Organization | Read records; add vaccines and change allergies, background, guardians and demographics. Cannot add visits (consultations) |
 
-### 2.2. Minors: the Guardian's Card (Hardware 2FA)
+### 2.2. Minors: the Guardian's Card
 
 For physical security in refugee or transit camps, the bracelet scan
 (`POST /patients/scan`) applies this rule:
 
 - **Adults (18+):** Scanning the bracelet returns the medical record.
 - **Minors (<18), and patients with no recorded birth date:** the scan is refused (`403`, `code` `guardian_required` or `guardian_mismatch`) unless the card of one of the two registered guardians is scanned too and matches.
+
+What the server checks is that the guardian device **UID** sent matches one of
+the registered ones (`guardian_factor` in the access log). It cannot tell that the
+device was physically there: a UID can be read from the device by any phone and
+copied, and the record returned by `/search` carries the guardian devices' UIDs
+(the profile opened from a search needs them to edit and reassign devices). So
+`guardian_factor` means "a known guardian device UID was sent", not "the guardian
+was present". A real second factor needs the device to prove itself (DESFire AES
+authentication, part of the NFC design work), not just its UID.
 
 The rule covers the scan only. So that care is never blocked, two paths reach a
 minor's record without the card, and both leave a trace (§ 3.4):
@@ -87,6 +96,8 @@ FHIR RDA bundles sent to the Google Cloud Healthcare API are protected by:
 Patient records are global: any `doctor`, `nurse` or `org_admin` can read any record, and `/search` returns a minor's record without the guardian's card. Every successful `/scan`, `/search` and `/sync` therefore writes one row to the append-only `patient_access_log` table **before** the record is returned: the authenticated actor, their organization, the channel, whether the guardian's card was presented and matched, the reason given on `/search` (`access_reason`, optional) and the server time. If that row cannot be written, the record is not served.
 
 `POST /api/v1/patients/access-log` returns that history for one patient (by server `patient_id` or current bracelet `device_uid`, in the body): all of it for a `superadmin`, the accesses made by their own organization's users for an `org_admin`.
+
+**Device changes.** Any `doctor` or `nurse` who finds a minor through `/search` can sync the record with its `patientId` and replace the patient device or the guardian devices: the device-loss flow does exactly that (search by document, write a new blank device, sync), and the server cannot tell it apart from misuse without asking for something the legitimate user may not have either. This is a decision, not an oversight (security review V2, 2026-10-26): records are global and editable by clinical staff, and the control is the trace. Every replaced device is a row in `retired_device_uids` (role, reason, who, when), and `POST /api/v1/patients/access-log` returns them as `device_changes`, with the organization of the user who made each change and without the UIDs, scoped like the rest of the ledger. Requiring a current device to authorize a change is part of the NFC design work, where the device can prove itself.
 
 Offline break-glass accesses (a minor's record opened on the device without the guardian) are synced by the app to `emergency_access_log`, which stores the device-declared actor next to the authenticated user whose session uploaded the entry (`uploaded_by`). `occurred_at` must be ISO 8601; a value without an offset is read as local time in the reporting zone, and it is stored with its offset. `POST /api/v1/patients/access-log` returns these entries too (`emergency_entries`, for the patient's current and retired bracelets, scoped like the rest of the ledger).
 

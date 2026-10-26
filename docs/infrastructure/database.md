@@ -46,7 +46,7 @@ Stores the core identity data of migrant children. Relational columns mirror the
 | `id` | Varchar | PK, UUID v4 | Server-generated unique identifier. The authoritative patient ID. |
 | `frontend_patient_id` | Varchar | Not Null, Index | Frontend-generated UUID sent during first sync. Used for sync correlation. |
 | `organization_id`| Varchar | FK, Not Null | Organization that originally registered this patient. |
-| `device_uid` | Varchar | Unique, Not Null, Index | Hardware ID (NFC Bracelet/Tag) for physical 2FA. |
+| `device_uid` | Varchar | Unique, Not Null, Index | Hardware UID of the patient device (NFC chip). |
 | `document_type` | Varchar(5) | Index | Identity document type — CC, CE, TI, RC, PT, PE, etc. (Res. 866 Elem. 2.1). |
 | `document_number`| Varchar | Index | Identity document number (Res. 866 Elem. 2.2). |
 | `first_name` | Varchar | Not Null, Index | Primer nombre (case-insensitive search). |

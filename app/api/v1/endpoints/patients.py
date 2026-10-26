@@ -40,6 +40,7 @@ from app.schemas.nfc_key_version import (
 )
 from app.schemas.patient import (
     CodeSource,
+    DeviceChangeView,
     EmergencyAccessView,
     PatientAccessEntry,
     PatientAccessQuery,
@@ -56,6 +57,7 @@ from app.services.access_log_service import (
     SCAN,
     SEARCH,
     SYNC,
+    list_device_changes,
     list_emergency_access,
     list_patient_access,
     record_patient_access,
@@ -1293,6 +1295,12 @@ async def get_patient_access_log(
     device made offline (break-glass) and synced later, for the patient's
     current and retired bracelets.
 
+    `device_changes` lists the patient and guardian devices retired from the
+    record (replaced, lost or damaged): who, their organization, when and why,
+    without the UIDs. Any clinician who finds a minor through `/search` may
+    replace the minor's devices, because the device-loss flow needs it; this is
+    how such a change is seen.
+
     Identify the patient by server `patient_id` or by the bracelet's current
     `device_uid`, in the body (never the URL).
 
@@ -1336,16 +1344,34 @@ async def get_patient_access_log(
         actor_organization_id=scope,
         limit=query.limit,
     )
+    changes = await asyncio.to_thread(
+        list_device_changes,
+        db,
+        patient_id=patient.id,
+        actor_organization_id=scope,
+        limit=query.limit,
+    )
     logger.info(
-        "Access log read actor_id=%s patient_ref=%s entries=%d emergency=%d",
+        "Access log read actor_id=%s patient_ref=%s entries=%d emergency=%d device_changes=%d",
         current_user.id,
         mask_id(patient.id),
         len(rows),
         len(emergencies),
+        len(changes),
     )
     return PatientAccessResponse(
         patient_id=patient.id,
         entries=[PatientAccessEntry.model_validate(row) for row in rows],
         emergency_entries=[EmergencyAccessView.model_validate(row) for row in emergencies],
+        device_changes=[
+            DeviceChangeView(
+                device_role=row.device_role,
+                reason=row.reason,
+                retired_by=row.retired_by,
+                organization_id=organization_id,
+                retired_at=row.retired_at,
+            )
+            for row, organization_id in changes
+        ],
     )
 

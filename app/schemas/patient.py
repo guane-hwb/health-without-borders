@@ -993,11 +993,25 @@ class EmergencyAccessView(BaseModel):
     received_at: datetime = Field(..., description="Server receipt time")
 
 
+class DeviceChangeView(BaseModel):
+    """A device retired from the record: replaced, lost or damaged. No UID."""
+
+    device_role: str = Field(..., description="'patient' or 'guardian' device")
+    reason: str = Field(..., description="'lost', 'damaged' or 'replaced'")
+    retired_by: Optional[str] = Field(None, description="User who made the change, when known")
+    organization_id: Optional[str] = Field(None, description="Organization of that user")
+    retired_at: datetime
+
+
 class PatientAccessResponse(BaseModel):
     patient_id: str
     entries: List[PatientAccessEntry]
     emergency_entries: List[EmergencyAccessView] = Field(
         default_factory=list,
         description="Openings without the guardian's card, made offline (newest received first)",
+    )
+    device_changes: List[DeviceChangeView] = Field(
+        default_factory=list,
+        description="Patient and guardian devices retired from the record (newest first)",
     )
 
