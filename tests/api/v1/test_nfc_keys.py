@@ -960,6 +960,21 @@ def _failing_load(db):
 
 
 class TestKekModeFallback:
+    def test_an_old_ring_is_not_served_during_an_outage(
+        self, with_kek, db_session, monkeypatch
+    ):
+        """N10: another instance may have revoked a version since this one read the ring."""
+        security.nfc_key_claims(role=UserRole.doctor, db=db_session)  # warms the cache
+        monkeypatch.setattr(
+            nfc_key_service, "_cached_at",
+            nfc_key_service._cached_at - nfc_key_service._FALLBACK_MAX_AGE_SECONDS - 1,
+        )
+        monkeypatch.setattr(nfc_key_service, "load_keyring", _failing_load)
+
+        claims = security.nfc_key_claims(role=UserRole.doctor, db=db_session)
+
+        assert claims["nfc_keyring"] is None
+
     def test_db_failure_serves_the_last_ring_read(self, with_kek, db_session, monkeypatch):
         _revoke_v0_after_rotating(db_session)
         warm = security.nfc_key_claims(role=UserRole.doctor, db=db_session)

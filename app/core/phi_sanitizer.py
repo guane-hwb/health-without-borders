@@ -99,12 +99,8 @@ _PHI_KEYS = (
 )
 
 
-def _summarize_operation_outcome(body: str) -> Optional[str]:
+def _summarize_operation_outcome(parsed: object) -> Optional[str]:
     """Reduce a FHIR OperationOutcome to its issue severities and codes."""
-    try:
-        parsed = json.loads(body)
-    except ValueError:
-        return None
     if not isinstance(parsed, dict) or parsed.get("resourceType") != "OperationOutcome":
         return None
     issues = parsed.get("issue") or []
@@ -116,6 +112,18 @@ def _summarize_operation_outcome(body: str) -> Optional[str]:
     return f"OperationOutcome issues=[{summary}]"
 
 
+def _summarize_google_error(parsed: object) -> Optional[str]:
+    """
+    Reduce a Google API error (``{"error": {"code", "status", "message"}}``) to
+    its code and status. Its ``message`` is free text and can quote the values
+    of the request, patient data included.
+    """
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("error"), dict):
+        return None
+    error = parsed["error"]
+    return f"Google API error code={error.get('code', '?')} status={error.get('status', '?')}"
+
+
 def sanitize_error_body(body: Optional[str], max_length: int = 500) -> str:
     """
     Sanitize an HTTP error response body before logging. Strips patterns
@@ -123,9 +131,12 @@ def sanitize_error_body(body: Optional[str], max_length: int = 500) -> str:
     document numbers) and truncates to a safe length.
 
     A FHIR ``OperationOutcome`` is reduced to its issue severities and codes:
-    its ``diagnostics`` text routinely quotes the offending values. Anything
-    else is redacted over the WHOLE body before truncating, so a value cut in
-    half by the truncation cannot slip past the patterns.
+    its ``diagnostics`` text routinely quotes the offending values. A Google API
+    error is reduced to its code and status, for the same reason (its
+    ``message``). A body that is not JSON (plain text, HTML) is reported by its
+    length only: there is no structure to redact by. Any other JSON is redacted
+    over the WHOLE body before truncating, so a value cut in half by the
+    truncation cannot slip past the patterns.
 
     This is intentionally aggressive — it's better to lose debugging detail
     in the logs than to leak clinical data.
@@ -133,9 +144,15 @@ def sanitize_error_body(body: Optional[str], max_length: int = 500) -> str:
     if not body:
         return "<empty>"
 
-    outcome = _summarize_operation_outcome(body)
-    if outcome is not None:
-        return outcome[:max_length]
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return f"<non-JSON body, {len(body)} chars>"
+
+    for summarize in (_summarize_operation_outcome, _summarize_google_error):
+        summary = summarize(parsed)
+        if summary is not None:
+            return summary[:max_length]
 
     # Strip values that might contain names or identifiers inside FHIR
     # resource fragments.  Covers both scalar strings and JSON arrays:

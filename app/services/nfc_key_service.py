@@ -38,6 +38,12 @@ logger = logging.getLogger(__name__)
 #: is well inside the minute the access token already allows.
 _CACHE_TTL_SECONDS = 60
 
+#: How old a ring may be and still be served while the database cannot be read.
+#: Another instance may have revoked a version since this one last read the
+#: ring; past this age, no keys are better than a ring that may hold a revoked
+#: one (security review N10). The app keeps the ring it has.
+_FALLBACK_MAX_AGE_SECONDS = 600
+
 _cache_lock = threading.Lock()
 _cached_ring: Optional[dict] = None
 _cached_at: float = 0.0
@@ -53,14 +59,24 @@ def kek_wrapper() -> Optional[KeyWrapper]:
 
 def last_known_keyring() -> Optional[dict]:
     """
-    The most recent ring assembled from the database, however old.
+    The most recent ring assembled from the database, if it is less than
+    ``_FALLBACK_MAX_AGE_SECONDS`` old; None otherwise.
 
     Used only when reading the database fails: serving a ring that was correct
     a moment ago is safe, whereas falling back to the environment would hand
     out whatever NFC_MASTER_KEY holds — a version that may have been revoked
-    precisely because it leaked.
+    precisely because it leaked. An older ring may hold a version another
+    instance has revoked since, so it is not served.
     """
     with _cache_lock:
+        if _cached_ring is None:
+            return None
+        if time.monotonic() - _cached_at > _FALLBACK_MAX_AGE_SECONDS:
+            logger.warning(
+                "The last NFC keyring read is too old to serve during a database "
+                "outage; serving no keys."
+            )
+            return None
         return _cached_ring
 
 

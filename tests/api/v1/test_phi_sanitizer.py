@@ -125,11 +125,24 @@ class TestSanitizeErrorBody:
         assert sanitize_error_body(body) == body
 
     def test_truncates_long_body(self):
-        body = "x" * 1000
+        body = '{"detail": "' + "x" * 1000 + '"}'
         result = sanitize_error_body(body, max_length=100)
         assert len(result) < 200
         assert "truncated" in result
-        assert "1000 chars total" in result
+        assert f"{len(body)} chars total" in result
+
+    def test_google_api_error_keeps_only_code_and_status(self):
+        """V4: the message of a Healthcare API error can quote patient values."""
+        body = (
+            '{"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": '
+            '"invalid value \'Pérez Rodríguez\' at Patient.name[0].family"}}'
+        )
+        result = sanitize_error_body(body)
+        assert result == "Google API error code=400 status=INVALID_ARGUMENT"
+
+    def test_a_body_that_is_not_json_is_reported_by_its_length(self):
+        body = "Bad Request: patient Juan Pérez 1098765432 already exists"
+        assert sanitize_error_body(body) == f"<non-JSON body, {len(body)} chars>"
 
     def test_redacts_family_name(self):
         body = '{"family": "Pérez Rodríguez", "given": ["Juan"]}'

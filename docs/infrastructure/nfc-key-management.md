@@ -168,9 +168,11 @@ keyring-aware build — the same rule as for rotation. `acknowledge_chip_impact`
 exists so this is deliberate.
 
 **If the database cannot be read** during a login or refresh, the backend
-serves the last ring it read from the database, or no keys at all (the app then
-keeps the ring it already has). It never falls back to `NFC_MASTER_KEY`: after
-revoking version 0 that variable still holds the revoked key.
+serves the last ring it read from the database if that read is less than 10
+minutes old, and otherwise no keys at all (the app then keeps the ring it already
+has). An older ring could still hold a version another instance revoked in the
+meantime. It never falls back to `NFC_MASTER_KEY`: after revoking version 0 that
+variable still holds the revoked key.
 
 ### Compromised device (lost or stolen tablet)
 
