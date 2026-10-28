@@ -211,8 +211,9 @@ valid for up to 7 days and would receive the replacement key. In this order:
 2. **Revoke the key version** the device held, as above. **On the pilot today
    that is version 0, the only one**: revoking it makes every chip in
    circulation online-only, and the current version may not advance past 0
-   until every device is confirmed to run a keyring-aware build (§ 6), which is
-   not recorded yet. Rotate and revoke have not been rehearsed either. So,
+   until every device is confirmed to run a keyring-aware build (§ 6). The
+   logs show which build each device reports once the app sends
+   `X-App-Version` (§ 6, "Which build each device runs"). Rotate and revoke have not been rehearsed either. So,
    today, this step costs the whole pilot its offline reads; weigh it against
    what the device exposes. The plan to change that: confirm and record the
    build of every device, rehearse rotate and revoke on a staging copy, then
@@ -309,6 +310,36 @@ always one more than the highest ever created, revoked rows included, and rows
 are never deleted. A version number cannot be reused safely anyway, since old
 chips name it. Reaching 255 is a hard end that needs a re-keying of the fleet;
 at one rotation every 90 days that is more than 60 years away.
+
+### Which build each device runs
+
+Confirming the fleet starts from the logs. The app sends
+`X-App-Version: <name>+<number> (<platform>)`, for example
+`1.2.3+45 (android)`, and login and refresh log it with the account:
+
+```
+Login user_id=… role=doctor app_version=1.2.3+45 (android)
+Refresh user_id=… role=doctor app_version=1.2.3+45 (android)
+```
+
+A device that is online refreshes at least once an hour, and one that holds
+the ring has refreshed within the last 7 days (the refresh-token window). So
+seven days of these lines cover every device that can still read chips offline:
+
+```
+gcloud logging read 'resource.type="cloud_run_revision"
+  AND resource.labels.service_name="hwb-backend-dev"
+  AND textPayload:"app_version="' --freshness=7d --format='value(textPayload)'
+```
+
+How to read it:
+
+- `app_version=none` is a build from before the header, and `invalid` a value
+  outside the format. Treat both as unconfirmed.
+- The line names the account, not the device: two devices signed in with the
+  same account show up under the same `user_id`.
+- The header is self-reported. It finds the devices still on an old build; it
+  does not prove what a device runs.
 
 ### Migration is passive
 
@@ -540,18 +571,23 @@ the wrapped rows would be useless, and this value would be the only way to keep
 reading the chips in the field (imported again under a new KEK with
 `NFC_BOOTSTRAP_IMPORT`).
 
-Treat it like the KEK:
+Where the chips in the field hold real records, treat it like the KEK: keep
+an offline copy encrypted with `age`, held by the same two custodians and made
+with the same procedure as `kek.age` above; then disable its secret version
+(`gcloud secrets versions disable`, reversible) and remove the runtime service
+account's access to it. Never destroy it while chips on version 0 are in use.
 
-- **Keep an offline copy** encrypted with `age`, held by the same two custodians
-  in two separate places, made and verified with the same procedure as
-  `kek.age` above.
-- **Then disable its secret version** (`gcloud secrets versions disable`), which
-  is reversible, and remove the runtime service account's access to it. Do not
-  destroy it: every chip in the field is version 0.
-- As of 2026-10-26 the version is still enabled, until the offline copy is
-  confirmed. Its readers are the runtime service account and the project
-  owners. Revisions up to `hwb-backend-dev-00125` still mount it, so rolling
-  back to one of them needs the version enabled.
+State on the pilot:
+
+- As of 2026-10-28 the version is **disabled** and no service account can
+  read it; the project owners can re-enable it. Revisions up to
+  `hwb-backend-dev-00125` still mount it, so rolling back to one of them needs
+  the version enabled first.
+- No offline copy was made. Up to that date the pilot holds only synthetic
+  data, on NTAG215 test chips, so losing version 0 costs rewriting those
+  chips and nothing else. For the same reason **production must not import
+  this key**: it starts with a new KEK and a new keyring, and the new KEK gets
+  the custody above from day one.
 
 ### Checking a backup matches production
 

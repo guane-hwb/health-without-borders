@@ -12,6 +12,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.v1.api import api_router
+from app.core.app_version import HEADER as APP_VERSION_HEADER
 from app.core.config import settings
 from app.core.errors import ApiError
 from app.core.logging import setup_logging
@@ -123,7 +124,7 @@ if cors_origins:
         allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Authorization", "Content-Type", APP_VERSION_HEADER],
     )
 
 # Outside rate limiting and CORS: oversized bodies are refused before any

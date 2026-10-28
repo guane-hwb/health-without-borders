@@ -212,6 +212,52 @@ class TestTokenRefresh:
 # H4: Tests for logout / token revocation
 # ---------------------------------------------------------------------------
 
+class TestAppVersionLogging:
+    """N5: login and refresh log the build the client reports in X-App-Version."""
+
+    def _logged(self, app_log, prefix):
+        return [r.getMessage() for r in app_log.records if r.getMessage().startswith(prefix)]
+
+    def test_login_and_refresh_log_the_app_version(self, client: TestClient, db_session, app_log):
+        org = _create_org(db_session)
+        _create_user(db_session, org.id, "doctor@hwb.org", "SecurePass123")
+        headers = {"X-App-Version": "1.2.3+45 (android)"}
+
+        tokens = client.post(
+            "/api/v1/login/access-token",
+            data={"username": "doctor@hwb.org", "password": "SecurePass123"},
+            headers=headers,
+        ).json()
+        client.post(
+            "/api/v1/login/refresh",
+            json={"refresh_token": tokens["refresh_token"]},
+            headers=headers,
+        )
+
+        assert self._logged(app_log, "Login ") == [
+            "Login user_id=user-login-test role=doctor app_version=1.2.3+45 (android)"
+        ]
+        assert self._logged(app_log, "Refresh user_id") == [
+            "Refresh user_id=user-login-test role=doctor app_version=1.2.3+45 (android)"
+        ]
+
+    def test_a_missing_header_is_logged_as_none(self, client: TestClient, db_session, app_log):
+        org = _create_org(db_session)
+        _create_user(db_session, org.id, "doctor@hwb.org", "SecurePass123")
+
+        assert _login(client).status_code == 200
+        assert self._logged(app_log, "Login ") == [
+            "Login user_id=user-login-test role=doctor app_version=none"
+        ]
+
+    def test_a_failed_login_logs_no_version(self, client: TestClient, db_session, app_log):
+        org = _create_org(db_session)
+        _create_user(db_session, org.id, "doctor@hwb.org", "SecurePass123")
+
+        assert _login(client, password="wrong").status_code == 401
+        assert self._logged(app_log, "Login ") == []
+
+
 class TestLogout:
     def _setup_and_login(self, client, db_session):
         org = _create_org(db_session)

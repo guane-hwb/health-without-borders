@@ -16,6 +16,7 @@ from app.api.deps import (
     user_for_token,
 )
 from app.core import security
+from app.core.app_version import app_version
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.db.models import RevokedToken
@@ -130,6 +131,9 @@ def login_access_token(
     - **username**: The user's registered email address.
     - **password**: The user's current password.
 
+    Optional header `X-App-Version: 1.2.3+45 (android)`: the app build, logged
+    with the account here and on refresh so the fleet can be audited.
+
     **Responses:**
     - `200`: Login successful. Returns `access_token`, `refresh_token`,
              `token_type`, and `expires_in`.
@@ -162,6 +166,12 @@ def login_access_token(
 
     # 2. Create token pair
     access_token, refresh_token = security.token_pair_for(user)
+    logger.info(
+        "Login user_id=%s role=%s app_version=%s",
+        user.id,
+        getattr(user.role, "value", user.role),
+        app_version(request),
+    )
 
     return TokenPair(
         access_token=access_token,
@@ -175,6 +185,7 @@ def login_access_token(
 
 @router.post("/login/refresh", response_model=TokenPair)
 def refresh_access_token(
+    request: Request,
     body: RefreshRequest,
     db: Session = Depends(get_db),
 ) -> Any:
@@ -245,6 +256,13 @@ def refresh_access_token(
 
     # Opportunistically drop revocation rows that are already expired.
     _purge_expired_revoked_tokens(db)
+
+    logger.info(
+        "Refresh user_id=%s role=%s app_version=%s",
+        user.id,
+        getattr(user.role, "value", user.role),
+        app_version(request),
+    )
 
     return TokenPair(
         access_token=new_access,
