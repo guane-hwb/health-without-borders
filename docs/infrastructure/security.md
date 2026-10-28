@@ -44,13 +44,13 @@ Role-Based Access Control (RBAC). Tenant isolation applies to **organization and
 | `doctor` | Organization | Full clinical access: read records, create patients, add medical history |
 | `nurse` | Organization | Read records; add vaccines and change allergies, background, guardians and demographics. Cannot add visits (consultations) |
 
-### 2.2. Minors: the Guardian's Card
+### 2.2. Minors: the Guardian Device
 
 For physical security in refugee or transit camps, the bracelet scan
 (`POST /patients/scan`) applies this rule:
 
-- **Adults (18+):** Scanning the bracelet returns the medical record.
-- **Minors (<18), and patients with no recorded birth date:** the scan is refused (`403`, `code` `guardian_required` or `guardian_mismatch`) unless the card of one of the two registered guardians is scanned too and matches.
+- **Adults (18+):** Scanning the patient device returns the medical record.
+- **Minors (<18), and patients with no recorded birth date:** the scan is refused (`403`, `code` `guardian_required` or `guardian_mismatch`) unless the device of one of the two registered guardians is scanned too and matches.
 
 What the server checks is that the guardian device **UID** sent matches one of
 the registered ones (`guardian_factor` in the access log). It cannot tell that the
