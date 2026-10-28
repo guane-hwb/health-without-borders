@@ -20,7 +20,7 @@ This repository contains the source code for the Backend API of the Health Witho
 * **AI-Assisted Medical Coding:** Gemini LLM integration for automated ICD-10/11 code extraction from clinical notes and family history coding.
 * **Offline-First:** Optimized sync endpoints for mobile devices with limited connectivity.
 * **Delta Sync:** Only new FHIR bundles are generated and sent — no duplicate transmissions.
-* **Robust Security:** JWT authentication, RBAC with multi-tenancy, hardware 2FA for minors via NFC bracelets.
+* **Robust Security:** JWT authentication, RBAC with multi-tenancy, and a guardian device check before a minor's record is returned from a scan of the patient device (the server checks the guardian device's UID; it is not a second factor).
 * **Serverless Architecture:** Deployed on Google Cloud Run for automatic scalability.
 
 ---

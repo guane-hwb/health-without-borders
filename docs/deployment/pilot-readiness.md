@@ -83,15 +83,17 @@ Before going live with real patients, validate the full pipeline with synthetic 
 ### 4.2. NFC round-trip test
 
 1. Sync a patient as above.
-2. Write the patient's triage data to an NFC wristband.
-3. On a different device, scan the wristband via `POST /api/v1/patients/scan` (`{"device_uid": ..., "guardian_device_uid": ...}`). The legacy `GET /api/v1/patients/scan/{device_uid}` still works, but it leaves the bracelet UID in Cloud Run's request logs.
+2. Write the patient's triage data to the patient device (NFC chip).
+3. On a different phone, scan the patient device via `POST /api/v1/patients/scan` (`{"device_uid": ..., "guardian_device_uid": ...}`). The legacy `GET /api/v1/patients/scan/{device_uid}` still works, but it leaves the patient device's UID in Cloud Run's request logs.
 4. Verify the patient record is returned correctly.
 
-### 4.3. Guardian 2FA test
+### 4.3. Guardian device check
 
-1. Register a minor patient with a guardian's NFC card.
-2. Attempt to scan the minor's wristband without the guardian card → verify access is denied.
-3. Scan with the guardian card present → verify access is granted.
+1. Register a minor patient with a guardian device.
+2. Scan the minor's patient device without the guardian device → verify access is denied (`403 guardian_required`).
+3. Scan with the guardian device → verify access is granted.
+
+This checks that the UID of a registered guardian device is sent, not that the device is physically present: it is not a second factor ([security.md § 2.2](../infrastructure/security.md#22-minors-the-guardian-device)).
 
 ### 4.4. Nurse restriction test
 
