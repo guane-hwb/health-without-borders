@@ -221,6 +221,20 @@ class TestApplicationStartup:
         assert preflight.status_code == 200
         assert preflight.headers["access-control-allow-origin"] == "https://admin.hwb.org"
 
+        # The web build sends X-App-Version (N5); without it in the allowlist
+        # the browser would refuse every request.
+        with_version = client.options(
+            "/api/v1/login/access-token",
+            headers={
+                "Origin": "https://admin.hwb.org",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type, x-app-version",
+            },
+        )
+        assert with_version.status_code == 200
+        allowed = with_version.headers["access-control-allow-headers"].lower()
+        assert "x-app-version" in allowed
+
         rejected = client.options(
             "/health-check",
             headers={
