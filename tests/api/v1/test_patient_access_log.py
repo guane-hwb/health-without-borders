@@ -95,9 +95,10 @@ def test_sync_scan_and_search_are_recorded(client, db_session, people):
     _register(client, people)
     _as(people, "doc_b")
 
-    scan = client.get(
-        f"/api/v1/patients/scan/{MINOR_UID}", headers={"X-Guardian-Device-UID": GUARDIAN_UID}
-    )
+    scan = client.post("/api/v1/patients/scan", json={
+        "device_uid": MINOR_UID,
+        "guardian_device_uid": GUARDIAN_UID,
+    })
     search = client.post(
         "/api/v1/patients/search", json={**SEARCH, "access_reason": "Urgencias, sin acudiente"}
     )
@@ -136,7 +137,9 @@ def test_adult_scan_is_recorded_without_guardian_factor(client, db_session, peop
     _as(people, "doc_a")
     assert client.post("/api/v1/patients/sync", json=payload).status_code == 201
 
-    assert client.get(f"/api/v1/patients/scan/{MINOR_UID}").status_code == 200
+    assert client.post("/api/v1/patients/scan", json={
+        "device_uid": MINOR_UID,
+    }).status_code == 200
 
     assert _log(db_session)[-1].guardian_factor is False
 
@@ -145,8 +148,12 @@ def test_refused_or_missing_reads_are_not_recorded(client, db_session, people):
     _register(client, people)
     _as(people, "doc_b")
 
-    assert client.get(f"/api/v1/patients/scan/{MINOR_UID}").status_code == 403
-    assert client.get("/api/v1/patients/scan/UNKNOWN").status_code == 404
+    assert client.post("/api/v1/patients/scan", json={
+        "device_uid": MINOR_UID,
+    }).status_code == 403
+    assert client.post("/api/v1/patients/scan", json={
+        "device_uid": "UNKNOWN",
+    }).status_code == 404
     assert client.post(
         "/api/v1/patients/search", json={**SEARCH, "document_number": "OTRO-999"}
     ).status_code == 404
@@ -176,9 +183,10 @@ def test_scan_without_birth_date_or_guardian_is_not_a_500(client, db_session, pe
     db_session.commit()
     _as(people, "doc_a")
 
-    response = client.get(
-        f"/api/v1/patients/scan/{MINOR_UID}", headers={"X-Guardian-Device-UID": GUARDIAN_UID}
-    )
+    response = client.post("/api/v1/patients/scan", json={
+        "device_uid": MINOR_UID,
+        "guardian_device_uid": GUARDIAN_UID,
+    })
 
     # Unknown age is treated as a minor, and no guardian card matches.
     assert response.status_code == 403

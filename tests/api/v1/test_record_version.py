@@ -17,7 +17,7 @@ from app.schemas.patient import PatientFullRecord
 from tests.api.v1.test_patients import MOCK_PATIENT_PAYLOAD, VISIT_1, MockUser
 
 UID = MOCK_PATIENT_PAYLOAD["device_uid"]
-GUARDIAN = {"X-Guardian-Device-UID": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]}
+GUARDIAN_UID = MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]
 PENICILINA = [{"category": "01", "allergen": "Penicilina"}]
 
 
@@ -45,7 +45,10 @@ def test_scan_and_search_return_the_version_without_storing_it(client, db_sessio
     _sync(client)
     _sync(client, baseVersion=1)
 
-    scan = client.get(f"/api/v1/patients/scan/{UID}", headers=GUARDIAN)
+    scan = client.post("/api/v1/patients/scan", json={
+        "device_uid": UID,
+        "guardian_device_uid": GUARDIAN_UID,
+    })
     info = MOCK_PATIENT_PAYLOAD["patientInfo"]
     search = client.post("/api/v1/patients/search", json={
         "document_number": info["identification"]["documentNumber"], "birth_date": info["dob"],

@@ -6,9 +6,10 @@ import traceback
 
 from app.core.config import settings
 
-# Path segment after /patients/scan/ is a bracelet UID, which the project
-# classifies as PHI (docs/infrastructure/security.md). Access logs print the
-# raw request path, so it is masked there.
+# Path segment after /patients/scan/ is a patient device UID, which the project
+# classifies as PHI (docs/infrastructure/security.md). The GET route that put
+# it there is gone, but an old client calling it would still get its path into
+# the access log, so it stays masked.
 _SCAN_UID_IN_PATH = re.compile(r"(/patients/scan/)[^\s/?\"]+")
 
 
@@ -48,7 +49,7 @@ class PhiSafeFormatter(logging.Formatter):
 
 
 class ScanUidAccessFilter(logging.Filter):
-    """Mask the bracelet UID that /patients/scan/{uid} puts in access logs."""
+    """Mask the patient device UID in a /patients/scan/{uid} access log line."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.args, tuple):

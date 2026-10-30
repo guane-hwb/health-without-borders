@@ -25,7 +25,7 @@ def _assert_hardened(response):
 def test_api_responses_are_never_cached(client: TestClient):
     app.dependency_overrides[get_current_user] = lambda: MockUser()
 
-    ok = client.get("/api/v1/patients/scan/NO-EXISTE")
+    ok = client.post("/api/v1/patients/scan", json={"device_uid": "NO-EXISTE"})
     denied = client.post("/api/v1/login/access-token", data={"username": "x@y.org", "password": "z"})
 
     for response in (ok, denied):

@@ -168,7 +168,7 @@ def test_scan_retired_tag_returns_410(client: TestClient):
     assert replaced.status_code == 201
 
     _override_doctor()
-    resp = client.get("/api/v1/patients/scan/TAG-OLD-001")
+    resp = client.post("/api/v1/patients/scan", json={"device_uid": "TAG-OLD-001"})
     _clear_overrides()
 
     assert resp.status_code == 410
@@ -179,7 +179,7 @@ def test_scan_retired_tag_returns_410(client: TestClient):
 
 def test_scan_unknown_tag_still_returns_404(client: TestClient):
     _override_doctor()
-    resp = client.get("/api/v1/patients/scan/NEVER-SEEN-TAG")
+    resp = client.post("/api/v1/patients/scan", json={"device_uid": "NEVER-SEEN-TAG"})
     _clear_overrides()
 
     assert resp.status_code == 404

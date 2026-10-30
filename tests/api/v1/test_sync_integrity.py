@@ -40,7 +40,7 @@ from tests.api.v1.test_patients import (
     MockUser,
 )
 
-GUARDIAN_HEADER = {"X-Guardian-Device-UID": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]}
+GUARDIAN_UID = MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]
 
 
 def _sync(client, payload):
@@ -193,9 +193,15 @@ def test_stale_payload_keeps_allergy_and_current_bracelet(client, db_session):
     assert [a["allergen"] for a in record["allergies"]] == ["Penicilina"]
     assert [v["encounterIdentifier"] for v in record["medicalHistory"]] == ["enc-visit-001"]
 
-    headers = {"X-Guardian-Device-UID": "GUARDIAN-UID-001"}
-    assert client.get("/api/v1/patients/scan/UID-PULSERA-NUEVA", headers=headers).status_code == 200
-    assert client.get("/api/v1/patients/scan/04:A2:TEST:UID", headers=headers).status_code == 410
+    guardian = "GUARDIAN-UID-001"
+    assert client.post("/api/v1/patients/scan", json={
+        "device_uid": "UID-PULSERA-NUEVA",
+        "guardian_device_uid": guardian,
+    }).status_code == 200
+    assert client.post("/api/v1/patients/scan", json={
+        "device_uid": "04:A2:TEST:UID",
+        "guardian_device_uid": guardian,
+    }).status_code == 410
 
 
 def test_stale_guardian_card_does_not_come_back(client, db_session):
@@ -289,7 +295,10 @@ def test_guardian_card_cannot_be_replaced_with_only_the_bracelet_uid(client, db_
 
     assert response.status_code == 409
     assert response.json()["code"] == "identity_mismatch"
-    legit = client.get("/api/v1/patients/scan/04:A2:TEST:UID", headers=GUARDIAN_HEADER)
+    legit = client.post("/api/v1/patients/scan", json={
+        "device_uid": "04:A2:TEST:UID",
+        "guardian_device_uid": GUARDIAN_UID,
+    })
     assert legit.status_code == 200
     assert legit.json()["guardianInfo"]["name"] == "María Pérez"
 
@@ -439,9 +448,10 @@ def test_same_guardian_uses_the_strongest_shared_identifier(server, incoming, sa
 
 def _scan(client):
     app.dependency_overrides[get_current_user] = lambda: MockUser()
-    return client.get(
-        f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}", headers=GUARDIAN_HEADER
-    ).json()
+    return client.post("/api/v1/patients/scan", json={
+        "device_uid": MOCK_PATIENT_PAYLOAD["device_uid"],
+        "guardian_device_uid": GUARDIAN_UID,
+    }).json()
 
 
 def test_edit_of_a_synced_visit_is_reported(client, db_session, app_log):

@@ -103,7 +103,7 @@ Offline break-glass accesses (a minor's record opened on the device without the 
 
 Logs never carry a bracelet or guardian-card UID or a document number, not even in part: they show a reference (`ref:` plus 10 hex characters of an HMAC keyed with `SECRET_KEY`), the same for every line about the same value. At startup, the log warns when `SECRET_KEY` is shorter than 32 bytes or is the example value from `.env.example` (never showing the key).
 
-Use `POST /api/v1/patients/scan` (UIDs in the body) rather than `GET /api/v1/patients/scan/{device_uid}`: a bracelet UID in the URL ends up in Cloud Run's request logs.
+Scanning is `POST /api/v1/patients/scan`, with both UIDs in the body: a UID in the URL ends up in Cloud Run's request logs. The old `GET /api/v1/patients/scan/{device_uid}` was removed on 2026-10-30, once the request logs showed no client calling it (the app has used `POST` since 2026-10-09).
 
 ---
 

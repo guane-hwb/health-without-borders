@@ -14,7 +14,7 @@ from sqlalchemy import text
 from tests.api.v1.test_patients import MOCK_PATIENT_PAYLOAD, VISIT_1
 
 UID = MOCK_PATIENT_PAYLOAD["device_uid"]
-GUARDIAN = {"X-Guardian-Device-UID": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]}
+GUARDIAN_UID = MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]
 
 
 def _payload(**top):
@@ -28,7 +28,8 @@ def _sync(api, tokens, payload):
 
 
 def _scan(api, tokens, uid=UID):
-    return api.get(f"/api/v1/patients/scan/{uid}", headers={**tokens["headers"], **GUARDIAN})
+    return api.post("/api/v1/patients/scan", headers=tokens["headers"],
+                    json={"device_uid": uid, "guardian_device_uid": GUARDIAN_UID})
 
 
 def test_other_nationality_fits_the_column(api, staff, db):

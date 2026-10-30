@@ -194,7 +194,7 @@ Deactivation (`PATCH` with `is_active: false`) is the way to retire a user or an
 
 | Endpoint | `superadmin` | `org_admin` | `doctor` | `nurse` |
 |---|---|---|---|---|
-| `POST /patients/scan` (and the legacy `GET /patients/scan/{device_uid}`) | ❌ | ✅ | ✅ Global | ✅ Global |
+| `POST /patients/scan` | ❌ | ✅ | ✅ Global | ✅ Global |
 | `POST /patients/sync` | ❌ | ❌ | ✅ Full record | ✅ All but new visits¹ |
 | `POST /patients/search` | ❌ | ✅ | ✅ Global | ✅ Global |
 | `GET /patients/retired-devices` | ❌ | ✅ | ✅ Global | ✅ Global |

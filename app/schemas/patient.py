@@ -944,15 +944,15 @@ class PatientSearchRequest(BaseModel):
 
 class PatientScanRequest(BaseModel):
     """
-    Body of ``POST /patients/scan``: the bracelet UID travels in the body, not
-    the URL, so it never reaches access or proxy logs (the project treats
-    device UIDs as PHI).
+    Body of ``POST /patients/scan``: the patient device UID travels in the
+    body, not the URL, so it never reaches access or proxy logs (the project
+    treats device UIDs as PHI).
     """
     device_uid: str = Field(..., min_length=1, max_length=128,
-                            description="UID de hardware de la manilla del paciente")
+                            description="UID de hardware del dispositivo del paciente")
     guardian_device_uid: Optional[str] = Field(
         None, max_length=128,
-        description="UID de la tarjeta del acudiente; obligatorio para menores",
+        description="UID del dispositivo del guardián; obligatorio para menores",
     )
 
 
