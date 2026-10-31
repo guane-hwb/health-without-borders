@@ -939,10 +939,10 @@ def test_scan_success(client: TestClient):
     """Scanning a registered device with guardian UID returns the patient record."""
     _sync_patient(client)
 
-    response = client.get(
-        f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}",
-        headers={"X-Guardian-Device-UID": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]},
-    )
+    response = client.post("/api/v1/patients/scan", json={
+        "device_uid": MOCK_PATIENT_PAYLOAD["device_uid"],
+        "guardian_device_uid": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"],
+    })
     _clear_overrides()
 
     assert response.status_code == 200
@@ -956,7 +956,9 @@ def test_scan_success(client: TestClient):
 def test_scan_not_found(client: TestClient):
     """Scanning an unregistered device returns 404."""
     _override_doctor()
-    response = client.get("/api/v1/patients/scan/NONEXISTENT-UID")
+    response = client.post("/api/v1/patients/scan", json={
+        "device_uid": "NONEXISTENT-UID",
+    })
     _clear_overrides()
 
     assert response.status_code == 404
@@ -967,9 +969,9 @@ def test_scan_minor_requires_guardian(client: TestClient):
     """Scanning a minor's bracelet without guardian UID returns 403."""
     _sync_patient(client)
 
-    response = client.get(
-        f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}"
-    )
+    response = client.post("/api/v1/patients/scan", json={
+        "device_uid": MOCK_PATIENT_PAYLOAD["device_uid"],
+    })
     _clear_overrides()
 
     assert response.status_code == 403
@@ -980,10 +982,10 @@ def test_scan_minor_wrong_guardian(client: TestClient):
     """Scanning a minor's bracelet with a wrong guardian UID returns 403."""
     _sync_patient(client)
 
-    response = client.get(
-        f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}",
-        headers={"X-Guardian-Device-UID": "WRONG-GUARDIAN-UID"},
-    )
+    response = client.post("/api/v1/patients/scan", json={
+        "device_uid": MOCK_PATIENT_PAYLOAD["device_uid"],
+        "guardian_device_uid": "WRONG-GUARDIAN-UID",
+    })
     _clear_overrides()
 
     assert response.status_code == 403
@@ -1009,10 +1011,10 @@ def test_scan_minor_accepts_guardian2_uid(client: TestClient):
         client.post("/api/v1/patients/sync", json=payload_with_g2)
 
     # Scan using guardian2's UID
-    response = client.get(
-        f"/api/v1/patients/scan/{payload_with_g2['device_uid']}",
-        headers={"X-Guardian-Device-UID": "GUARDIAN2-UID-001"},
-    )
+    response = client.post("/api/v1/patients/scan", json={
+        "device_uid": payload_with_g2["device_uid"],
+        "guardian_device_uid": "GUARDIAN2-UID-001",
+    })
     _clear_overrides()
 
     assert response.status_code == 200
@@ -1607,10 +1609,10 @@ def test_scan_patient_from_different_org(client: TestClient):
 
     app.dependency_overrides[get_current_user] = lambda: MockDoctorOrgB()
 
-    response = client.get(
-        f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}",
-        headers={"X-Guardian-Device-UID": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"]},
-    )
+    response = client.post("/api/v1/patients/scan", json={
+        "device_uid": MOCK_PATIENT_PAYLOAD["device_uid"],
+        "guardian_device_uid": MOCK_PATIENT_PAYLOAD["guardianInfo"]["device_uid"],
+    })
     _clear_overrides()
 
     assert response.status_code == 200
@@ -1716,10 +1718,23 @@ class MockSuperAdmin:
     organization_id = "org-hq"
 
 
+def test_scan_by_get_is_gone(client: TestClient):
+    """The UID never goes in a URL: the old GET route no longer exists."""
+    _sync_patient(client)
+
+    response = client.get(f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}")
+    _clear_overrides()
+
+    assert response.status_code in (404, 405)
+    assert "patientInfo" not in response.text
+
+
 def test_scan_forbidden_for_superadmin(client: TestClient):
     """Superadmins manage tenants; they never read clinical records."""
     app.dependency_overrides[get_current_user] = lambda: MockSuperAdmin()
-    response = client.get(f"/api/v1/patients/scan/{MOCK_PATIENT_PAYLOAD['device_uid']}")
+    response = client.post("/api/v1/patients/scan", json={
+        "device_uid": MOCK_PATIENT_PAYLOAD["device_uid"],
+    })
     _clear_overrides()
 
     assert response.status_code == 403

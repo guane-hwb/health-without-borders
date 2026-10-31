@@ -84,7 +84,7 @@ Before going live with real patients, validate the full pipeline with synthetic 
 
 1. Sync a patient as above.
 2. Write the patient's triage data to the patient device (NFC chip).
-3. On a different phone, scan the patient device via `POST /api/v1/patients/scan` (`{"device_uid": ..., "guardian_device_uid": ...}`). The legacy `GET /api/v1/patients/scan/{device_uid}` still works, but it leaves the patient device's UID in Cloud Run's request logs.
+3. On a different phone, scan the patient device via `POST /api/v1/patients/scan` (`{"device_uid": ..., "guardian_device_uid": ...}`).
 4. Verify the patient record is returned correctly.
 
 ### 4.3. Guardian device check

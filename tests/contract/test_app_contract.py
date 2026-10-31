@@ -124,12 +124,8 @@ def test_scan_returns_what_the_app_reads(client, db_session, registered):
         "device_uid": payload["device_uid"],
         "guardian_device_uid": payload["guardianInfo"]["device_uid"],
     })
-    legacy = client.get(
-        f"/api/v1/patients/scan/{payload['device_uid']}",
-        headers={"X-Guardian-Device-UID": payload["guardianInfo"]["device_uid"]},
-    )
 
-    assert response.status_code == legacy.status_code == 200
+    assert response.status_code == 200
     body = response.json()
     for key in ("patientId", "device_uid", "patientInfo", "guardianInfo", "allergies",
                 "medicalHistory", "vaccinationRecord", "recordVersion"):
@@ -143,7 +139,9 @@ def test_scan_returns_what_the_app_reads(client, db_session, registered):
 def test_minor_scan_without_card_uses_the_text_the_app_matches(client, db_session, registered):
     """The installed app detects this 403 by finding 'guardian' in the message."""
     _as(MockUser)
-    response = client.get(f"/api/v1/patients/scan/{fixture('register_minor')['device_uid']}")
+    response = client.post("/api/v1/patients/scan", json={
+        "device_uid": fixture("register_minor")["device_uid"],
+    })
 
     assert response.status_code == 403
     assert "guardian" in response.json()["detail"].lower()

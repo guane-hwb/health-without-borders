@@ -3,7 +3,7 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -98,45 +98,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.get("/scan/{device_uid}", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
-async def get_patient_by_device_uid_scan(
-    device_uid: str, 
-    guardian_device_uid: Optional[str] = Header(None, alias="X-Guardian-Device-UID", description="Scanned ID from guardian's bracelet"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Retrieve a patient's full medical record by scanning their NFC tag or barcode.
-
-    Prefer `POST /patients/scan`, which carries the bracelet UID in the body:
-    in this route it is part of the URL and therefore of access and proxy logs.
-
-    **Guardian 2FA for minors:**
-    If the patient is under 18 years old, the `X-Guardian-Device-UID` header
-    becomes mandatory. The scanned guardian tag must match the one registered in the
-    patient's record. Access is denied if they do not match. The value travels in a
-    header (not the URL) so it does not leak into access logs, proxies, or browser history.
-
-    Every successful scan is recorded in the patient access log.
-
-    **Parameters:**
-    - `device_uid` (path): The hardware identifier scanned from the patient's bracelet.
-    - `X-Guardian-Device-UID` (header, conditional): Required only if patient is a minor.
-
-    **Allowed roles:** `doctor`, `nurse`, `org_admin`.
-
-    **Responses:**
-    - `200`: Full patient record returned.
-    - `403`: Caller is not `doctor`, `nurse` or `org_admin`.
-    - `403`: Patient is a minor and the `X-Guardian-Device-UID` header was not provided.
-    - `403`: Patient is a minor and guardian tag does not match.
-    - `404`: No patient registered with that device UID.
-    - `410`: The tag was retired (lost/damaged/replaced) and no longer belongs to
-      HWB. Body: `{"code": "device_retired", "reason": ..., "message": ...}`.
-    """
-    return await _scan(device_uid, guardian_device_uid, db, current_user)
-
-
 @router.post("/scan", response_model=PatientFullRecord, status_code=status.HTTP_200_OK)
 async def scan_patient(
     body: PatientScanRequest,
@@ -144,9 +105,34 @@ async def scan_patient(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Same as `GET /patients/scan/{device_uid}`, with both UIDs in the body so
-    neither appears in any URL or access log. Same roles, guardian rule,
-    access logging and responses.
+    Retrieve a patient's full medical record by scanning their patient device.
+
+    Both UIDs travel in the body, so neither appears in any URL or access log.
+    The old `GET /patients/scan/{device_uid}` put the patient device UID in the
+    URL and was removed once no installed build called it.
+
+    **Guardian device check for minors:**
+    If the patient is under 18 (or has no birth date), `guardian_device_uid`
+    is required and must match a guardian device registered in the record.
+
+    Every successful scan is recorded in the patient access log.
+
+    **Body:**
+    - `device_uid`: the UID read from the patient device.
+    - `guardian_device_uid` (conditional): the UID read from the guardian
+      device. Required only for minors.
+
+    **Allowed roles:** `doctor`, `nurse`, `org_admin`.
+
+    **Responses:**
+    - `200`: Full patient record returned.
+    - `403`: Caller is not `doctor`, `nurse` or `org_admin`.
+    - `403` `guardian_required`: Patient is a minor and no guardian device UID
+      was sent.
+    - `403`: Patient is a minor and the guardian device UID does not match.
+    - `404`: No patient registered with that device UID.
+    - `410`: The device was retired (lost/damaged/replaced) and no longer
+      belongs to HWB. Body: `{"code": "device_retired", "reason": ..., "message": ...}`.
     """
     return await _scan(body.device_uid, body.guardian_device_uid, db, current_user)
 
