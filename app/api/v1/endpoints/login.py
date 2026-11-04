@@ -182,6 +182,7 @@ def login_access_token(
             role=user.role,
             db=db,
             must_change_password=bool(user.must_change_password),
+            browser=security.is_browser_request(request),
         ),
         must_change_password=bool(user.must_change_password),
     )
@@ -281,6 +282,7 @@ def refresh_access_token(
             role=user.role,
             db=db,
             must_change_password=bool(user.must_change_password),
+            browser=security.is_browser_request(request),
         ),
         must_change_password=bool(user.must_change_password),
     )
