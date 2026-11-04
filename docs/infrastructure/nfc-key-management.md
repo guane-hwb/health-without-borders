@@ -32,6 +32,14 @@ only shows the password-change screen in that state, and the response to the
 change delivers the ring. A device that already holds a ring keeps it: this
 stops new deliveries, it removes nothing.
 
+A browser gets no keys from any of those responses: it has no NFC radio, so the
+web build never uses them, and a cross-site script could read them from the
+response. The backend recognizes a browser by `Sec-Fetch-Mode` or `Origin`,
+which a page's script cannot remove and the app on a phone does not send. This
+only protects the browser: a client outside one can omit both headers, so a
+stolen password of a `doctor` or `nurse` account still reaches the keys. Each
+withheld delivery logs `NFC keys withheld from a browser request`.
+
 | Setting | Meaning |
 |---|---|
 | `NFC_MASTER_KEY` | The original key. Registered as **version 0**. With `NFC_KEK`, only read by the first-start import (§ 4). |
@@ -452,8 +460,7 @@ retention policy it would need — remains open.
 ## 8. On the device
 
 - The keyring lives in the platform secure store (Keystore / Keychain). The
-  web build has none: there it is kept in memory only and is gone when the tab
-  closes.
+  web build holds none: the backend does not deliver keys to a browser (§ 2).
 - A login or refresh response without keys (a backend that could not read the
   ring, § 4) leaves the ring the device already holds in place. A refused
   refresh (`401`) signs the device out and wipes the ring with the rest of the

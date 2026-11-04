@@ -14,6 +14,7 @@ from app.core.rate_limit import limiter
 from app.core.security import (
     generate_temporary_password,
     get_password_hash,
+    is_browser_request,
     nfc_key_claims,
     token_pair_for,
     verify_password,
@@ -185,11 +186,13 @@ def get_users_by_organization(
 
 @router.get("/me", response_model=UserResponse)
 def get_current_user_profile(
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Return the current user's profile, including the NFC keyring so the
-    device can repopulate its in-memory key after a cold start."""
+    device can repopulate its in-memory key after a cold start. A browser gets
+    no keys."""
     return UserResponse(
         id=current_user.id,
         email=current_user.email,
@@ -202,6 +205,7 @@ def get_current_user_profile(
             role=current_user.role,
             db=db,
             must_change_password=bool(current_user.must_change_password),
+            browser=is_browser_request(request),
         ),
     )
 
@@ -351,7 +355,11 @@ def change_own_password(
         refresh_token=refresh,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         must_change_password=False,
-        **nfc_key_claims(role=current_user.role, db=db),
+        **nfc_key_claims(
+            role=current_user.role,
+            db=db,
+            browser=is_browser_request(request),
+        ),
     )
 
 

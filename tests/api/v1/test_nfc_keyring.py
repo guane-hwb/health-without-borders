@@ -385,6 +385,108 @@ class TestTemporaryPassword:
         assert me.json()["nfc_keyring"] == {"0": KEY_V0}
 
 
+class TestBrowserRequests:
+    """N12: a browser has no NFC radio, so it gets no keys."""
+
+    # What Chrome sends to the API, measured: with --disable-web-security there
+    # is no Origin, so Sec-Fetch-Mode has to count on its own.
+    BROWSER_HEADERS = [
+        {"Sec-Fetch-Mode": "cors"},
+        {"Origin": "http://localhost:7357"},
+        {"Sec-Fetch-Mode": "cors", "Origin": "https://app.example.org"},
+    ]
+
+    @pytest.fixture
+    def tokens(self, client: TestClient, db_session, clean_nfc_env):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+        _create_user(db_session, _create_org(db_session).id)
+        return _login(client)
+
+    @staticmethod
+    def _assert_no_keys(body: dict) -> None:
+        assert body["nfc_keyring"] is None
+        assert body["nfc_encryption_key"] is None
+        assert body["nfc_key_version"] is None
+
+    @pytest.mark.parametrize("headers", BROWSER_HEADERS)
+    def test_login_refresh_and_me_withhold_the_ring(
+        self, client: TestClient, tokens, headers
+    ):
+        login = client.post(
+            "/api/v1/login/access-token",
+            data={"username": "keyring@hwb.org", "password": "SecurePass123"},
+            headers=headers,
+        )
+        assert login.status_code == 200
+        self._assert_no_keys(login.json())
+
+        refreshed = client.post(
+            "/api/v1/login/refresh",
+            json={"refresh_token": login.json()["refresh_token"]},
+            headers=headers,
+        )
+        assert refreshed.status_code == 200
+        self._assert_no_keys(refreshed.json())
+
+        me = client.get(
+            "/api/v1/users/me",
+            headers={
+                "Authorization": f"Bearer {refreshed.json()['access_token']}",
+                **headers,
+            },
+        )
+        assert me.status_code == 200
+        self._assert_no_keys(me.json())
+
+    def test_changing_the_password_withholds_the_ring(self, client: TestClient, tokens):
+        changed = client.post(
+            "/api/v1/users/me/password",
+            headers={
+                "Authorization": f"Bearer {tokens['access_token']}",
+                "Sec-Fetch-Mode": "cors",
+            },
+            json={"current_password": "SecurePass123", "new_password": "una frase larga y propia"},
+        )
+
+        assert changed.status_code == 200
+        self._assert_no_keys(changed.json())
+
+    def test_a_script_cannot_claim_to_be_a_phone(self, client: TestClient, tokens):
+        login = client.post(
+            "/api/v1/login/access-token",
+            data={"username": "keyring@hwb.org", "password": "SecurePass123"},
+            headers={"Sec-Fetch-Mode": "cors", "X-App-Version": "1.0.0+2 (android)"},
+        )
+
+        assert login.status_code == 200
+        self._assert_no_keys(login.json())
+
+    def test_a_phone_still_gets_the_ring(self, client: TestClient, tokens):
+        assert tokens["nfc_keyring"] == {"0": KEY_V0}
+
+        refreshed = client.post(
+            "/api/v1/login/refresh",
+            json={"refresh_token": tokens["refresh_token"]},
+            headers={"X-App-Version": "1.0.0+2 (android)"},
+        )
+        assert refreshed.json()["nfc_keyring"] == {"0": KEY_V0}
+
+        me = client.get(
+            "/api/v1/users/me",
+            headers={"Authorization": f"Bearer {refreshed.json()['access_token']}"},
+        )
+        assert me.json()["nfc_keyring"] == {"0": KEY_V0}
+
+    def test_each_withheld_delivery_is_logged(self, client: TestClient, tokens, app_log):
+        client.post(
+            "/api/v1/login/refresh",
+            json={"refresh_token": tokens["refresh_token"]},
+            headers={"Sec-Fetch-Mode": "cors"},
+        )
+
+        assert "NFC keys withheld from a browser request role=doctor" in app_log.messages
+
+
 class TestDotenvKeys:
     """
     ``NFC_KEY_V<n>`` names are dynamic, so pydantic-settings never loads them

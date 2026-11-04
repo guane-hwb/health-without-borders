@@ -102,7 +102,10 @@ class UserResponse(UserBase):
     )
     nfc_keyring: Optional[dict[str, str]] = Field(
         None,
-        description="{version_str: hex} of every live NFC key, for offline reads",
+        description=(
+            "{version_str: hex} of every live NFC key, for offline reads. "
+            "Not delivered to a browser"
+        ),
     )
 
     class Config:

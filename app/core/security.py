@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Union
 
 import jwt
+from fastapi import Request
 from passlib.context import CryptContext
 
 from app.core.config import settings
@@ -156,10 +157,28 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
+def is_browser_request(request: Request) -> bool:
+    """
+    Whether a request comes from a web browser.
+
+    Browsers add ``Sec-Fetch-Mode`` to requests to an HTTPS or localhost
+    address, and a page's script cannot set, change or remove it. ``Origin``
+    covers browsers without it. Neither is enough alone: Chrome with
+    ``--disable-web-security`` sends no ``Origin``. The app on a phone
+    (``dart:io``) sends neither, and ``X-App-Version`` is no help because a
+    script can set it.
+
+    This is not access control: a client outside a browser can omit both
+    headers. It keeps NFC keys out of the reach of a script in the page.
+    """
+    return "sec-fetch-mode" in request.headers or "origin" in request.headers
+
+
 def nfc_key_claims(
     role: Optional[str] = None,
     db: Optional[Any] = None,
     must_change_password: bool = False,
+    browser: bool = False,
 ) -> dict[str, Any]:
     """
     Assemble the NFC key material handed to clients at login, refresh, and
@@ -175,6 +194,10 @@ def nfc_key_claims(
     seen by whoever set it, so it does not open the keys. The app does nothing
     but change it, and that response delivers the ring. A device that already
     holds a ring keeps it; this only stops new deliveries.
+
+    ``browser`` withholds the ring from the web build (see
+    ``is_browser_request``). A browser has no NFC radio, so it never uses the
+    keys, and a cross-site script could read them from the response.
 
     Returns a dict with three keys, matching the response schemas:
       - ``nfc_encryption_key``: the current version's hex key. Kept for
@@ -197,7 +220,10 @@ def nfc_key_claims(
     # ``role`` may arrive as a UserRole enum member or a plain string.
     role_value = getattr(role, "value", role)
 
-    if role_value in NFC_KEYLESS_ROLES or must_change_password:
+    if browser:
+        logger.info("NFC keys withheld from a browser request role=%s", role_value)
+
+    if role_value in NFC_KEYLESS_ROLES or must_change_password or browser:
         return {
             "nfc_encryption_key": None,
             "nfc_key_version": None,
