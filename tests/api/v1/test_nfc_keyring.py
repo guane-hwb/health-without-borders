@@ -297,6 +297,17 @@ class TestRoleGating:
             "nfc_keyring": None,
         }
 
+    def test_temporary_password_gets_no_key_material(self, clean_nfc_env):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+
+        claims = security.nfc_key_claims(role=UserRole.doctor, must_change_password=True)
+
+        assert claims == {
+            "nfc_encryption_key": None,
+            "nfc_key_version": None,
+            "nfc_keyring": None,
+        }
+
     def test_omitting_role_still_delivers(self, clean_nfc_env):
         clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
         assert security.nfc_key_claims()["nfc_keyring"] == {"0": KEY_V0}
@@ -321,6 +332,58 @@ class TestRoleGating:
 # ---------------------------------------------------------------------------
 # Keys declared in a .env file (local development)
 # ---------------------------------------------------------------------------
+
+class TestTemporaryPassword:
+    """N12: a password an administrator set does not open the keys."""
+
+    @pytest.fixture
+    def tokens(self, client: TestClient, db_session, clean_nfc_env):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+        user = _create_user(db_session, _create_org(db_session).id)
+        user.must_change_password = True
+        db_session.commit()
+        return _login(client)
+
+    @staticmethod
+    def _assert_no_keys(body: dict) -> None:
+        assert body["must_change_password"] is True
+        assert body["nfc_keyring"] is None
+        assert body["nfc_encryption_key"] is None
+        assert body["nfc_key_version"] is None
+
+    def test_login_refresh_and_me_withhold_the_ring(self, client: TestClient, tokens):
+        self._assert_no_keys(tokens)
+
+        refreshed = client.post(
+            "/api/v1/login/refresh", json={"refresh_token": tokens["refresh_token"]}
+        )
+        assert refreshed.status_code == 200
+        self._assert_no_keys(refreshed.json())
+
+        me = client.get(
+            "/api/v1/users/me",
+            headers={"Authorization": f"Bearer {refreshed.json()['access_token']}"},
+        )
+        assert me.status_code == 200
+        self._assert_no_keys(me.json())
+
+    def test_changing_the_password_delivers_the_ring(self, client: TestClient, tokens):
+        changed = client.post(
+            "/api/v1/users/me/password",
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+            json={"current_password": "SecurePass123", "new_password": "una frase larga y propia"},
+        )
+
+        assert changed.status_code == 200
+        body = changed.json()
+        assert body["must_change_password"] is False
+        assert body["nfc_keyring"] == {"0": KEY_V0}
+
+        me = client.get(
+            "/api/v1/users/me", headers={"Authorization": f"Bearer {body['access_token']}"}
+        )
+        assert me.json()["nfc_keyring"] == {"0": KEY_V0}
+
 
 class TestDotenvKeys:
     """

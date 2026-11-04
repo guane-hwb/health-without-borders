@@ -156,7 +156,11 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def nfc_key_claims(role: Optional[str] = None, db: Optional[Any] = None) -> dict[str, Any]:
+def nfc_key_claims(
+    role: Optional[str] = None,
+    db: Optional[Any] = None,
+    must_change_password: bool = False,
+) -> dict[str, Any]:
     """
     Assemble the NFC key material handed to clients at login, refresh, and
     ``/users/me``.
@@ -166,6 +170,11 @@ def nfc_key_claims(role: Optional[str] = None, db: Optional[Any] = None) -> dict
     accounts most worth phishing, and there is no reason for a stolen one to
     come with the material that decrypts every tag in the field. Omitting
     ``role`` delivers the keyring, which keeps existing callers working.
+
+    ``must_change_password`` withholds the ring too: a temporary password was
+    seen by whoever set it, so it does not open the keys. The app does nothing
+    but change it, and that response delivers the ring. A device that already
+    holds a ring keeps it; this only stops new deliveries.
 
     Returns a dict with three keys, matching the response schemas:
       - ``nfc_encryption_key``: the current version's hex key. Kept for
@@ -188,7 +197,7 @@ def nfc_key_claims(role: Optional[str] = None, db: Optional[Any] = None) -> dict
     # ``role`` may arrive as a UserRole enum member or a plain string.
     role_value = getattr(role, "value", role)
 
-    if role_value in NFC_KEYLESS_ROLES:
+    if role_value in NFC_KEYLESS_ROLES or must_change_password:
         return {
             "nfc_encryption_key": None,
             "nfc_key_version": None,

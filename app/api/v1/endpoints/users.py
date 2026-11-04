@@ -198,7 +198,11 @@ def get_current_user_profile(
         is_active=current_user.is_active,
         organization_id=current_user.organization_id,
         must_change_password=bool(current_user.must_change_password),
-        **nfc_key_claims(role=current_user.role, db=db),
+        **nfc_key_claims(
+            role=current_user.role,
+            db=db,
+            must_change_password=bool(current_user.must_change_password),
+        ),
     )
 
 
