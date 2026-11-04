@@ -18,7 +18,8 @@ class TokenPair(BaseModel):
     token_type: str = "bearer"
     expires_in: int  # Access token TTL in seconds
     # NFC key material, delivered at login and refresh so the device can read
-    # and write wristband data offline without a second round-trip.
+    # and write patient device data offline without a second round-trip. None
+    # while the account is on a temporary password (must_change_password).
     #   nfc_encryption_key : current version's hex key (backward compatible).
     #   nfc_key_version    : version to stamp into payloads when writing.
     #   nfc_keyring        : {version_str: hex} of every live key, so a device
@@ -27,7 +28,8 @@ class TokenPair(BaseModel):
     nfc_key_version: Optional[int] = None
     nfc_keyring: Optional[dict[str, str]] = None
     # The password was set by an administrator (new account or reset): the app
-    # should ask the user to choose their own through POST /users/me/password.
+    # asks the user to choose their own through POST /users/me/password, whose
+    # response delivers the NFC keys.
     must_change_password: bool = False
 
 

@@ -89,8 +89,9 @@ class UserResponse(UserBase):
     must_change_password: bool = Field(
         False,
         description=(
-            "The password was set by an administrator; the app should ask the "
-            "user to choose their own (POST /users/me/password)"
+            "The password was set by an administrator; the app asks the user "
+            "to choose their own (POST /users/me/password). No NFC key is "
+            "delivered until then"
         ),
     )
     nfc_encryption_key: Optional[str] = Field(

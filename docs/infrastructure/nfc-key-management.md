@@ -26,6 +26,12 @@ delivers the whole ring to `doctor` and `nurse` accounts at login, refresh,
 (`POST /users/me/password`). Devices decrypt with whichever
 version a chip names and encrypt with the current one.
 
+An account on a temporary password (`must_change_password`) gets no keys at
+login, refresh or `/users/me`, because whoever set the password saw it. The app
+only shows the password-change screen in that state, and the response to the
+change delivers the ring. A device that already holds a ring keeps it: this
+stops new deliveries, it removes nothing.
+
 | Setting | Meaning |
 |---|---|
 | `NFC_MASTER_KEY` | The original key. Registered as **version 0**. With `NFC_KEK`, only read by the first-start import (§ 4). |
