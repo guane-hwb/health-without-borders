@@ -274,15 +274,18 @@ def refresh_access_token(
         refresh_token=new_refresh,
         token_type="bearer",
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        # Deliver the keyring on refresh too. The client does persist it, but
-        # only for as long as this refresh token's window stays open, so a
-        # refresh is what renews its right to hold the keys — and it picks up a
-        # rotated current version without an extra /users/me round-trip.
+        # A refresh is how a device picks up a rotated or revoked key without an
+        # extra /users/me round-trip. A device that reports holding this exact
+        # ring does not get it again: the new refresh token alone renews its
+        # right to keep the keys it has.
         **security.nfc_key_claims(
             role=user.role,
             db=db,
             must_change_password=bool(user.must_change_password),
             browser=security.is_browser_request(request),
+            held_fingerprint=request.headers.get(
+                security.NFC_KEYRING_FINGERPRINT_HEADER
+            ),
         ),
         must_change_password=bool(user.must_change_password),
     )

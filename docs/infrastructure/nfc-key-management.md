@@ -40,6 +40,15 @@ only protects the browser: a client outside one can omit both headers, so a
 stolen password of a `doctor` or `nurse` account still reaches the keys. Each
 withheld delivery logs `NFC keys withheld from a browser request`.
 
+A device that already holds the ring does not receive it again. On a refresh or
+`/users/me`, the app can send `X-NFC-Keyring-Fingerprint`, a SHA-256 over the
+keys and the current version it holds. If it matches the ring, the response
+carries no keys and the backend logs `NFC keyring unchanged, not sent again`.
+Any change to the ring (rotation, revocation, a new keyring that also starts at
+version 0) changes the fingerprint, so the next refresh delivers it. A client
+that sends nothing, as builds up to 1.0.0+2 do, gets the ring as before. Login
+and the password change always deliver it.
+
 | Setting | Meaning |
 |---|---|
 | `NFC_MASTER_KEY` | The original key. Registered as **version 0**. With `NFC_KEK`, only read by the first-start import (§ 4). |
@@ -462,7 +471,8 @@ retention policy it would need — remains open.
 - The keyring lives in the platform secure store (Keystore / Keychain). The
   web build holds none: the backend does not deliver keys to a browser (§ 2).
 - A login or refresh response without keys (a backend that could not read the
-  ring, § 4) leaves the ring the device already holds in place. A refused
+  ring, § 4, or a ring the device already holds, § 2) leaves the ring the device
+  already holds in place. A refused
   refresh (`401`) signs the device out and wipes the ring with the rest of the
   secure store.
 - It is **bounded by the session window**: it is only served while the refresh
