@@ -487,6 +487,161 @@ class TestBrowserRequests:
         assert "NFC keys withheld from a browser request role=doctor" in app_log.messages
 
 
+class TestKeyringFingerprint:
+    # The app's test pins these same values: if a repository changes the
+    # format alone, its test fails instead of phones silently getting the ring
+    # on every refresh.
+    @pytest.mark.parametrize(
+        ("ring", "current", "expected"),
+        [
+            (
+                {0: KEY_V0, 1: KEY_V1},
+                1,
+                "b7c539062cef48a3632fb922bd08f8c4547698bc600a701e3795f32db1f98ff6",
+            ),
+            (
+                {0: KEY_V0},
+                None,
+                "b2553e649b119d8445a6c0ec187e646ae0ae8756413f50af50c97030abfc698f",
+            ),
+        ],
+    )
+    def test_pinned_vectors(self, ring, current, expected):
+        assert security.nfc_keyring_fingerprint(ring, current) == expected
+
+    def test_does_not_depend_on_insertion_order(self):
+        assert security.nfc_keyring_fingerprint(
+            {1: KEY_V1, 0: KEY_V0}, 1
+        ) == security.nfc_keyring_fingerprint({0: KEY_V0, 1: KEY_V1}, 1)
+
+    @pytest.mark.parametrize(
+        ("ring", "current"),
+        [
+            pytest.param({0: KEY_V2, 1: KEY_V1}, 1, id="same-version-new-key"),
+            pytest.param({0: KEY_V0, 1: KEY_V1}, 0, id="other-current-version"),
+            pytest.param({0: KEY_V0, 1: KEY_V1}, None, id="no-current-version"),
+            pytest.param({1: KEY_V1}, 1, id="version-revoked"),
+            pytest.param({0: KEY_V0, 1: KEY_V1, 2: KEY_V2}, 1, id="version-added"),
+        ],
+    )
+    def test_any_change_changes_it(self, ring, current):
+        held = security.nfc_keyring_fingerprint({0: KEY_V0, 1: KEY_V1}, 1)
+
+        assert security.nfc_keyring_fingerprint(ring, current) != held
+
+
+class TestOnlyWhenChanged:
+    """N12: a device that holds the ring does not get it again."""
+
+    @pytest.fixture
+    def tokens(self, client: TestClient, db_session, clean_nfc_env):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V0)
+        _create_user(db_session, _create_org(db_session).id)
+        return _login(client)
+
+    @staticmethod
+    def _held(ring=None, current=0) -> dict:
+        fingerprint = security.nfc_keyring_fingerprint(ring or {0: KEY_V0}, current)
+        return {security.NFC_KEYRING_FINGERPRINT_HEADER: fingerprint}
+
+    @staticmethod
+    def _refresh(client, tokens, headers) -> dict:
+        response = client.post(
+            "/api/v1/login/refresh",
+            json={"refresh_token": tokens["refresh_token"]},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        return response.json()
+
+    @staticmethod
+    def _me(client, tokens, headers) -> dict:
+        response = client.get(
+            "/api/v1/users/me",
+            headers={"Authorization": f"Bearer {tokens['access_token']}", **headers},
+        )
+        assert response.status_code == 200
+        return response.json()
+
+    @staticmethod
+    def _assert_no_keys(body: dict) -> None:
+        assert body["nfc_keyring"] is None
+        assert body["nfc_encryption_key"] is None
+        assert body["nfc_key_version"] is None
+
+    @staticmethod
+    def _assert_ring(body: dict, ring: dict, current: int = 0) -> None:
+        assert body["nfc_keyring"] == ring
+        assert body["nfc_key_version"] == current
+
+    def test_refresh_and_me_skip_a_ring_the_device_holds(self, client, tokens):
+        self._assert_no_keys(self._me(client, tokens, self._held()))
+
+        refreshed = self._refresh(client, tokens, self._held())
+
+        self._assert_no_keys(refreshed)
+        assert refreshed["access_token"]
+        assert refreshed["refresh_token"]
+
+    def test_a_client_that_sends_nothing_gets_the_ring(self, client, tokens):
+        self._assert_ring(self._me(client, tokens, {}), {"0": KEY_V0})
+        self._assert_ring(self._refresh(client, tokens, {}), {"0": KEY_V0})
+
+    @pytest.mark.parametrize(
+        "value", ["", "garbage", "B7C539062CEF48A3632FB922BD08F8C4", "ñ"]
+    )
+    def test_a_value_that_does_not_match_gets_the_ring(self, client, tokens, value):
+        # httpx encodes str headers as ascii by default; bytes reach the server
+        # as they would from any client.
+        headers = {security.NFC_KEYRING_FINGERPRINT_HEADER: value.encode("latin-1")}
+
+        self._assert_ring(self._refresh(client, tokens, headers), {"0": KEY_V0})
+
+    def test_a_new_version_reaches_a_device_on_the_old_ring(
+        self, client, tokens, clean_nfc_env
+    ):
+        clean_nfc_env.setenv("NFC_KEY_V1", KEY_V1)
+        clean_nfc_env.setattr(settings, "NFC_CURRENT_KEY_VERSION", 1)
+
+        self._assert_ring(
+            self._refresh(client, tokens, self._held()),
+            {"0": KEY_V0, "1": KEY_V1},
+            current=1,
+        )
+
+    def test_a_new_keyring_at_the_same_version_reaches_the_device(
+        self, client, tokens, clean_nfc_env
+    ):
+        clean_nfc_env.setattr(settings, "NFC_MASTER_KEY", KEY_V2)
+
+        self._assert_ring(self._refresh(client, tokens, self._held()), {"0": KEY_V2})
+
+    def test_login_always_delivers(self, client, tokens):
+        login = client.post(
+            "/api/v1/login/access-token",
+            data={"username": "keyring@hwb.org", "password": "SecurePass123"},
+            headers=self._held(),
+        )
+
+        assert login.status_code == 200
+        self._assert_ring(login.json(), {"0": KEY_V0})
+
+    def test_changing_the_password_always_delivers(self, client, tokens):
+        changed = client.post(
+            "/api/v1/users/me/password",
+            headers={"Authorization": f"Bearer {tokens['access_token']}", **self._held()},
+            json={"current_password": "SecurePass123", "new_password": "una frase larga y propia"},
+        )
+
+        assert changed.status_code == 200
+        self._assert_ring(changed.json(), {"0": KEY_V0})
+
+    def test_each_skipped_delivery_is_logged(self, client, tokens, app_log):
+        self._refresh(client, tokens, self._held())
+
+        assert "NFC keyring unchanged, not sent again role=doctor" in app_log.messages
+
+
 class TestDotenvKeys:
     """
     ``NFC_KEY_V<n>`` names are dynamic, so pydantic-settings never loads them

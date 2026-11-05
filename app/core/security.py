@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import secrets
 import uuid
@@ -18,6 +19,10 @@ logger = logging.getLogger(__name__)
 # With one symmetric key, a key that reads also writes: every device holding it
 # can forge devices (security review 2026-10-15, N9).
 NFC_KEYLESS_ROLES = frozenset({"superadmin", "org_admin"})
+
+# Sent by a device that holds a ring, so a refresh or /users/me need not send it
+# again (security review N12). See nfc_keyring_fingerprint.
+NFC_KEYRING_FINGERPRINT_HEADER = "X-NFC-Keyring-Fingerprint"
 
 # Password hashing context using bcrypt algorithm
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -174,11 +179,43 @@ def is_browser_request(request: Request) -> bool:
     return "sec-fetch-mode" in request.headers or "origin" in request.headers
 
 
+def nfc_keyring_fingerprint(ring: dict[int, str], current: Optional[int]) -> str:
+    """
+    SHA-256 of a ring as a device would hold it, in lowercase hex.
+
+    It covers the key bytes, not only the version numbers: a new keyring also
+    starts at version 0, and a device comparing versions alone would keep its
+    old key and go on writing chips with it. The keys are 32 random bytes, so
+    the digest reveals nothing about them.
+
+    The app computes the same value (``nfc_keyring.dart``), and a test in each
+    repository pins the same vectors. If the two ever disagree, the device just
+    keeps receiving the ring, as it does today.
+    """
+    canonical = "|".join(
+        [
+            "hwb-nfc-keyring:v1",
+            f"current={'' if current is None else current}",
+            *(f"{version}={ring[version]}" for version in sorted(ring)),
+        ]
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _no_key_claims() -> dict[str, Any]:
+    return {
+        "nfc_encryption_key": None,
+        "nfc_key_version": None,
+        "nfc_keyring": None,
+    }
+
+
 def nfc_key_claims(
     role: Optional[str] = None,
     db: Optional[Any] = None,
     must_change_password: bool = False,
     browser: bool = False,
+    held_fingerprint: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Assemble the NFC key material handed to clients at login, refresh, and
@@ -198,6 +235,11 @@ def nfc_key_claims(
     ``browser`` withholds the ring from the web build (see
     ``is_browser_request``). A browser has no NFC radio, so it never uses the
     keys, and a cross-site script could read them from the response.
+
+    ``held_fingerprint`` is what the device reports holding. When it matches
+    the ring, the ring is not sent again: the app keeps what it has when a
+    response carries no keys. Only refresh and ``/users/me`` pass it. Any
+    difference, or a client that sends nothing, gets the ring.
 
     Returns a dict with three keys, matching the response schemas:
       - ``nfc_encryption_key``: the current version's hex key. Kept for
@@ -224,19 +266,11 @@ def nfc_key_claims(
         logger.info("NFC keys withheld from a browser request role=%s", role_value)
 
     if role_value in NFC_KEYLESS_ROLES or must_change_password or browser:
-        return {
-            "nfc_encryption_key": None,
-            "nfc_key_version": None,
-            "nfc_keyring": None,
-        }
+        return _no_key_claims()
 
     ring, current_version = _resolve_keyring(db)
     if not ring:
-        return {
-            "nfc_encryption_key": None,
-            "nfc_key_version": None,
-            "nfc_keyring": None,
-        }
+        return _no_key_claims()
 
     current_key = ring.get(current_version) if current_version is not None else None
     if current_key is None:
@@ -247,9 +281,14 @@ def nfc_key_claims(
             sorted(ring.keys()),
         )
 
+    delivered_version = current_version if current_key is not None else None
+    if held_fingerprint == nfc_keyring_fingerprint(ring, delivered_version):
+        logger.info("NFC keyring unchanged, not sent again role=%s", role_value)
+        return _no_key_claims()
+
     return {
         "nfc_encryption_key": current_key,
-        "nfc_key_version": current_version if current_key is not None else None,
+        "nfc_key_version": delivered_version,
         "nfc_keyring": {str(v): k for v, k in sorted(ring.items())},
     }
 

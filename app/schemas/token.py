@@ -19,8 +19,9 @@ class TokenPair(BaseModel):
     expires_in: int  # Access token TTL in seconds
     # NFC key material, delivered at login and refresh so the device can read
     # and write patient device data offline without a second round-trip. None
-    # while the account is on a temporary password (must_change_password), and
-    # for a browser, which has no NFC radio.
+    # while the account is on a temporary password (must_change_password), for
+    # a browser, which has no NFC radio, and on a refresh by a device that
+    # reports holding this exact ring (X-NFC-Keyring-Fingerprint).
     #   nfc_encryption_key : current version's hex key (backward compatible).
     #   nfc_key_version    : version to stamp into payloads when writing.
     #   nfc_keyring        : {version_str: hex} of every live key, so a device

@@ -104,7 +104,8 @@ class UserResponse(UserBase):
         None,
         description=(
             "{version_str: hex} of every live NFC key, for offline reads. "
-            "Not delivered to a browser"
+            "Not delivered to a browser, or to a device that reports holding "
+            "this exact ring (X-NFC-Keyring-Fingerprint)"
         ),
     )
 
