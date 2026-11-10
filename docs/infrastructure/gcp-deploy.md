@@ -168,30 +168,37 @@ one (same document, § 6 and § 10). `hwb-nfc-master-key` is mounted by hand for
 the first start with the KEK only, to import it as version 0 (same document,
 § 4); each deploy from `cloudbuild.yaml` removes it.
 
-**2. Grant read access to Cloud Run's default service account:**
-*(Replace `<PROJECT_NUMBER>` with your actual numeric project ID)*
+**2. Create the service's own account and give it each secret:**
+
+The service runs as `hwb-backend@`, an account that holds only what the backend
+needs. Never run it as the Compute Engine default account: that account gets
+`roles/editor` on the whole project, so anyone who ran code inside the service
+could read or delete every record, the database and the other services.
 
 ```bash
-export COMPUTE_SA="<PROJECT_NUMBER>-compute@developer.gserviceaccount.com"
+export RUNTIME_SA="hwb-backend@<GCP_PROJECT_ID>.iam.gserviceaccount.com"
 
-gcloud secrets add-iam-policy-binding hwb-db-pass \
-    --member="serviceAccount:${COMPUTE_SA}" \
-    --role="roles/secretmanager.secretAccessor"
+gcloud iam service-accounts create hwb-backend \
+    --display-name="HWB backend (Cloud Run runtime)"
 
-gcloud secrets add-iam-policy-binding hwb-secret-key \
-    --member="serviceAccount:${COMPUTE_SA}" \
-    --role="roles/secretmanager.secretAccessor"
+# Cloud SQL connection and Vertex AI (Gemini)
+gcloud projects add-iam-policy-binding <GCP_PROJECT_ID> \
+    --member="serviceAccount:${RUNTIME_SA}" --role="roles/cloudsql.client"
+gcloud projects add-iam-policy-binding <GCP_PROJECT_ID> \
+    --member="serviceAccount:${RUNTIME_SA}" --role="roles/aiplatform.user"
 
-gcloud secrets add-iam-policy-binding hwb-nfc-master-key \
-    --member="serviceAccount:${COMPUTE_SA}" \
-    --role="roles/secretmanager.secretAccessor"
-
-# Once nfc-kek exists (see above)
-gcloud secrets add-iam-policy-binding nfc-kek \
-    --member="serviceAccount:${COMPUTE_SA}" \
-    --role="roles/secretmanager.secretAccessor"
+for SECRET in hwb-db-pass hwb-secret-key nfc-kek; do
+  gcloud secrets add-iam-policy-binding "${SECRET}" \
+      --member="serviceAccount:${RUNTIME_SA}" \
+      --role="roles/secretmanager.secretAccessor"
+done
 
 ```
+
+Grant `nfc-kek` once it exists (see above). `hwb-nfc-master-key` is read only by
+the first start with the KEK; grant it for that start and remove the binding
+right after ([NFC Key Management](nfc-key-management.md) § 4). The FHIR store
+binding comes in § 5, once the store exists.
 
 ---
 
@@ -208,6 +215,13 @@ gcloud healthcare fhir-stores create <FHIR_STORE_NAME> \
     --version=R4 \
     --enable-referential-integrity \
     --enable-resource-versioning
+
+# The service writes bundles to this store and nowhere else
+gcloud healthcare fhir-stores add-iam-policy-binding <FHIR_STORE_NAME> \
+    --dataset=<DATASET_NAME> \
+    --location=<REGION> \
+    --member="serviceAccount:hwb-backend@<GCP_PROJECT_ID>.iam.gserviceaccount.com" \
+    --role="roles/healthcare.fhirResourceEditor"
 
 ```
 
@@ -243,6 +257,7 @@ gcloud builds submit \
 gcloud run deploy <CLOUD_RUN_SERVICE> \
     --image <REGION>-docker.pkg.dev/<GCP_PROJECT_ID>/<REPO_NAME>/backend:bootstrap \
     --region <REGION> \
+    --service-account hwb-backend@<GCP_PROJECT_ID>.iam.gserviceaccount.com \
     --allow-unauthenticated \
     --add-cloudsql-instances="<GCP_PROJECT_ID>:<REGION>:<DB_INSTANCE_NAME>" \
     --set-env-vars="INSTANCE_CONNECTION_NAME=<GCP_PROJECT_ID>:<REGION>:<DB_INSTANCE_NAME>" \
@@ -281,20 +296,53 @@ Create a trigger for merges/pushes to `develop`:
 
 ### What the pilot project actually has
 
-- **`hwb-backend-dev-deploy`:** push to `^develop$`, runs `cloudbuild.yaml`, as the Compute Engine default account, with no approval step. Every merge to `develop` is a deployment.
+- **`hwb-backend-dev-deploy`:** push to `^develop$`, runs `cloudbuild.yaml`, as `hwb-deployer@`, with no approval step. Every merge to `develop` is a deployment. The service itself runs as `hwb-backend@` (§ 4).
 - **`develop` and `main` are protected on GitHub** (since 2026-11-04): a change needs a pull request, with `Lint & Test (Python 3.11)` and `Integration (PostgreSQL 15)` as required checks. This matters because the trigger deploys whatever lands on `develop`, and `cloudbuild.yaml` re-runs lint and tests, but not coverage, `pip-audit`, `alembic check` or the PostgreSQL suite.
 - **`hwb-pr-quality-gate`** (pull requests to `^develop$`, pointing to the removed `cloudbuild.pr.yaml`) was deleted on 2026-10-22. It was disabled, but it ran as a service account with `roles/editor`, and Cloud Build reads the build file from the commit that fired it. Pull requests are checked by GitHub Actions.
 
 ### Service account for triggers
 
-Use a dedicated least-privilege service account where possible. At minimum it needs permissions for:
+The trigger runs as `hwb-deployer@`, which can build, push and deploy, and
+nothing else. It cannot read the secrets, the database or the FHIR store: the
+deployed service reads them as `hwb-backend@`.
 
-- Cloud Run deploy
-- Artifact Registry push
-- Secret Manager access (for deploy-time secret bindings)
-- Cloud Build execution
+```bash
+export DEPLOYER_SA="hwb-deployer@<GCP_PROJECT_ID>.iam.gserviceaccount.com"
 
-If using the default Compute service account, ensure IAM is explicitly scoped and reviewed periodically.
+gcloud iam service-accounts create hwb-deployer \
+    --display-name="HWB deployer (Cloud Build trigger)"
+
+# Deploy to Cloud Run (run.admin, because --allow-unauthenticated sets the
+# service's IAM policy), see the VPC for Direct VPC egress, and write build logs
+for ROLE in roles/run.admin roles/compute.networkViewer roles/logging.logWriter; do
+  gcloud projects add-iam-policy-binding <GCP_PROJECT_ID> \
+      --member="serviceAccount:${DEPLOYER_SA}" --role="${ROLE}"
+done
+
+# Push the image
+gcloud artifacts repositories add-iam-policy-binding <REPO_NAME> \
+    --location=<REGION> \
+    --member="serviceAccount:${DEPLOYER_SA}" --role="roles/artifactregistry.writer"
+
+# Deploy the service as hwb-backend@ (and only as that account)
+gcloud iam service-accounts add-iam-policy-binding \
+    hwb-backend@<GCP_PROJECT_ID>.iam.gserviceaccount.com \
+    --member="serviceAccount:${DEPLOYER_SA}" --role="roles/iam.serviceAccountUser"
+
+gcloud builds triggers update github <TRIGGER_NAME> \
+    --service-account="projects/<GCP_PROJECT_ID>/serviceAccounts/${DEPLOYER_SA}"
+
+```
+
+`cloudbuild.yaml` writes build logs to Cloud Logging only
+(`options.logging: CLOUD_LOGGING_ONLY`), which a trigger with its own account
+requires.
+
+**Rolling back.** Revisions deployed before 2026-11-10 run as the Compute Engine
+default account, which no longer holds any role in the project. Do not send
+traffic back to one of them: it cannot read the secrets, so it would not start.
+To roll back, deploy the older image (it is in Artifact Registry under its
+commit SHA) with `--service-account hwb-backend@...`.
 
 ---
 
