@@ -142,14 +142,14 @@ def _persist(db, *, frontend_id, device_uid, doc="D-1"):
 
 def test_find_for_sync_matches_own_record_by_frontend_id(db_session):
     p = _persist(db_session, frontend_id="APP-1", device_uid="TAG-1")
-    # Bracelet replacement: same app id, brand-new tag not yet stored.
+    # Device replacement: same app id, brand-new tag not yet stored.
     found = _find_patient_for_sync(db_session, "APP-1", "TAG-NEW")
     assert found is not None and found.id == p.id
 
 
 def test_find_for_sync_resolves_cross_org_by_device_uid(db_session):
     p = _persist(db_session, frontend_id="APP-A", device_uid="TAG-SHARED")
-    # A different organization's app id, same physical bracelet.
+    # A different organization's app id, same physical patient device.
     found = _find_patient_for_sync(db_session, "APP-B-DIFFERENT", "TAG-SHARED")
     assert found is not None and found.id == p.id
 

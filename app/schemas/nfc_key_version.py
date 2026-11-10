@@ -12,7 +12,7 @@ class NfcKeyVersionEntry(BaseModel):
         description="Hardware tag UID. Stored only as an HMAC (device_ref)",
     )
     device_role: str = Field(
-        "patient", description="'patient' bracelet or 'guardian' card"
+        "patient", description="'patient' or 'guardian' device"
     )
     key_version: int = Field(..., ge=0, le=255, description="Version observed")
     had_header: bool = Field(

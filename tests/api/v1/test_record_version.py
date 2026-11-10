@@ -80,9 +80,9 @@ def test_current_base_version_applies_the_change(client, db_session):
     assert _stored(db_session).full_record_json["allergies"] == []
 
 
-def test_stale_payload_keeps_allergy_and_current_bracelet(client, db_session):
+def test_stale_payload_keeps_allergy_and_current_patient_device(client, db_session):
     """poc05 without a retired UID: device 1 works on version 1 while device 2
-    records an allergy and a new guardian card (version 2)."""
+    records an allergy and a new guardian device (version 2)."""
     _sync(client)  # version 1, both devices start here
     device_2 = deepcopy(MOCK_PATIENT_PAYLOAD["guardianInfo"])
     device_2["device_uid"] = "GUARDIAN-UID-NUEVA"
@@ -93,7 +93,7 @@ def test_stale_payload_keeps_allergy_and_current_bracelet(client, db_session):
     )
 
     assert response.status_code == 201
-    # Its copy also still carries the guardian card device 2 replaced.
+    # Its copy also still carries the guardian device that device 2 replaced.
     assert response.json()["conflicts"] == [
         "stale_payload_retired_device_uid", "stale_payload_base_version",
     ]

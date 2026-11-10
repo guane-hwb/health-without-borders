@@ -222,7 +222,7 @@ def nfc_key_claims(
     ``/users/me``.
 
     ``role`` gates delivery. A ``superadmin`` has no clinical access and never
-    reads or writes a wristband, so it is served no key at all: these are the
+    reads or writes an NFC device, so it is served no key at all: these are the
     accounts most worth phishing, and there is no reason for a stolen one to
     come with the material that decrypts every tag in the field. Omitting
     ``role`` delivers the keyring, which keeps existing callers working.

@@ -81,7 +81,7 @@ def test_nationality_column_is_alpha3(client, db_session, sent, in_record, colum
 
 def test_guardian_columns_stay_with_the_guardians_the_merge_kept(client, db_session):
     _sync(client, _payload())
-    other_device = _payload(patientId="OTHER-DEVICE-PID")  # resolved by the bracelet
+    other_device = _payload(patientId="OTHER-DEVICE-PID")  # resolved by the patient device
     other_device["guardianInfo"]["name"] = "Otra Persona"
 
     response = _sync(client, other_device)

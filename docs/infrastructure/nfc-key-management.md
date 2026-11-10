@@ -7,7 +7,7 @@ retired.
 
 ## 1. What the keys protect
 
-Every HWB chip — a patient bracelet or a guardian card — carries its clinical
+Every HWB chip — a patient device or a guardian device — carries its clinical
 payload encrypted with AES-256-GCM. The key comes from the backend at login and
 is held by the device so it can read and write chips **offline**, which is the
 whole point: brigades work without connectivity.
@@ -450,9 +450,9 @@ the telemetry may still have chips in the field whose patients have not come
 back. Absence of sightings is not evidence of absence of chips. It can tell you a
 retirement is obviously unsafe; it cannot tell you one is safe.
 
-Watch the `guardian` rows specifically. Guardian cards are written with the same
+Watch the `guardian` rows specifically. Guardian devices are written with the same
 keyring but rewritten less often, so they are the likelier stragglers and a
-bracelet-only reading is optimistic.
+patient-device-only reading is optimistic.
 
 ### Retirement is manual today
 

@@ -188,7 +188,7 @@ def test_scan_without_birth_date_or_guardian_is_not_a_500(client, db_session, pe
         "guardian_device_uid": GUARDIAN_UID,
     })
 
-    # Unknown age is treated as a minor, and no guardian card matches.
+    # Unknown age is treated as a minor, and no guardian device matches.
     assert response.status_code == 403
     assert response.json()["code"] == "guardian_mismatch"
 
@@ -312,9 +312,9 @@ def test_the_ledger_shows_the_emergency_openings(client, db_session, people):
     assert own_staff[0]["reason"] == "guardian_absent_offline"
 
 
-def test_openings_on_a_retired_bracelet_still_belong_to_the_patient(client, db_session, people):
+def test_openings_on_a_retired_patient_device_still_belong_to_the_patient(client, db_session, people):
     _register(client, people)
-    _emergency(client, people, "doc_a", "evt-old")  # read on the bracelet that was then lost
+    _emergency(client, people, "doc_a", "evt-old")  # read on the patient device that was then lost
     _as(people, "doc_a")
     replaced = deepcopy(MOCK_PATIENT_PAYLOAD)
     replaced.update(device_uid="04:PULSERA:NUEVA", retiredDeviceReason="lost")
@@ -378,7 +378,7 @@ def test_a_sync_onto_a_record_missing_an_identity_field_repairs_it(client, db_se
     assert stored["biologicalSex"] == MOCK_PATIENT_PAYLOAD["patientInfo"]["biologicalSex"]
 
 
-def test_bracelet_uids_do_not_reach_the_logs(client, db_session, people, app_log):
+def test_patient_device_uids_do_not_reach_the_logs(client, db_session, people, app_log):
     """be-oct26-mask-id-conserva-parte-del-uid: 6 of the UID's characters were logged."""
     _as(people, "doc_a")
     client.post("/api/v1/patients/scan", json={"device_uid": "04:5B:2C:9A:71:3E:80"})

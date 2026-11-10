@@ -76,7 +76,7 @@ def test_concurrent_syncs_keep_every_visit(api, staff):
     assert sorted(v["encounterIdentifier"] for v in visits) == [f"CONC-{i}" for i in range(10)]
 
 
-def test_stale_offline_copy_keeps_allergy_and_bracelet(api, staff):
+def test_stale_offline_copy_keeps_allergy_and_patient_device(api, staff):
     """poc05 on PostgreSQL, through the retired-UID signal."""
     doc = staff["tokens"]["doc_a"]
     old_copy = _payload(allergies=[])

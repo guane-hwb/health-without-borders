@@ -878,7 +878,7 @@ class PatientSyncResponse(BaseModel):
         default_factory=list,
         description=(
             "Parts of the payload the server did not apply because they were "
-            "older than what it holds (e.g. a retired bracelet), or not the "
+            "older than what it holds (e.g. a retired patient device), or not the "
             "device's to change, or edits of a visit / vaccination it already "
             "holds (visit_edit_not_applied:<encounterIdentifier>, "
             "vaccination_edit_not_applied:<vaccinationId>). The rest of the "
@@ -892,8 +892,8 @@ class PatientSyncResponse(BaseModel):
             "the device can show and write to the chips what the server "
             "actually holds. Sent only when `conflicts` is not empty and the "
             "payload is the device's own copy (matched by patientId, not by the "
-            "bracelet: that match must not read a minor's record without the "
-            "guardian card)."
+            "patient device: that match must not read a minor's record without the "
+            "guardian device)."
         ),
     )
 
@@ -957,7 +957,7 @@ class PatientScanRequest(BaseModel):
 
 
 class PatientAccessQuery(BaseModel):
-    """Which patient's access ledger to read: server id or current bracelet UID."""
+    """Which patient's access ledger to read: server id or current patient device UID."""
     patient_id: Optional[str] = Field(None, min_length=1, max_length=128)
     device_uid: Optional[str] = Field(None, min_length=1, max_length=128)
     limit: int = Field(100, ge=1, le=500)
@@ -984,7 +984,7 @@ class EmergencyAccessView(BaseModel):
     """A break-glass opening recorded offline by the device and synced later."""
     model_config = ConfigDict(from_attributes=True)
 
-    patient_uid: str = Field(..., description="Bracelet the device read (may be a retired one)")
+    patient_uid: str = Field(..., description="Patient device UID the phone read (may be a retired one)")
     user_id: Optional[str] = Field(None, description="Actor the device declared")
     uploaded_by: Optional[str] = Field(None, description="Authenticated user who synced it")
     organization_id: str = Field(..., description="Organization of that user")
@@ -1008,7 +1008,7 @@ class PatientAccessResponse(BaseModel):
     entries: List[PatientAccessEntry]
     emergency_entries: List[EmergencyAccessView] = Field(
         default_factory=list,
-        description="Openings without the guardian's card, made offline (newest received first)",
+        description="Openings without the guardian device, made offline (newest received first)",
     )
     device_changes: List[DeviceChangeView] = Field(
         default_factory=list,

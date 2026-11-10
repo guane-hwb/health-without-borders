@@ -268,7 +268,7 @@ class TestRoleGating:
 
         claims = security.nfc_key_claims(role=UserRole.superadmin)
 
-        # A superadmin has no clinical access and never taps a wristband.
+        # A superadmin has no clinical access and never taps an NFC device.
         assert claims == {
             "nfc_encryption_key": None,
             "nfc_key_version": None,

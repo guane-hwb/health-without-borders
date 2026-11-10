@@ -378,7 +378,7 @@ def _guardian(signature=None, *, with_consent=True, **consent_extra) -> dict:
     """A guardian dict, optionally with a consent block and signature.
 
     ``with_consent=False`` omits the consent block entirely (as a guardian
-    reconstructed from a card that never captured consent would look).
+    reconstructed from a device that never captured consent would look).
     """
     g = {"name": "María Pérez", "phone": "+57300000"}
     if with_consent:
@@ -392,7 +392,7 @@ def _guardian(signature=None, *, with_consent=True, **consent_extra) -> dict:
 
 class TestPreserveConsentSignature:
     def test_restores_signature_when_incoming_omits_it(self):
-        """Card-sourced guardian (signature stripped) keeps the server PNG."""
+        """Device-sourced guardian (signature stripped) keeps the server PNG."""
         server = _guardian(signature="iVBORw0KGgo=")
         incoming = _guardian()  # consent present but no signatureBase64
         result = _preserve_consent_signature(server, incoming)
@@ -448,11 +448,11 @@ class TestPreserveConsentSignature:
 
 class TestMergePreservesGuardianSignature:
     def test_merge_restores_stripped_guardian_signature(self):
-        """End-to-end: a card-sourced record keeps the server signature."""
+        """End-to-end: a device-sourced record keeps the server signature."""
         server = _make_record()
         server["guardianInfo"] = _guardian(signature="SERVER-PNG")
         incoming = _make_record()
-        incoming["guardianInfo"] = _guardian()  # stripped by the card writer
+        incoming["guardianInfo"] = _guardian()  # stripped by the guardian device writer
 
         merged = merge_patient_records(server, incoming)
 

@@ -100,8 +100,8 @@ def list_emergency_access(
     """
     Break-glass openings of one patient's record, newest received first.
 
-    The device records them offline by bracelet UID, so this takes the
-    patient's current bracelet and every bracelet it retired. With
+    The device records them offline by patient device UID, so this takes the
+    patient's current patient device and every patient device it retired. With
     ``actor_organization_id``, only entries synced by that organization's
     users (an org admin audits their own staff).
     """

@@ -2,7 +2,7 @@
 Which database constraint an ``IntegrityError`` is about.
 
 Audit finding (2026-10-02): be-oct26-integrityerror-mal-clasificado. Any
-integrity error on saving a patient was answered as a bracelet conflict, and in
+integrity error on saving a patient was answered as a patient device conflict, and in
 the emergency ledger as a duplicate, so an unrelated failure (a foreign key, a
 different unique key) was reported as something it was not, or lost.
 """

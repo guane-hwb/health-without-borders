@@ -127,7 +127,7 @@ class Patient(Base):
     # Foreign Key: Binds patient to the organization that registered them
     organization_id = Column(String, ForeignKey("organizations.id"), nullable=False)
     
-    # 2. THE HARDWARE ID (NFC Bracelet / Barcode)
+    # 2. THE HARDWARE ID (NFC patient device)
     device_uid = Column(String, unique=True, index=True, nullable=False) 
 
     # --- RDA Identification (Res. 866/2021 Elems. 2.1, 2.2) ---
@@ -307,9 +307,9 @@ class NfcKeyVersionObservation(Base):
     and an upsert here would destroy exactly that. Rows older than
     ``NFC_KEY_SIGHTING_RETENTION_DAYS`` are deleted.
 
-    ``device_role`` separates bracelets from guardian cards. Both are written
-    with the same keyring, and guardian cards are rewritten less often, so a
-    version cannot be retired safely by counting bracelets alone.
+    ``device_role`` separates patient devices from guardian devices. Both are written
+    with the same keyring, and guardian devices are rewritten less often, so a
+    version cannot be retired safely by counting patient devices alone.
 
     The chip is stored as ``device_ref``, an HMAC of its UID, never the UID: a
     UID resolves to its patient through ``/scan``, so with the reporter and the
@@ -329,7 +329,7 @@ class NfcKeyVersionObservation(Base):
     )
     device_role = Column(
         String, nullable=False, server_default="patient",
-        comment="'patient' bracelet or 'guardian' card",
+        comment="'patient' or 'guardian' device",
     )
     key_version = Column(
         Integer, index=True, nullable=False,
@@ -362,16 +362,16 @@ class RetiredDeviceUid(Base):
     """
     Append-only ledger of NFC device UIDs retired from a patient record.
 
-    When a lost, damaged or replaced bracelet (patient) or card (guardian) is
+    When a lost, damaged or replaced patient device or guardian device is
     re-labeled, the record keeps a single UID per device (updated in place — no
     duplicate patient record is ever created). The previous UID is recorded here
     so that:
 
-      - a later scan of the retired bracelet can be answered distinctly
+      - a later scan of the retired patient device can be answered distinctly
         ("this tag was retired and no longer belongs to HWB") instead of the
         generic 404 that looks like a blank or unknown chip, and
       - there is an auditable trail of which UID belonged to which patient, in
-        which role (patient bracelet vs guardian card), when it was retired, by
+        which role (patient device vs guardian device), when it was retired, by
         whom, and why.
 
     Rows are never updated or deleted — one row per retirement event. ``device_uid``
@@ -397,7 +397,7 @@ class RetiredDeviceUid(Base):
     )
     device_role = Column(
         String, nullable=False, server_default="patient",
-        comment="Which device was retired — 'patient' bracelet or 'guardian' card",
+        comment="Which device was retired — 'patient' or 'guardian' device",
     )
     retired_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
@@ -574,11 +574,11 @@ class PatientAccessLog(Base):
     )
     channel = Column(
         String, nullable=False,
-        comment="'scan' (bracelet), 'search' (identity lookup) or 'sync' (write)",
+        comment="'scan' (patient device), 'search' (identity lookup) or 'sync' (write)",
     )
     guardian_factor = Column(
         Boolean, nullable=False, default=False, server_default=text("false"),
-        comment="Whether the guardian's card was presented and matched",
+        comment="Whether the guardian device was presented and matched",
     )
     reason = Column(
         String, nullable=True,
