@@ -19,7 +19,7 @@ Your access depends on your **role** (for example, medical staff, or an organiza
 
 From the home screen you can reach the main actions:
 
-- **New patient** — register a patient and assign a bracelet.
+- **New patient** — register a patient and assign a patient device.
 - **Search patients** — find an existing patient.
 - **Pending to sync** — review records waiting to be uploaded. A **gold badge** shows the number of records still stored locally (including any duplicates or errors).
 

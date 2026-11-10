@@ -1,6 +1,6 @@
 # Finding & Viewing a Patient
 
-This page explains how to find an existing patient and how to read a patient's clinical record from their bracelet.
+This page explains how to find an existing patient and how to read a patient's clinical record from their device.
 
 ---
 
@@ -28,15 +28,15 @@ Review the values you entered and try again. If two records happen to share the 
 
 ---
 
-## 2. Read a patient by scanning the bracelet
+## 2. Read a patient by scanning the device
 
-At the point of care, the fastest way to open a record is to **scan the patient's bracelet**:
+At the point of care, the fastest way to open a record is to **scan the patient device**:
 
 1. Choose the read option and tap **Start**.
-2. Hold the patient's bracelet (or the guardian card) against the back of the phone.
-3. The patient's record opens once the bracelet is read.
+2. Hold the patient device (or the guardian device) against the back of the phone.
+3. The patient's record opens once the device is read.
 
-**Note:** The bracelet identifier is unambiguous, so scanning always opens the correct patient. Manual search is best when the bracelet is unavailable.
+**Note:** The device identifier is unambiguous, so scanning always opens the correct patient. Manual search is best when the device is unavailable.
 
 ---
 
