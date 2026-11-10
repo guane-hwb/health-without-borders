@@ -51,6 +51,11 @@ steps:
       - '--region'
       - 'us-central1'
       - '--allow-unauthenticated'
+      # The service runs as its own account, which holds only what the backend
+      # needs (docs/infrastructure/gcp-deploy.md § 4). Without this flag Cloud
+      # Run uses the Compute Engine default account.
+      - '--service-account'
+      - 'hwb-backend@$PROJECT_ID.iam.gserviceaccount.com'
       # NFC_MASTER_KEY was only needed for the first import into the keyring
       # (done 2026-09-14); version 0 lives wrapped under NFC_KEK since then.
       # --update-secrets keeps what an earlier revision mounted, so it is
