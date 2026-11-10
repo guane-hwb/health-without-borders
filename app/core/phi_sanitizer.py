@@ -42,8 +42,8 @@ def mask_id(value: Optional[str]) -> str:
 
 def pseudonym(value: Optional[str]) -> str:
     """
-    A stable reference for an identifier that is PHI on its own (bracelet or
-    guardian-card UID, document number): the first 10 hex characters of an
+    A stable reference for an identifier that is PHI on its own (patient device or
+    guardian-device UID, document number): the first 10 hex characters of an
     HMAC keyed with ``SECRET_KEY``.
 
     Log lines about the same value share it, so they can still be correlated,

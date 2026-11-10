@@ -7,7 +7,7 @@ The clinical app stores nationality and country of residence as ISO 3166-1
 ISO 3166-1 *numeric* codes ('170', '862'), with a ``required`` strength. This
 module converts between the two so the mismatch is resolved exactly once, at
 the FHIR boundary, without touching the internal model or the NFC payloads
-already written to patient wristbands.
+already written to patient devices.
 
 The table below is frozen data generated from the ISO 3166-1 standard (all 249
 officially assigned entries). It is deliberately checked in rather than pulled

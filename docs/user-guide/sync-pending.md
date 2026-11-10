@@ -6,7 +6,7 @@ Because the app is **offline-first**, records you create in the field are first 
 
 ## 1. Why records are pending
 
-When there is no connection — or when a bracelet still needs to be written — new patients and updates are stored **locally** and queued for synchronization. The home screen shows a **gold badge** with the number of records still pending (including any duplicates or records with errors).
+When there is no connection — or when a device still needs to be written — new patients and updates are stored **locally** and queued for synchronization. The home screen shows a **gold badge** with the number of records still pending (including any duplicates or records with errors).
 
 ---
 

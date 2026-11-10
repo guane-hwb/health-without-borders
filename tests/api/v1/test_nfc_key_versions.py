@@ -2,7 +2,7 @@
 Tests for NFC key version telemetry.
 
 Covers storing sightings, the "latest sighting wins" attribution used by the
-usage summary, the role split between bracelets and guardian cards, the
+usage summary, the role split between patient devices and guardian devices, the
 retirement interlock window, and role gating on both endpoints. Also security
 review N6 (no UID stored, retention) and N11 (unknown versions, a veto that
 made-up sightings cannot clear).
@@ -230,7 +230,7 @@ class TestUsageSummary:
         body = client.get(USAGE_URL, headers=_auth(admin)).json()
 
         counts = {(c["key_version"], c["device_role"]): c for c in body["counts"]}
-        # Guardian cards are rewritten less often, so counting bracelets alone
+        # Guardian devices are rewritten less often, so counting patient devices alone
         # would hide the likelier stragglers.
         assert counts[(0, "patient")]["devices"] == 1
         assert counts[(0, "guardian")]["devices"] == 1

@@ -205,7 +205,7 @@ class Settings(BaseSettings):
         A malformed key is not a local problem: it is served to every device,
         and a client that cannot parse it loses NFC entirely. Checking at
         startup turns a fleet-wide outage discovered when someone taps a
-        wristband into a deployment that refuses to boot.
+        patient device into a deployment that refuses to boot.
 
         Returns an empty list when the configuration is usable. A deployment
         with no NFC key at all is valid (NFC is simply unavailable).

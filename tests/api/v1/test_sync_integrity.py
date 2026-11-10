@@ -166,13 +166,13 @@ def test_bad_stored_dates_are_ignored():
 # ---------------------------------------------------------------------------
 
 
-def test_stale_payload_keeps_allergy_and_current_bracelet(client, db_session):
+def test_stale_payload_keeps_allergy_and_current_patient_device(client, db_session):
     """poc05: an old offline copy erased an allergy and re-activated the lost
-    bracelet; now it only contributes its new visit."""
+    patient device; now it only contributes its new visit."""
     old_copy = _payload(allergies=[])
     assert _sync(client, old_copy).status_code == 201
 
-    # Device 2: the bracelet was lost and replaced, and an allergy recorded.
+    # Device 2: the patient device was lost and replaced, and an allergy recorded.
     replaced = _payload(
         device_uid="UID-PULSERA-NUEVA",
         retiredDeviceReason="lost",
@@ -219,7 +219,7 @@ def test_stale_guardian_card_does_not_come_back(client, db_session):
     assert [row[0] for row in retired] == ["GUARDIAN-UID-001"]
 
 
-def test_new_patient_on_a_retired_bracelet_is_refused(client, db_session):
+def test_new_patient_on_a_retired_patient_device_is_refused(client, db_session):
     db_session.add(RetiredDeviceUid(
         device_uid="UID-PERDIDA", patient_id="otro-paciente", reason="lost", device_role="patient",
     ))
@@ -286,9 +286,9 @@ def _attacker_payload(**patient_info):
     return payload
 
 
-def test_guardian_card_cannot_be_replaced_with_only_the_bracelet_uid(client, db_session):
-    """poc04: an empty document let anyone who read the bracelet UID install
-    their own card as the guardian's second factor."""
+def test_guardian_device_cannot_be_replaced_with_only_the_patient_device_uid(client, db_session):
+    """poc04: an empty document let anyone who read the patient device UID install
+    their own device as the guardian's second factor."""
     assert _sync(client, _payload()).status_code == 201
 
     response = _sync(client, _attacker_payload())
@@ -312,9 +312,9 @@ def test_same_child_resolved_by_tag_adds_visits_but_keeps_guardians(client, db_s
 
     assert response.status_code == 201
     assert response.json()["conflicts"] == ["guardians_not_changed_by_tag_resolved_sync"]
-    # Matched by the bracelet, not by its own patientId: the stored record is
-    # not sent back, or the bracelet UID would read a minor's record without
-    # the guardian card.
+    # Matched by the patient device, not by its own patientId: the stored record is
+    # not sent back, or the patient device UID would read a minor's record without
+    # the guardian device.
     assert response.json()["record"] is None
     record = _stored(db_session).full_record_json
     assert record["guardianInfo"]["device_uid"] == "GUARDIAN-UID-001"
@@ -609,11 +609,11 @@ def test_a_sync_whose_target_changes_before_the_write_is_retried(client, db_sess
     """
     F4 (security review 2026-10-15): the checks read the target without a lock,
     before the LLM calls; the write resolves it again under a lock. A nurse's
-    sync reuses a child's bracelet with a new patientId and that child's known
+    sync reuses a child's device with a new patientId and that child's known
     visit, and while it waits a second sync creates a patient with that
     patientId. The write used to land on the new patient, appending the
     "known" visit with the client's attribution: a nurse adding a visit. An old
-    baseVersion makes the payload stale, which skips the bracelet replacement
+    baseVersion makes the payload stale, which skips the device replacement
     that would otherwise have refused it.
     """
     from app.api.v1.endpoints import patients as endpoints

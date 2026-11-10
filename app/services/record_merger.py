@@ -16,10 +16,10 @@ signature already held by the server is preserved when the incoming payload
 omits it for the SAME guardian (see merge_patient_records).
 
 A payload that is provably older than the server copy (``stale=True``: it
-still carries a bracelet or guardian card the server already retired) is
+still carries a patient device or guardian device the server already retired) is
 merged conservatively instead: identifiers and guardians stay as stored and
 declarative lists are united, so an old offline copy cannot erase an allergy
-or re-activate a lost bracelet.
+or re-activate a lost patient device.
 
 A visit or vaccination the server already holds keeps its stored version. When
 the device's copy of it says something else (the app edits the last visit in
@@ -64,15 +64,15 @@ def merge_patient_records(
 
     Guardian consent signatures are preserved from the server copy when the
     incoming payload omits them, so a record reconstructed from a guardian
-    NFC card (which is written without the signature PNG) cannot erase a
+    NFC device (which is written without the signature PNG) cannot erase a
     stored signature on sync.
 
-    ``stale``: the payload is older than the server copy. The bracelet UID and
+    ``stale``: the payload is older than the server copy. The patient device UID and
     guardians stay as stored, and allergies / background lists become the
     union of both sides (nothing the server holds is dropped).
 
     ``keep_server_guardians``: the device may add clinical data but not change
-    who the guardians are or which cards identify them.
+    who the guardians are or which devices identify them.
 
     ``conflicts``: receives one entry per stored visit / vaccination whose
     incoming copy differs and was therefore not applied.
@@ -183,7 +183,7 @@ def _union_background(server: Any, incoming: Any) -> Any:
 def _same_guardian(server_guardian: dict, incoming_guardian: dict) -> bool:
     """
     Whether two guardian blocks describe the same person, using the strongest
-    identifier both sides carry: the document, else the card UID, else the name.
+    identifier both sides carry: the document, else the device UID, else the name.
     """
     server_doc = normalize_document_number(server_guardian.get("documentNumber"))
     incoming_doc = normalize_document_number(incoming_guardian.get("documentNumber"))
@@ -254,9 +254,9 @@ def _preserve_consent_signature(
     Keep the server's guardian consent signature when the incoming guardian
     omits it.
 
-    The guardian NFC card is written without the consent signature PNG (it is
+    The guardian NFC device is written without the consent signature PNG (it is
     kilobytes and unnecessary offline), so a record reconstructed from that
-    card and synced back arrives with the signature stripped. Since the merge
+    device and synced back arrives with the signature stripped. Since the merge
     takes guardianInfo from the incoming payload, without this the stored
     signature would be overwritten with null.
 

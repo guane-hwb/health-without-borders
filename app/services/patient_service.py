@@ -28,11 +28,11 @@ logger = logging.getLogger(__name__)
 
 class DeviceUidConflictError(Exception):
     """
-    Raised when a patient sync would bind a ``device_uid`` (NFC tag / bracelet)
+    Raised when a patient sync would bind a ``device_uid`` (NFC tag / patient device)
     that is already registered to a different patient.
 
     ``device_uid`` is globally unique, so this covers both a brand-new patient
-    reusing an existing tag and a bracelet replacement that points an existing
+    reusing an existing tag and a device replacement that points an existing
     patient at a tag owned by someone else. The API layer maps this to a
     ``409 Conflict`` instead of a generic ``500``.
     """
@@ -50,7 +50,7 @@ class ConcurrentSyncError(Exception):
 
 class IdentityMismatchError(Exception):
     """
-    Raised when a sync resolves to an existing patient through the bracelet
+    Raised when a sync resolves to an existing patient through the patient device
     UID alone (the payload's ``patientId`` is not that record's) and the
     payload does not prove it is the same person. The UID is readable by any
     NFC phone, so it is not enough to merge into — let alone to change the
@@ -60,7 +60,7 @@ class IdentityMismatchError(Exception):
 
 class DeviceRetiredError(Exception):
     """
-    Raised when a NEW patient would be registered on a bracelet UID the
+    Raised when a NEW patient would be registered on a patient device UID the
     server already retired (lost, damaged or replaced). Mapped to
     ``409 device_retired``.
     """
@@ -81,8 +81,8 @@ class DuplicateIdentityError(Exception):
     document (type + number) that is already registered under another
     ``device_uid``.
 
-    ``device_uid`` only catches a bracelet being reused. A child who lost their
-    bracelet and is registered from scratch in the next clinic arrives with a
+    ``device_uid`` only catches a patient device being reused. A child who lost their
+    patient device and is registered from scratch in the next clinic arrives with a
     new tag *and* a new mobile-generated ``patientId``, so nothing collides and
     the same person silently ends up with two records and a split clinical
     history. The API layer maps this to a ``409 Conflict``, so the app keeps the
@@ -110,7 +110,7 @@ def _raise_for_new_patient_conflict(
 
     The checks before the insert passed, so another request committed in
     between. If it created this very patient (same ``patientId``), it is the
-    app's own retry racing its first attempt: retrying is right. A bracelet
+    app's own retry racing its first attempt: retrying is right. A patient device
     taken by a different patient is the usual conflict. Anything else is not a
     conflict the client can resolve and propagates as a server error.
     """
@@ -226,7 +226,7 @@ def get_retired_device_uid(
     """
     Return the most recent retirement record for a ``device_uid``, or None.
 
-    Used so a scan of a bracelet that was retired (lost/damaged/replaced) can be
+    Used so a scan of a patient device that was retired (lost/damaged/replaced) can be
     answered distinctly — "this tag was retired and no longer belongs to HWB" —
     instead of as a generic 404 that looks like a blank or unknown chip.
     """
@@ -248,7 +248,7 @@ def _record_guardian_retirements(
     actor_user_id: Optional[str],
 ) -> None:
     """
-    Append retirement rows for any guardian card UID that is being replaced or
+    Append retirement rows for any guardian device UID that is being replaced or
     removed on this sync.
 
     Guardian UIDs live inside ``full_record_json`` (``guardianInfo.device_uid``
@@ -287,7 +287,7 @@ def _record_guardian_retirements(
                 )
             )
             logger.info(
-                "Guardian card retired for patient %s reason=%s",
+                "Guardian device retired for patient %s reason=%s",
                 safe_patient_ref(patient_id),
                 reason,
             )
@@ -300,7 +300,7 @@ def _ensure_device_uid_available(
     Guard the global uniqueness of ``device_uid`` before a write.
 
     Raises ``DeviceUidConflictError`` if the tag is already bound to a different
-    patient. On creation, any existing owner is a conflict. On bracelet
+    patient. On creation, any existing owner is a conflict. On patient device
     replacement, the tag's current owner may legitimately be the same patient,
     so ``exclude_patient_id`` is used to skip that self-match.
     """
@@ -377,7 +377,7 @@ def _ensure_identity_available(
     exclude_patient_id: Optional[str] = None,
 ) -> None:
     """
-    Guard against registering the same person twice under different bracelets.
+    Guard against registering the same person twice under different patient devices.
 
     Raises ``DuplicateIdentityError`` if the identity document (type + number)
     already belongs to another patient record. Only the creation path needs
@@ -543,12 +543,12 @@ def _find_patient_for_sync(
     Resolution order:
 
       1. ``frontend_patient_id`` — this device's own prior record. Covers
-         re-syncs and bracelet replacement (where the incoming ``device_uid``
+         re-syncs and device replacement (where the incoming ``device_uid``
          is new), so the existing record is updated in place rather than
          duplicated, and a device pointing its own patient at a tag owned by
          someone else is handled downstream by the replacement guard.
       2. ``device_uid`` — the hardware tag. A different organization scanning
-         the same child's bracelet resolves to the existing record and merges
+         the same child's device resolves to the existing record and merges
          into it (an identity guard in ``create_or_update_patient`` refuses the
          merge if the tag presents a different identity document).
 
@@ -585,7 +585,7 @@ def _retired_uids(db: Session, uids: set[str]) -> set[str]:
 
 
 def _guardians_differ(stored_record: Optional[dict], patient_in: PatientFullRecord) -> bool:
-    """Whether the payload names other guardians, or other cards, than stored."""
+    """Whether the payload names other guardians, or other devices, than stored."""
     def identity(guardian) -> tuple:
         if not guardian:
             return (None, None, None)
@@ -604,7 +604,7 @@ def _guardians_differ(stored_record: Optional[dict], patient_in: PatientFullReco
 
 
 #: What a stale payload is kept from changing (see merge_patient_records): the
-#: bracelet, the guardians and the declarative lists.
+#: patient device, the guardians and the declarative lists.
 _STALE_PROTECTED_KEYS = (
     "device_uid", "guardianInfo", "guardian2Info", "allergies", "backgroundHistory",
 )
@@ -626,12 +626,12 @@ def _stale_rule_changes_nothing(stored_record: dict, incoming_record: dict) -> b
 
 def _same_person(existing: Patient, patient_in: PatientFullRecord) -> bool:
     """
-    Whether a payload that reached ``existing`` through its bracelet UID is the
+    Whether a payload that reached ``existing`` through its patient device UID is the
     same child.
 
     If the stored patient has a real identity document, the payload must carry
     the same number — an empty one no longer passes (it used to, which let
-    anyone who read the bracelet UID take over the record). Only when the
+    anyone who read the patient device UID take over the record). Only when the
     stored patient has no real document (none, or a placeholder type such as
     AS/MS/SI whose numbers are local) does it fall back to birth date plus given
     name and first surname.
@@ -747,7 +747,7 @@ def create_or_update_patient(
     # shared across organizations, so identity is the mobile-generated
     # frontend_patient_id first (this device's own record) and the hardware
     # tag (device_uid) second — a second organization scanning the same
-    # bracelet merges into the existing record instead of colliding on the
+    # patient device merges into the existing record instead of colliding on the
     # unique device_uid.
     existing_patient = _find_patient_for_sync(
         db, patient_in.patientId, patient_in.device_uid, lock=True
@@ -766,10 +766,10 @@ def create_or_update_patient(
 
     # Merge-by-tag guard. When the match came from the hardware tag rather than
     # this device's own record (frontend_patient_id differs), the payload was
-    # built from scratch for a bracelet that already belongs to someone. The
+    # built from scratch for a patient device that already belongs to someone. The
     # UID alone is public, so the payload must prove it is the same child —
     # an empty document no longer passes — and even then it may add clinical
-    # data but not replace the guardians or their cards (the guardian card is
+    # data but not replace the guardians or their devices (the guardian device is
     # the second factor for reading a minor's record).
     resolved_by_tag = (
         existing_patient is not None
@@ -790,7 +790,7 @@ def create_or_update_patient(
     # Serialize the full JSON once to ensure consistency
     new_record_dump = patient_in.model_dump(mode="json")
 
-    # retiredDeviceReason is a transport-only signal for bracelet re-labeling;
+    # retiredDeviceReason is a transport-only signal for patient device re-labeling;
     # it must never be persisted into the authoritative clinical record or
     # echoed back on /scan. Drop it before hashing, merging or storing.
     new_record_dump.pop("retiredDeviceReason", None)
@@ -806,11 +806,11 @@ def create_or_update_patient(
         logger.info("Updating existing patient: %s", safe_patient_ref(existing_patient.id))
         old_record_dump = existing_patient.full_record_json
 
-        # A payload that still carries a bracelet or guardian card the server
+        # A payload that still carries a patient device or guardian device the server
         # has already retired is, by construction, older than the stored
         # record: an offline copy from before a replacement. Applying it
-        # "last write wins" re-activated the lost bracelet and erased what was
-        # recorded since (an allergy, the new guardian card). Keep the stored
+        # "last write wins" re-activated the lost patient device and erased what was
+        # recorded since (an allergy, the new guardian device). Keep the stored
         # identifiers and guardians, unite the declarative lists, and still
         # take the new visits / vaccinations it brings.
         incoming_guardian_uids = {
@@ -886,14 +886,14 @@ def create_or_update_patient(
         # meant a failed RDA-Paciente upload was never retried.
 
         # Single retirement reason for this sync — applies to every device UID
-        # (patient bracelet and/or guardian cards) that changes in this call.
+        # (patient device and/or guardian devices) that changes in this call.
         retire_reason = (
             patient_in.retiredDeviceReason.value
             if patient_in.retiredDeviceReason is not None
             else "replaced"
         )
 
-        # BRACELET REPLACEMENT (Update device_uid) — never from a stale payload
+        # PATIENT DEVICE REPLACEMENT (Update device_uid) — never from a stale payload
         if (
             not stale
             and patient_in.device_uid
@@ -924,7 +924,7 @@ def create_or_update_patient(
             )
             existing_patient.device_uid = patient_in.device_uid
 
-        # GUARDIAN CARD REPLACEMENT — guardian UIDs live inside full_record_json,
+        # GUARDIAN DEVICE REPLACEMENT — guardian UIDs live inside full_record_json,
         # so their re-labeling is persisted by the merge above; here we only
         # record the retirement of any old guardian UID for the audit ledger.
         if not keep_guardians:
@@ -941,8 +941,8 @@ def create_or_update_patient(
             db.commit()
         except IntegrityError as exc:
             db.rollback()
-            # Safety net for the race between the bracelet pre-check above and
-            # this commit. Any other integrity error is not a bracelet conflict.
+            # Safety net for the race between the patient device pre-check above and
+            # this commit. Any other integrity error is not a patient device conflict.
             if violates(exc, _DEVICE_UID_INDEX, "patients.device_uid"):
                 raise DeviceUidConflictError(
                     "A patient is already registered with this device tag."
@@ -957,14 +957,14 @@ def create_or_update_patient(
     else:
         # Reject early if this tag is already registered to any patient.
         _ensure_device_uid_available(db, patient_in.device_uid)
-        # ...or if it was retired: a lost or replaced bracelet no longer
+        # ...or if it was retired: a lost or replaced patient device no longer
         # belongs to HWB and must not identify a new child.
         if _retired_uids(db, {patient_in.device_uid}):
             raise DeviceRetiredError("This device tag was retired.")
 
         pi = patient_in.patientInfo
         # Reject just as early if this person is already on record under a
-        # different bracelet: a new tag plus a new frontend_patient_id collides
+        # different patient device: a new tag plus a new frontend_patient_id collides
         # on nothing, so without this the same child gets a second record and a
         # split clinical history.
         _ensure_identity_available(

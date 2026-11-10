@@ -173,8 +173,8 @@ async def _scan(
     patient_db = await asyncio.to_thread(get_patient_by_device_uid, db, device_uid)
     
     if not patient_db:
-        # Distinguish a retired bracelet (lost/damaged/replaced) from a genuinely
-        # unknown tag, so the app can tell the user the bracelet was retired
+        # Distinguish a retired patient device (lost/damaged/replaced) from a genuinely
+        # unknown tag, so the app can tell the user the patient device was retired
         # instead of showing a blank/unknown-chip error.
         retired = await asyncio.to_thread(get_retired_device_uid, db, device_uid)
         if retired is not None:
@@ -190,7 +190,7 @@ async def _scan(
                     "code": "device_retired",
                     "reason": retired.reason,
                     "message": (
-                        "This bracelet has been retired and no longer "
+                        "This patient device has been retired and no longer "
                         "belongs to HWB."
                     ),
                 },
@@ -210,12 +210,12 @@ async def _scan(
     patient_id = patient_db.id
     guardian_factor = False
 
-    # Minors (or patients with no recorded birth date) need the guardian's card.
+    # Minors (or patients with no recorded birth date) need the guardian device.
     if _is_minor(patient_db.birth_date):
         if not guardian_device_uid:
             raise ApiError(
                 status.HTTP_403_FORBIDDEN,
-                "Guardian bracelet scan required for minors.",
+                "Guardian device scan required for minors.",
                 code=GUARDIAN_REQUIRED,
             )
 
@@ -468,7 +468,7 @@ async def sync_patient(
     **The stored record back:** when `conflicts` is not empty and the payload is
     the device's own copy (same `patientId`), `record` carries the record as
     stored after this sync, with its `recordVersion`. Not for a copy matched by
-    the bracelet: that would read a minor's record without the guardian card.
+    the patient device: that would read a minor's record without the guardian device.
 
     **Allowed roles:** `doctor`, `nurse`.
     """
@@ -569,7 +569,7 @@ async def sync_patient(
         saved_patient_id = str(saved_patient.id)
         saved_record_version = saved_patient.record_version
         stored_record = saved_patient.full_record_json
-        # Matched by the device's own patientId, not resolved by the bracelet.
+        # Matched by the app's own patientId, not resolved by the patient device.
         own_record = saved_patient.frontend_patient_id == patient_data.patientId
         stored_model: Optional[PatientFullRecord] = None
         try:
@@ -791,7 +791,7 @@ async def search_patient(
       the patient access log.
 
     Every successful lookup is recorded in the patient access log (actor,
-    organization, time, reason). The guardian's card is not required here, so
+    organization, time, reason). The guardian device is not required here, so
     for a minor that log entry is the trace of the access.
 
     **Security:**
@@ -840,7 +840,7 @@ async def search_patient(
     record = {**(patient.full_record_json or {}), "recordVersion": patient.record_version}
     _ensure_readable(record, patient.id)
     # Recorded before the record is returned: no trace, no access. Search
-    # never presents the guardian's card, even for a minor.
+    # never presents the guardian device, even for a minor.
     await asyncio.to_thread(
         record_patient_access,
         db,
@@ -1275,12 +1275,12 @@ async def get_patient_access_log(
     """
     Who opened or changed a patient's record: every `/scan`, `/search` and
     `/sync`, newest first, with the authenticated actor, their organization at
-    the time, the channel, whether the guardian's card was presented and the
+    the time, the channel, whether the guardian device was presented and the
     reason given (search).
 
-    `emergency_entries` lists the openings without the guardian's card that a
+    `emergency_entries` lists the openings without the guardian device that a
     device made offline (break-glass) and synced later, for the patient's
-    current and retired bracelets.
+    current and retired patient devices.
 
     `device_changes` lists the patient and guardian devices retired from the
     record (replaced, lost or damaged): who, their organization, when and why,
@@ -1288,7 +1288,7 @@ async def get_patient_access_log(
     replace the minor's devices, because the device-loss flow needs it; this is
     how such a change is seen.
 
-    Identify the patient by server `patient_id` or by the bracelet's current
+    Identify the patient by server `patient_id` or by the patient device's current
     `device_uid`, in the body (never the URL).
 
     **Allowed roles:**
@@ -1298,7 +1298,7 @@ async def get_patient_access_log(
     **Responses:**
     - `200`: The entries (at most `limit`, up to 500).
     - `403`: Caller is not `superadmin` or `org_admin`.
-    - `404`: No patient with that id or bracelet.
+    - `404`: No patient with that id or patient device.
     - `422`: Neither or both of `patient_id` / `device_uid` given.
     """
     if current_user.role not in {UserRole.superadmin, UserRole.org_admin}:

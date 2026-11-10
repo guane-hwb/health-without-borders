@@ -1,7 +1,7 @@
 """
-Tests for retired-device-UID traceability (lost/damaged bracelet re-labeling).
+Tests for retired-device-UID traceability (lost/damaged patient device re-labeling).
 
-A bracelet replacement updates the patient's ``device_uid`` in place — no
+A device replacement updates the patient's ``device_uid`` in place — no
 duplicate patient record is ever created. These tests lock in that:
 
   * the previous UID is recorded in the append-only ``retired_device_uids``
@@ -186,7 +186,7 @@ def test_scan_unknown_tag_still_returns_404(client: TestClient):
 
 
 # ---------------------------------------------------------------------------
-# Guardian card retirement — guardian UIDs live inside full_record_json
+# Guardian device retirement — guardian UIDs live inside full_record_json
 # ---------------------------------------------------------------------------
 
 
@@ -198,7 +198,7 @@ def _with_guardian_uid(uid):
 
 
 def test_patient_retirement_has_device_role_patient(db_session):
-    """The patient bracelet retirement is tagged with device_role='patient'."""
+    """The patient device retirement is tagged with device_role='patient'."""
     create_or_update_patient(
         db_session,
         PatientFullRecord.model_validate(BASE_PAYLOAD),
@@ -217,7 +217,7 @@ def test_patient_retirement_has_device_role_patient(db_session):
 
 
 def test_guardian_card_replacement_records_retired_uid(db_session):
-    """Replacing a guardian card UID retires the old one as device_role='guardian'."""
+    """Replacing a guardian device UID retires the old one as device_role='guardian'."""
     create_or_update_patient(
         db_session,
         PatientFullRecord.model_validate(BASE_PAYLOAD),
@@ -238,7 +238,7 @@ def test_guardian_card_replacement_records_retired_uid(db_session):
     assert retired.device_role == "guardian"
     assert retired.reason == "damaged"
     assert retired.retired_by == "u-9"
-    # No patient bracelet was touched, so only the guardian row exists.
+    # No patient device was touched, so only the guardian row exists.
     assert db_session.query(RetiredDeviceUid).count() == 1
 
 
@@ -270,7 +270,7 @@ def test_patient_and_guardian_replaced_together_share_reason(db_session):
 
 
 def test_second_guardian_replacement_records_retired_uid(db_session):
-    """Replacing guardian 2's card UID retires the old guardian-2 UID."""
+    """Replacing guardian 2's device UID retires the old guardian-2 UID."""
     with_two = {
         **BASE_PAYLOAD,
         "guardian2Info": {
@@ -304,7 +304,7 @@ def test_second_guardian_replacement_records_retired_uid(db_session):
 
 
 def test_guardian_removal_retires_old_uid(db_session):
-    """Removing guardian 2 entirely still retires its old card UID."""
+    """Removing guardian 2 entirely still retires its old device UID."""
     with_two = {
         **BASE_PAYLOAD,
         "guardian2Info": {
@@ -332,7 +332,7 @@ def test_guardian_removal_retires_old_uid(db_session):
 
 
 def test_no_guardian_retirement_when_guardian_unchanged(db_session):
-    """Changing only the patient bracelet must not retire the unchanged guardian."""
+    """Changing only the patient device must not retire the unchanged guardian."""
     create_or_update_patient(
         db_session,
         PatientFullRecord.model_validate(BASE_PAYLOAD),
@@ -345,7 +345,7 @@ def test_no_guardian_retirement_when_guardian_unchanged(db_session):
         ),
         org_id="org-123",
     )
-    # Exactly one retirement — the patient bracelet — and no guardian row.
+    # Exactly one retirement — the patient device — and no guardian row.
     rows = db_session.query(RetiredDeviceUid).all()
     assert len(rows) == 1
     assert rows[0].device_role == "patient"

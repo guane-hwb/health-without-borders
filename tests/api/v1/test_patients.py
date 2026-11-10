@@ -272,7 +272,7 @@ def test_sync_duplicate_device_uid_returns_409(client: TestClient, db_session):
     )
 
 
-def test_sync_bracelet_replacement_conflict_returns_409(client: TestClient):
+def test_sync_device_replacement_conflict_returns_409(client: TestClient):
     """Reassigning an existing patient's device_uid to a tag owned by another
     patient is rejected with 409, not 500."""
     a = _sync_patient(client, payload=MOCK_PATIENT_PAYLOAD)
@@ -299,7 +299,7 @@ def _payload_with(payload=None, **patient_info):
 
 
 def test_sync_same_document_new_device_uid_returns_409(client: TestClient, db_session):
-    """The same person re-registered from scratch — new bracelet, new
+    """The same person re-registered from scratch — new patient device, new
     frontend patientId — is rejected with 409 instead of creating a second
     record and splitting the clinical history."""
     first = _sync_patient(client)
@@ -397,8 +397,8 @@ def test_resync_same_patient_is_not_a_duplicate(client: TestClient, db_session):
     assert db_session.query(Patient).count() == 1
 
 
-def test_bracelet_replacement_is_not_a_duplicate(client: TestClient, db_session):
-    """A legitimate bracelet replacement keeps the document and changes only
+def test_device_replacement_is_not_a_duplicate(client: TestClient, db_session):
+    """A legitimate device replacement keeps the document and changes only
     the tag — it must not trip the duplicate-identity guard."""
     assert _sync_patient(client).status_code == 201
 
@@ -457,15 +457,15 @@ def test_create_patient_integrity_error_maps_to_conflict(db_session, monkeypatch
         create_or_update_patient(db_session, record, org_id="org-123")
 
 
-def test_bracelet_replacement_integrity_error_maps_to_conflict(
+def test_device_replacement_integrity_error_maps_to_conflict(
     db_session, monkeypatch
 ):
-    """Same race safety net, but on the bracelet-replacement (update) path."""
+    """Same race safety net, but on the device-replacement (update) path."""
     # First create the patient with a real commit.
     record = PatientFullRecord.model_validate(MOCK_PATIENT_PAYLOAD)
     create_or_update_patient(db_session, record, org_id="org-123")
 
-    # Re-sync the same patient with a new, unused tag → bracelet replacement.
+    # Re-sync the same patient with a new, unused tag → device replacement.
     updated = PatientFullRecord.model_validate(
         {**MOCK_PATIENT_PAYLOAD, "device_uid": "04:A2:TEST:NEWUID"}
     )
@@ -476,7 +476,7 @@ def test_bracelet_replacement_integrity_error_maps_to_conflict(
 
 
 @pytest.mark.parametrize("existing", [False, True])
-def test_other_integrity_errors_are_not_bracelet_conflicts(db_session, monkeypatch, existing):
+def test_other_integrity_errors_are_not_patient_device_conflicts(db_session, monkeypatch, existing):
     """be-oct26-integrityerror-mal-clasificado: every IntegrityError was a 409."""
     record = PatientFullRecord.model_validate(MOCK_PATIENT_PAYLOAD)
     if existing:
@@ -834,7 +834,7 @@ def test_global_patient_same_tag_across_orgs_merges(
 ):
     """
     Patients are global: a second organization scanning the same child's
-    bracelet merges its visit into the existing record instead of colliding
+    patient device merges its visit into the existing record instead of colliding
     on the unique device_uid (409) or creating a duplicate. The server-side
     merge preserves the first organization's visit as well.
     """
@@ -845,7 +845,7 @@ def test_global_patient_same_tag_across_orgs_merges(
     _clear_overrides()
     assert first.status_code == 201
 
-    # Org B scans the SAME bracelet (same device_uid, same identity document)
+    # Org B scans the SAME patient device (same device_uid, same identity document)
     # with its own app-generated patientId and records a different visit.
     class MockDoctorOrgB:
         email = "doctor.b@ngo-b.org"
@@ -867,7 +867,7 @@ def test_global_patient_same_tag_across_orgs_merges(
 
     assert response.status_code == 201
 
-    # Exactly one record exists for that bracelet...
+    # Exactly one record exists for that patient device...
     rows = (
         db_session.query(Patient)
         .filter(Patient.device_uid == MOCK_PATIENT_WITH_VISIT["device_uid"])
@@ -887,7 +887,7 @@ def test_global_patient_same_tag_different_identity_rejected(
     client: TestClient, db_session
 ):
     """
-    The cross-org merge is identity-guarded: a bracelet presenting a
+    The cross-org merge is identity-guarded: a patient device presenting a
     different identity document is refused with 409, never silently merged
     into the wrong child's record.
     """
@@ -966,7 +966,7 @@ def test_scan_not_found(client: TestClient):
 
 
 def test_scan_minor_requires_guardian(client: TestClient):
-    """Scanning a minor's bracelet without guardian UID returns 403."""
+    """Scanning a minor's device without guardian UID returns 403."""
     _sync_patient(client)
 
     response = client.post("/api/v1/patients/scan", json={
@@ -975,11 +975,11 @@ def test_scan_minor_requires_guardian(client: TestClient):
     _clear_overrides()
 
     assert response.status_code == 403
-    assert "Guardian bracelet scan required" in response.json()["detail"]
+    assert "Guardian device scan required" in response.json()["detail"]
 
 
 def test_scan_minor_wrong_guardian(client: TestClient):
-    """Scanning a minor's bracelet with a wrong guardian UID returns 403."""
+    """Scanning a minor's device with a wrong guardian UID returns 403."""
     _sync_patient(client)
 
     response = client.post("/api/v1/patients/scan", json={
@@ -993,7 +993,7 @@ def test_scan_minor_wrong_guardian(client: TestClient):
 
 
 def test_scan_minor_accepts_guardian2_uid(client: TestClient):
-    """Scanning a minor's bracelet with guardian2's UID should succeed."""
+    """Scanning a minor's device with guardian2's UID should succeed."""
     payload_with_g2 = {
         **MOCK_PATIENT_PAYLOAD,
         "patientId": "TEST-UNIT-G2-001",

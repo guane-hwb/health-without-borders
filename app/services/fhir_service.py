@@ -352,7 +352,7 @@ def _country_coding(code: Optional[str], *, field: str) -> Optional[Dict[str, An
     The RDA guide binds both ExtensionPatientNationality and ExtensionCountryCode
     to a value set of ISO 3166-1 *numeric* codes with `required` strength, while
     the app stores alpha-3. The conversion happens here and nowhere else, so the
-    internal model and the NFC payloads already written to patient wristbands
+    internal model and the NFC payloads already written to patient devices
     stay untouched.
 
     An unrecognised code yields None so the caller omits the extension entirely.

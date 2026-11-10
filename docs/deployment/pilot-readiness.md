@@ -59,7 +59,7 @@ The mobile app connects to the backend through these settings:
 **Pre-pilot device checklist:**
 
 - [ ] App installed on all tablets/phones
-- [ ] NFC reading tested on each device (scan a test wristband)
+- [ ] NFC reading tested on each device (scan a test patient device)
 - [ ] Backend URL configured and login successful
 - [ ] At least one test patient synced end-to-end (sync → FHIR Store)
 
@@ -173,5 +173,5 @@ The pilot can proceed when **all** of the following are true:
 - [ ] Security checklist complete (Section 6).
 - [ ] Monitoring dashboards accessible (Section 7).
 - [ ] At least 3 healthcare staff trained on the mobile app.
-- [ ] NFC wristbands and guardian cards available in sufficient quantity.
+- [ ] Patient devices and guardian devices (NFC) available in sufficient quantity.
 - [ ] Rollback procedure documented and tested (Section 8).
