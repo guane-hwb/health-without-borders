@@ -74,6 +74,49 @@ gcloud healthcare fhir-stores add-iam-policy-binding hwb-fhir-store \
     --role="roles/healthcare.fhirResourceEditor"
 ```
 
+### 4.1. Audit Logs of FHIR Data Access
+
+Admin Activity logs (always on) record changes to the dataset and the store. Reading and writing FHIR resources is a *Data Access* operation, which Google leaves off by default. Without it, a read of the store from the console or by another account leaves no trace: `patient_access_log` only sees what goes through the backend.
+
+On the pilot project, `DATA_READ` and `DATA_WRITE` are on for `healthcare.googleapis.com` since 2026-11-11. Every read, search and write of the store logs:
+- the caller (the user or service account);
+- its IP;
+- the method (for example `fhir.rest.FhirService.SearchResources`);
+- the store.
+
+A search logs the resource type, not its parameters.
+
+The entries go to their own log bucket, `hwb-fhir-audit`:
+- **Retention:** 400 days, like `_Required`. The bucket is not locked, so the retention can still be changed.
+- **No duplicates:** an exclusion keeps them out of `_Default`, whose 30 days stay as they are for the rest of the logs.
+- **Who can read them:** they are private logs, readable only with `roles/logging.privateLogViewer`, which the project owners hold.
+- **Where to look:** Logs Explorer → *Refine scope* → the `hwb-fhir-audit` bucket.
+
+**Cost:** each entry is 1–3 KB. The pilot sends a few hundred bundles a month, about 1 MB, well inside Cloud Logging's monthly free ingestion; storage past 30 days costs fractions of a cent at that size.
+
+To set it up in another project:
+
+```bash
+FILTER='LOG_ID("cloudaudit.googleapis.com/data_access") AND protoPayload.serviceName="healthcare.googleapis.com"'
+
+gcloud logging buckets create hwb-fhir-audit --location=global --retention-days=400
+gcloud logging sinks create hwb-fhir-audit \
+    logging.googleapis.com/projects/PROJECT_ID/locations/global/buckets/hwb-fhir-audit \
+    --log-filter="$FILTER"
+gcloud logging sinks update _Default \
+    --add-exclusion="name=hwb-fhir-audit,filter=$FILTER"
+
+# set-iam-policy replaces the whole policy: start from a fresh copy (its etag
+# makes the call fail if someone changed the policy meanwhile) and only add
+# the auditConfigs block.
+gcloud projects get-iam-policy PROJECT_ID --format=json > policy.json
+#   "auditConfigs": [{"service": "healthcare.googleapis.com",
+#     "auditLogConfigs": [{"logType": "DATA_READ"}, {"logType": "DATA_WRITE"}]}]
+gcloud projects set-iam-policy PROJECT_ID policy.json
+```
+
+To turn it off, remove the `auditConfigs` block the same way. The bucket keeps what it already holds until its retention ends.
+
 ---
 
 ## 5. Bundle Ingestion

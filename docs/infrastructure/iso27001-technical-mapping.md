@@ -39,8 +39,9 @@ This document maps implemented technical controls in the codebase to ISO/IEC 270
   - Evidence:
     - `app/api/v1/endpoints/patients.py` logs sanitized actor/org references and masked identifiers.
     - `app/core/logging.py` central logging strategy.
+    - Cloud Audit Logs: Data Access (`DATA_READ`, `DATA_WRITE`) on for the Cloud Healthcare API, in their own 400-day log bucket (`docs/infrastructure/healthcare-api.md` § 4.1).
   - Residual gap:
-    - Central retention policy and SIEM routing must be configured in GCP.
+    - Central retention policy and SIEM routing for the application logs (`_Default` keeps 30 days).
 
 - **A.8.16 Monitoring activities**
   - Evidence:
