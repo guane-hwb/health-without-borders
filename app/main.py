@@ -14,7 +14,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.api.v1.api import api_router
 from app.core.app_version import HEADER as APP_VERSION_HEADER
 from app.core.config import settings
-from app.core.errors import ApiError
+from app.core.errors import ApiError, StartupCheckError
 from app.core.logging import setup_logging
 from app.core.nfc_startup import prepare_nfc_keyring_at_startup
 from app.core.rate_limit import limiter
@@ -40,17 +40,44 @@ if _nfc_keyring_errors:
 
 
 
+class StartupError(RuntimeError):
+    """A startup step failed; its log line names the step and the exception type."""
+
+
+def _run_startup_steps() -> None:
+    """Migrate, report schema drift, then prepare the NFC keyring."""
+    steps = (
+        ("secret key check", report_weak_secret_key_at_startup),
+        # A failed migration stops the revision from starting; Cloud Run keeps
+        # serving the previous one.
+        ("migrations", run_migrations_at_startup),
+        # Read-only: if anything is still missing (or the keyring step below
+        # refuses to start), the log says which tables and columns.
+        ("schema check", report_schema_drift_at_startup),
+        ("NFC keyring", prepare_nfc_keyring_at_startup),
+    )
+    for name, step in steps:
+        try:
+            step()
+        except StartupCheckError as exc:
+            # Fixed text with no data, written for the operator: keep it.
+            logger.error("Startup failed at %s: %s", name, exc)
+            raise StartupError(f"Startup failed at {name}.") from None
+        except Exception as exc:
+            # Starlette would log this exception as traceback *text*, message
+            # included, and a database error's message carries data (backend
+            # audit 2026-11-04, PoC-5). Log it here, where PhiSafeFormatter
+            # redacts it, and stop with an error that says nothing more.
+            logger.error(
+                "Startup failed at %s: %s", name, type(exc).__name__, exc_info=exc
+            )
+            raise StartupError(f"Startup failed at {name}.") from None
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Migrate, report schema drift, then prepare the NFC keyring, before serving traffic."""
-    report_weak_secret_key_at_startup()
-    # A failed migration stops the revision from starting; Cloud Run keeps
-    # serving the previous one.
-    run_migrations_at_startup()
-    # Read-only: if anything is still missing (or the keyring step below
-    # refuses to start), the log says which tables and columns.
-    report_schema_drift_at_startup()
-    prepare_nfc_keyring_at_startup()
+    """Run the startup steps before serving traffic."""
+    _run_startup_steps()
     yield
 
 

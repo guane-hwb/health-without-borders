@@ -11,6 +11,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.errors import StartupCheckError
 from app.services.nfc_key_service import ensure_initialised, load_keyring
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ def prepare_nfc_keyring(db: Session) -> None:
     database, and the current version is unwrapped. A wrong KEK would otherwise surface as devices quietly receiving
     an empty ring and NFC simply not working — far worse than refusing to start.
 
-    Raises ``RuntimeError`` when the ring cannot be served. Does nothing at all
+    Raises ``StartupCheckError`` when the ring cannot be served. Does nothing at all
     when ``NFC_KEK`` is unset, which is how every deployment behaves until the
     KEK is deliberately enabled.
     """
@@ -48,14 +49,14 @@ def prepare_nfc_keyring(db: Session) -> None:
     ring = load_keyring(db) or {"keys": {}, "current": None}
 
     if not ring["keys"]:
-        raise RuntimeError(
+        raise StartupCheckError(
             "NFC_KEK is configured but no key could be unwrapped. Either the "
             "KEK is not the one that wrapped these rows, or the keyring is "
             "empty. Devices would receive no NFC key."
         )
 
     if ring["current"] is None:
-        raise RuntimeError(
+        raise StartupCheckError(
             "The NFC keyring has live keys but no usable current version: "
             "devices could read but not write. Check nfc_keyring_state."
         )

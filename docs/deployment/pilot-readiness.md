@@ -143,10 +143,12 @@ Once the pilot is live, monitor these operational metrics:
 |---|---|---|
 | API error rate | Cloud Run → Metrics → Request count by status | > 5% 5xx in 15 min |
 | Sync latency (p95) | Cloud Run → Metrics → Request latencies | > 10s |
-| FHIR bundle failures | Application logs: `"Patient sync FHIR warning"` | Any occurrence |
+| FHIR bundle failures | Application logs: `jsonPayload.message:"Patient sync FHIR warning"` | Any occurrence |
 | Database connections | Cloud SQL → Metrics → Active connections | > 80% of max |
-| LLM coding failures | Application logs: `"Gemini"` + `"error"` | Any occurrence |
-| ICD validation fallbacks | Application logs: `"not found in Vulcano catalog"` | > 10% of syncs |
+| LLM coding failures | Application logs: `jsonPayload.logger:"app.services.llm"` and `severity>=WARNING` | Any occurrence |
+| ICD validation fallbacks | Application logs: `jsonPayload.message:"not found in Vulcano catalog"` | > 10% of syncs |
+
+Application log lines carry their `severity` (since 2026-11), so a log-based alert in Cloud Monitoring can watch `severity>=ERROR` for the service: unhandled errors, failed startups and FHIR delivery errors. The alerts themselves are not created yet.
 
 For log access, see [GCP Deployment § Monitoring](../infrastructure/gcp-deploy.md#9-monitoring-and-maintenance).
 
