@@ -190,7 +190,7 @@ def test_an_identity_edit_is_reported_and_not_applied(client, db_session, app_lo
     {"firstName": " SANTIAGO "},
     {"firstLastName": "Rodriguez"},  # without the accent
     {"identification": {"documentType": "PT", "documentNumber": "vz 987.6543"}},
-    {"secondName": None, "secondLastName": ""},  # rebuilt from the patient device
+    {"secondName": None, "secondLastName": ""},  # a copy rebuilt from a device
 ])
 def test_the_same_identity_written_otherwise_is_not_an_edit(client, db_session, same):
     assert _sync(client, _payload()).status_code == 201

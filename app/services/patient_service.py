@@ -634,8 +634,8 @@ def _identity_edits(stored_info: dict, incoming_info: dict) -> list[str]:
     The identity fields where the payload says something else than the stored
     record, which the sync will not apply.
 
-    A field the payload leaves empty is not an edit: a record rebuilt from the
-    patient device has no second names. Names compare without accents, case or
+    A field the payload leaves empty is not an edit: a copy rebuilt from a
+    device may lack the second names. Names compare without accents, case or
     extra spaces, the document number without separators. A field the stored
     record lacks (written by an older version) takes the payload's value, so it
     is not reported either, except the second names, which RULE 1 always keeps.
@@ -889,9 +889,9 @@ def create_or_update_patient(
             stale = True
             conflicts.append("stale_payload_base_version")
 
-        # Without baseVersion (apps before 2026-10-06, or a copy read from the
-        # patient device, which has no version) the server cannot tell an old
-        # copy from a fresh one. "Last write wins" let such a copy erase an
+        # Without baseVersion (apps before 2026-10-06, or a copy from a guardian
+        # device written before the record had a version) the server cannot
+        # tell an old copy from a fresh one. "Last write wins" let such a copy erase an
         # allergy recorded since. It still adds what it brings, but what it
         # would remove from the declarative lists stays, and the app is told.
         keep_server_lists = (
