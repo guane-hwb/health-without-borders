@@ -640,10 +640,13 @@ class PatientFullRecord(BaseModel):
         description=(
             "recordVersion de la copia sobre la que trabajó el dispositivo (la "
             "recibida en /scan, /search o /sync). Si es menor que la del servidor, "
-            "el payload se trata como una copia antigua: no cambia manilla ni "
-            "acudientes, las alergias y antecedentes se unen en lugar de "
-            "reemplazarse, y se informa en `conflicts`. Si no se envía, el "
-            "comportamiento es el de siempre. Señal de transporte: no se guarda."
+            "el payload se trata como una copia antigua: no cambia el dispositivo "
+            "del paciente ni los cuidadores, las alergias y antecedentes se unen "
+            "en lugar de reemplazarse, y se informa en `conflicts` "
+            "(`stale_payload_base_version`). Si no se envía para un registro "
+            "existente, el servidor no sabe si la copia es antigua: si quitaría "
+            "alergias, antecedentes o medicamentos, esas listas se unen y se "
+            "informa `missing_base_version`. Señal de transporte: no se guarda."
         ),
     )
     recordVersion: Optional[int] = Field(
@@ -881,8 +884,12 @@ class PatientSyncResponse(BaseModel):
             "older than what it holds (e.g. a retired patient device), or not the "
             "device's to change, or edits of a visit / vaccination it already "
             "holds (visit_edit_not_applied:<encounterIdentifier>, "
-            "vaccination_edit_not_applied:<vaccinationId>). The rest of the "
-            "record was synced."
+            "vaccination_edit_not_applied:<vaccinationId>). "
+            "missing_base_version: no baseVersion, and the payload would remove "
+            "allergies or background items; the lists were united. "
+            "identity_edit_not_applied: names, birth date, sex or document "
+            "differ from the stored ones, which a sync never changes. The rest "
+            "of the record was synced."
         ),
     )
     record: Optional[PatientFullRecord] = Field(

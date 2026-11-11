@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.app_version import app_version
 from app.core.config import settings
 from app.core.errors import (
     DEVICE_RETIRED,
@@ -465,6 +466,16 @@ async def sync_patient(
     `visit_edit_not_applied:<encounterIdentifier>` or
     `vaccination_edit_not_applied:<vaccinationId>`; the rest of the record syncs.
 
+    **Identity:** names, birth date, sex and document of a stored patient never
+    change by sync. A payload that says otherwise gets
+    `identity_edit_not_applied` in `conflicts` (an empty field is not an edit).
+
+    **No `baseVersion`:** for an existing record the server cannot tell an old
+    copy from a fresh one. If the payload would remove allergies or background
+    items (chronic conditions, family history, medications, notes), the stored
+    ones are kept, what the payload adds is taken, and `conflicts` gets
+    `missing_base_version`.
+
     **The stored record back:** when `conflicts` is not empty and the payload is
     the device's own copy (same `patientId`), `record` carries the record as
     stored after this sync, with its `recordVersion`. Not for a copy matched by
@@ -511,6 +522,11 @@ async def sync_patient(
         # Release the connection: the LLM calls below can take seconds each and
         # must not hold a pooled connection "idle in transaction".
         await asyncio.to_thread(db.rollback)
+
+        # Which builds still sync an existing record without baseVersion, so
+        # the field can be made mandatory once none is left in the field.
+        if stored_record is not None and patient_data.baseVersion is None:
+            logger.info("Sync without baseVersion app_version=%s", app_version(request))
 
         # An item the app re-sent without its id (the edit screens drop it)
         # takes the id of the stored item it is, so it is not added twice.

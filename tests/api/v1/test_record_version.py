@@ -2,8 +2,13 @@
 Record versions and baseVersion (audit x-v2-sync-sin-control-de-versiones-pierde-datos-clinicos).
 
 Decision (2026-09-24, option (b)): a payload WITHOUT baseVersion — every app
-build before this contract — behaves exactly as before; the conservative merge
-applies only when the device says its copy is older.
+build before this contract — behaved exactly as before; the conservative merge
+applied only when the device said its copy was older.
+
+Revised 2026-11 (backend audit be-nov26-copia-sin-baseversion-borra-alergias,
+PoC-6): such a copy could erase an allergy recorded since. Now, when it would
+remove part of the declarative lists, those lists are united and the response
+says ``missing_base_version``; a copy that removes nothing applies as before.
 """
 from copy import deepcopy
 from unittest.mock import patch
@@ -61,14 +66,32 @@ def test_scan_and_search_return_the_version_without_storing_it(client, db_sessio
     assert "recordVersion" not in stored and "baseVersion" not in stored
 
 
-def test_without_base_version_nothing_changes(client, db_session):
-    """Option (b): installed apps can still remove an allergy."""
+def _allergens(allergies):
+    return [allergy["allergen"] for allergy in allergies]
+
+
+def test_without_base_version_an_allergy_is_not_removed(client, db_session):
+    """PoC-6: an old copy, without baseVersion and without the allergy."""
     _sync(client, allergies=PENICILINA)
 
-    response = _sync(client, allergies=[])
+    response = _sync(client, allergies=[], vaccinationRecord=[])
+
+    assert response.status_code == 201
+    assert response.json()["conflicts"] == ["missing_base_version"]
+    assert _allergens(response.json()["record"]["allergies"]) == ["Penicilina"]  # its own copy
+    assert _allergens(_stored(db_session).full_record_json["allergies"]) == ["Penicilina"]
+
+
+def test_without_base_version_additions_and_edits_still_apply(client, db_session):
+    _sync(client, allergies=PENICILINA)
+    edited = [{"category": "01", "allergen": "Penicilina", "reaction": "Urticaria"},
+              {"category": "02", "allergen": "Mani"}]
+
+    response = _sync(client, allergies=edited)
 
     assert response.json()["conflicts"] == []
-    assert _stored(db_session).full_record_json["allergies"] == []
+    stored = _stored(db_session).full_record_json["allergies"]
+    assert [(a["allergen"], a["reaction"]) for a in stored] == [("Penicilina", "Urticaria"), ("Mani", None)]
 
 
 def test_current_base_version_applies_the_change(client, db_session):
