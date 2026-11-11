@@ -97,6 +97,26 @@ def test_stale_offline_copy_keeps_allergy_and_patient_device(api, staff):
     assert _scan(api, doc).status_code == 410
 
 
+def test_payload_without_base_version_keeps_newer_allergy(api, staff):
+    """PoC-6 of the 2026-11-04 audit: device B's copy predates the allergy
+    device A recorded, and carries no baseVersion."""
+    doc = staff["tokens"]["doc_a"]
+    version = _sync(api, doc, _payload()).json()["record_version"]
+    device_b = _payload()  # an old build: no baseVersion
+    device_a = _payload(baseVersion=version)
+    device_a["allergies"].append({"category": "02", "allergen": "Mani"})
+    assert _sync(api, doc, device_a).json()["conflicts"] == []
+
+    device_b["medicalHistory"] = [deepcopy(VISIT_1)]
+    response = _sync(api, doc, device_b)
+
+    assert response.status_code == 201
+    assert response.json()["conflicts"] == ["missing_base_version"]
+    record = _scan(api, doc).json()
+    assert "Mani" in [a["allergen"] for a in record["allergies"]]
+    assert len(record["medicalHistory"]) == 1  # what B brings is still taken
+
+
 def test_base_version_protects_a_stale_copy(api, staff):
     doc = staff["tokens"]["doc_a"]
     version = _sync(api, doc, _payload()).json()["record_version"]

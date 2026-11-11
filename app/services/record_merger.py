@@ -21,6 +21,11 @@ merged conservatively instead: identifiers and guardians stay as stored and
 declarative lists are united, so an old offline copy cannot erase an allergy
 or re-activate a lost patient device.
 
+A payload without ``baseVersion`` may be just as old, but nothing proves it.
+When it would remove part of the declarative lists (``keep_server_lists``,
+see ``drops_declarative_items``), only the lists are united; devices and
+guardians follow the payload as usual.
+
 A visit or vaccination the server already holds keeps its stored version. When
 the device's copy of it says something else (the app edits the last visit in
 place), the difference is reported in ``conflicts`` as
@@ -45,6 +50,7 @@ def merge_patient_records(
     incoming_record: dict,
     *,
     stale: bool = False,
+    keep_server_lists: bool = False,
     keep_server_guardians: bool = False,
     conflicts: Optional[List[str]] = None,
     recorded_by: Optional[Dict[str, Any]] = None,
@@ -71,6 +77,9 @@ def merge_patient_records(
     guardians stay as stored, and allergies / background lists become the
     union of both sides (nothing the server holds is dropped).
 
+    ``keep_server_lists``: only the allergies / background union of ``stale``,
+    for a payload that may be old but is not known to be.
+
     ``keep_server_guardians``: the device may add clinical data but not change
     who the guardians are or which devices identify them.
 
@@ -90,9 +99,9 @@ def merge_patient_records(
 
     if stale:
         merged["device_uid"] = server_record.get("device_uid", merged.get("device_uid"))
+    if stale or keep_server_lists:
         merged["allergies"] = _union(
-            server_record.get("allergies"), incoming_record.get("allergies"),
-            lambda a: (a.get("category"), _text_key(a.get("allergen"))),
+            server_record.get("allergies"), incoming_record.get("allergies"), _allergy_key,
         )
         merged["backgroundHistory"] = _union_background(
             server_record.get("backgroundHistory"), incoming_record.get("backgroundHistory"),
@@ -137,6 +146,61 @@ def _text_key(value: Any) -> str:
     return " ".join(str(value or "").split()).casefold()
 
 
+# What makes two items of a declarative list the same item: the union keeps
+# one of each, and ``drops_declarative_items`` looks for a stored one missing.
+def _allergy_key(item: Dict[str, Any]) -> Hashable:
+    return (item.get("category"), _text_key(item.get("allergen")))
+
+
+def _chronic_key(item: Dict[str, Any]) -> Hashable:
+    return _text_key(item.get("chronicDescription"))
+
+
+def _family_key(item: Dict[str, Any]) -> Hashable:
+    return (_text_key(item.get("conditionDescription")), item.get("relationship"))
+
+
+def _medication_key(item: Dict[str, Any]) -> Hashable:
+    return _text_key(item.get("medicationName"))
+
+
+_BACKGROUND_LISTS = (
+    ("chronicConditions", _chronic_key),
+    ("familyHistory", _family_key),
+    ("medications", _medication_key),
+)
+_BACKGROUND_NOTES = ("personalHistory", "familyHistoryNotes")
+
+
+def _keys(items: Any, key: Callable[[Dict[str, Any]], Hashable]) -> Set[Hashable]:
+    return {key(item) for item in (items or []) if isinstance(item, dict)}
+
+
+def drops_declarative_items(server_record: dict, incoming_record: dict) -> bool:
+    """
+    Whether applying ``incoming_record`` would remove something the server
+    holds from the declarative lists: an allergy, chronic condition, family
+    history item or medication (matched as the stale union matches them), or
+    a background note it leaves empty.
+
+    Adding items, or editing one that keeps its key, removes nothing.
+    """
+    if _keys(server_record.get("allergies"), _allergy_key) - _keys(
+        incoming_record.get("allergies"), _allergy_key
+    ):
+        return True
+    server = server_record.get("backgroundHistory")
+    if not isinstance(server, dict):
+        return False
+    incoming = incoming_record.get("backgroundHistory")
+    if not isinstance(incoming, dict):
+        incoming = {}
+    for field, key in _BACKGROUND_LISTS:
+        if _keys(server.get(field), key) - _keys(incoming.get(field), key):
+            return True
+    return any(server.get(note) and not incoming.get(note) for note in _BACKGROUND_NOTES)
+
+
 def _union(
     server_items: Optional[List[Dict[str, Any]]],
     incoming_items: Optional[List[Dict[str, Any]]],
@@ -162,19 +226,9 @@ def _union_background(server: Any, incoming: Any) -> Any:
     if not isinstance(incoming, dict):
         return server
     merged = dict(incoming)
-    merged["chronicConditions"] = _union(
-        server.get("chronicConditions"), incoming.get("chronicConditions"),
-        lambda c: _text_key(c.get("chronicDescription")),
-    )
-    merged["familyHistory"] = _union(
-        server.get("familyHistory"), incoming.get("familyHistory"),
-        lambda f: (_text_key(f.get("conditionDescription")), f.get("relationship")),
-    )
-    merged["medications"] = _union(
-        server.get("medications"), incoming.get("medications"),
-        lambda m: _text_key(m.get("medicationName")),
-    )
-    for note in ("personalHistory", "familyHistoryNotes"):
+    for field, key in _BACKGROUND_LISTS:
+        merged[field] = _union(server.get(field), incoming.get(field), key)
+    for note in _BACKGROUND_NOTES:
         if not merged.get(note):
             merged[note] = server.get(note)
     return merged
