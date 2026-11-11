@@ -39,3 +39,4 @@ STORED_RECORD_INVALID = "stored_record_invalid"
 # Error codes, not passwords.
 CURRENT_PASSWORD_INCORRECT = "current_password_incorrect"  # noqa: S105
 PASSWORD_UNCHANGED = "password_unchanged"  # noqa: S105
+PASSWORD_CHANGE_REQUIRED = "password_change_required"  # noqa: S105
