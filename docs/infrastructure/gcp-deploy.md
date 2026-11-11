@@ -394,4 +394,5 @@ gcloud sql instances patch <DB_INSTANCE_NAME> --no-assign-ip
 * **Application Logs:** [Cloud Run Console](https://console.cloud.google.com/run) -> "Logs" tab.
 * **Database Performance:** [Cloud SQL Console](https://console.cloud.google.com/sql).
 * **FHIR Store Metrics:** [Cloud Healthcare API Dashboard](https://console.cloud.google.com/healthcare).
+* **Who read or wrote FHIR data:** Logs Explorer, scope the `hwb-fhir-audit` log bucket (Data Access audit logs, 400 days; see [Healthcare API](healthcare-api.md) § 4.1).
 * **CI/CD Pipeline:** [Cloud Build History](https://console.cloud.google.com/cloud-build/builds).
