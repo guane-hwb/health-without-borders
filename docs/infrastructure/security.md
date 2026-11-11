@@ -103,6 +103,10 @@ Offline break-glass accesses (a minor's record opened on the device without the 
 
 Logs never carry a patient or guardian device UID or a document number, not even in part: they show a reference (`ref:` plus 10 hex characters of an HMAC keyed with `SECRET_KEY`), the same for every line about the same value. At startup, the log warns when `SECRET_KEY` is shorter than 32 bytes or is the example value from `.env.example` (never showing the key).
 
+Exception messages never reach the logs either: a database error's message carries data (`DETAIL: Key (col)=(value)`, the statement). Every log handler writes an exception as its frames and type, with `<message redacted>`, and a traceback that arrives as text is redacted the same way. Starlette turns a failed startup into such text, and uvicorn logged it whole until 2026-11 (backend audit `be-nov26-traceback-de-arranque-sin-redactar`). A failed startup step logs `Startup failed at <step>: <type>` and stops the revision. The NFC keyring checks are the exception: their messages are fixed text with no data, telling the operator what to do (`StartupCheckError`), and are logged whole.
+
+On Cloud Run each log record is one JSON line with `severity`, `message`, `logger`, `time` and, for an exception, `exception` with the redacted stack, so Cloud Logging filters and alerts by severity and a traceback is one entry. Locally the format stays plain text. Search Cloud Run's application logs with `jsonPayload.message:"…"`, not `textPayload` (which still holds the lines from before 2026-11, and uvicorn's own output before logging is set up).
+
 Scanning is `POST /api/v1/patients/scan`, with both UIDs in the body: a UID in the URL ends up in Cloud Run's request logs. The old `GET /api/v1/patients/scan/{device_uid}` was removed on 2026-10-30, once the request logs showed no client calling it (the app has used `POST` since 2026-10-09).
 
 ---

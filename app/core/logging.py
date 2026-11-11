@@ -1,8 +1,11 @@
+import json
 import logging
 import logging.config
+import os
 import re
 import sys
 import traceback
+from datetime import datetime, timezone
 
 from app.core.config import settings
 
@@ -48,6 +51,91 @@ class PhiSafeFormatter(logging.Formatter):
         )
 
 
+class JsonPhiSafeFormatter(PhiSafeFormatter):
+    """
+    One JSON object per record, for Cloud Run.
+
+    Cloud Logging reads ``severity`` and ``message`` from a JSON line; plain
+    text arrives as ``DEFAULT`` and a traceback as one entry per line, so no
+    alert on errors could fire. The exception goes in ``exception``, redacted
+    by ``PhiSafeFormatter.formatException``, in the same entry.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        record.exc_text = None
+        entry = {
+            "severity": record.levelname,
+            "message": record.getMessage(),
+            "logger": record.name,
+            "time": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+        }
+        if record.exc_info:
+            entry["exception"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            entry["stack"] = self.formatStack(record.stack_info)
+        return json.dumps(entry, ensure_ascii=False, default=str)
+
+
+_TRACEBACK_HEADER = "Traceback (most recent call last):"
+_CHAIN_HEADERS = (
+    "During handling of the above exception, another exception occurred:",
+    "The above exception was the direct cause of the following exception:",
+)
+_EXCEPTION_TYPE = re.compile(r"[A-Za-z_][\w.]*(?=:|$)")
+
+
+def redact_traceback_text(text: str) -> str:
+    """
+    A traceback already turned into text, with every exception message
+    replaced by ``<message redacted>``; frames and exception types stay.
+
+    The message is everything after a block's frames up to the next block,
+    so a message of several lines (psycopg2's ``DETAIL: Key (...)=(...)``,
+    SQLAlchemy's ``[SQL: ...]``) goes whole.
+    """
+    start = text.find(_TRACEBACK_HEADER)
+    if start < 0:
+        return text
+    out = [text[:start].rstrip("\n")] if text[:start].strip() else []
+    in_message = False
+    for line in text[start:].splitlines():
+        stripped = line.strip()
+        if stripped == _TRACEBACK_HEADER or stripped in _CHAIN_HEADERS:
+            if in_message and stripped in _CHAIN_HEADERS:
+                out.append("")
+            in_message = False
+            out.append(line)
+        elif in_message:
+            continue
+        elif not stripped or line[0] in " \t":
+            out.append(line)
+        else:
+            # The first line after the frames: the exception type and message.
+            in_message = True
+            match = _EXCEPTION_TYPE.match(line)
+            exc_type = match.group(0) if match else "Exception"
+            out.append(f"{exc_type}: <message redacted>")
+    return "\n".join(out)
+
+
+class TracebackTextFilter(logging.Filter):
+    """
+    Redact a traceback that arrives as the log *message*, not as exc_info.
+
+    Starlette turns a failed lifespan into ``traceback.format_exc()`` and
+    uvicorn logs that text with ``logger.error(message)``: PhiSafeFormatter
+    never sees an exception, so the driver's message (with its PHI) reached
+    the logs (backend audit 2026-11-04, PoC-5).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if _TRACEBACK_HEADER in message:
+            record.msg = redact_traceback_text(message)
+            record.args = ()
+        return True
+
+
 class ScanUidAccessFilter(logging.Filter):
     """Mask the patient device UID in a /patients/scan/{uid} access log line."""
 
@@ -60,6 +148,15 @@ class ScanUidAccessFilter(logging.Filter):
         if isinstance(record.msg, str):
             record.msg = _SCAN_UID_IN_PATH.sub(r"\1***", record.msg)
         return True
+
+
+def log_format_name() -> str:
+    """
+    ``json`` on Cloud Run (K_SERVICE is set there): one JSON line per record,
+    so severity and a whole traceback reach Cloud Logging. ``standard``
+    (plain text) anywhere else.
+    """
+    return "json" if os.environ.get("K_SERVICE") else "standard"
 
 
 def setup_logging():
@@ -80,6 +177,8 @@ def setup_logging():
     # You can add LOG_LEVEL="DEBUG" in your .env later to see more details
     log_level = "DEBUG" if settings.DEBUG else "INFO"
 
+    formatter = log_format_name()
+
     logging_config = {
         "version": 1,
         "disable_existing_loggers": False,
@@ -89,15 +188,18 @@ def setup_logging():
                 "fmt": log_format,
                 "datefmt": "%Y-%m-%d %H:%M:%S",
             },
+            "json": {"()": JsonPhiSafeFormatter},
         },
         "filters": {
             "scan_uid": {"()": ScanUidAccessFilter},
+            "traceback_text": {"()": TracebackTextFilter},
         },
         "handlers": {
             "console": {
                 "level": log_level,
                 "class": "logging.StreamHandler",
-                "formatter": "standard",
+                "formatter": formatter,
+                "filters": ["traceback_text"],
                 "stream": sys.stdout, # Important for Docker/GCP
             },
         },
