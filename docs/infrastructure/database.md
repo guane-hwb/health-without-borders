@@ -7,7 +7,33 @@ This document details the data persistence layer for the **Health Without Border
 * **Engine:** PostgreSQL 15 (Managed via Google Cloud SQL in production, Docker for local development).
 * **ORM (Object-Relational Mapping):** SQLAlchemy 2.0. Leverages the Data Mapper pattern to translate database schemas into Python objects, ensuring type safety and preventing SQL injection.
 * **Driver:** `psycopg2-binary` for standard TCP connections and Google Cloud Unix Socket integration.
-* **Migration Strategy:** Schema initialization and catalog seeding are handled via idempotent Python scripts located in the `scripts/` directory.
+* **Migration Strategy:** Alembic migrations in `migrations/versions/`, applied when an instance starts (`app/db/migrations.py`, controlled by `RUN_MIGRATIONS_ON_STARTUP`).
+
+### 1.1. Connection Capacity
+
+Every Cloud Run instance has its own SQLAlchemy pool, so the database sees the sum of all of them. Two settings must stay in step:
+
+| Setting | Where | Pilot value |
+|---|---|---|
+| `DB_POOL_SIZE` (connections kept open) | `app/core/config.py` | 2 |
+| `DB_MAX_OVERFLOW` (extra connections under load, closed after use) | `app/core/config.py` | 3 |
+| `DB_POOL_TIMEOUT` (seconds a request waits for a connection, then fails) | `app/core/config.py` | 10 |
+| `--max-instances` | `cloudbuild.yaml` | 3 |
+| `--min-instances` | `cloudbuild.yaml` | 1 |
+
+The rule is:
+
+```
+max_instances × (pool_size + max_overflow) + max_instances × pool_size ≤ max_connections − 3
+        3     ×            5               +      3        ×     2     = 21 ≤ 22
+```
+
+- **`max_connections`:** the pilot instance is a `db-f1-micro` with no database flags, so it has Cloud SQL's default for that tier, 25. Three are reserved for superusers, and the Cloud SQL `postgres` user the service connects as is not one, which leaves 22.
+- **The second term** covers a deploy: the old revision's instances may still hold their idle pool while the new revision scales up.
+- **When the pool is full,** a request waits up to `DB_POOL_TIMEOUT` and then fails with a `500`, instead of the database refusing new connections for every instance.
+- **Usage so far:** in the 30 days before 2026-11-12, the most connections open at once was 5 and the most instances was 6, during deploys.
+- **To grow,** move to a larger tier first (`db-g1-small` allows 50 connections), then raise `--max-instances`. `tests/api/v1/test_infrastructure.py` fails if `cloudbuild.yaml` and the pool settings break the rule.
+- **`--min-instances=1`** keeps one instance up, so a login after a quiet period does not wait for a cold start: the app gives up on the login after 20 s, and in the 30 days to 2026-11-04 three logins took longer than that. The idle instance costs roughly USD 10 per month at list price (1 vCPU and 512 MiB, us-central1).
 
 ---
 

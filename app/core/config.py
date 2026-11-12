@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     # Fallback for local development (standard TCP connection string)
     DATABASE_URL: Optional[str] = None
 
+    # Connections each instance may hold. Cloud Run --max-instances (in
+    # cloudbuild.yaml) times DB_POOL_SIZE + DB_MAX_OVERFLOW must stay below
+    # what Cloud SQL lets the application open; see
+    # docs/infrastructure/database.md § 1.1 before changing either side.
+    DB_POOL_SIZE: int = 2
+    DB_MAX_OVERFLOW: int = 3
+    # Seconds a request waits for a free connection before it fails.
+    DB_POOL_TIMEOUT: int = 10
+
     # --- INTEROPERABILITY BACKEND SELECTION ---
     # Controls which concrete implementation is used for the FHIR Store and LLM.
     # Supported values for FHIR_BACKEND: "gcp", "noop"

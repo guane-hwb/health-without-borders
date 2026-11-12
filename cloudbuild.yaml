@@ -51,6 +51,15 @@ steps:
       - '--region'
       - 'us-central1'
       - '--allow-unauthenticated'
+      # Capacity (docs/infrastructure/database.md § 1.1). One instance stays
+      # up so a login after a quiet period does not wait for a cold start
+      # (the app gives up after 20 s). At most 3 instances, because each one
+      # may open DB_POOL_SIZE + DB_MAX_OVERFLOW = 5 connections and the
+      # db-f1-micro instance lets the application open 22.
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '3'
       # The service runs as its own account, which holds only what the backend
       # needs (docs/infrastructure/gcp-deploy.md § 4). Without this flag Cloud
       # Run uses the Compute Engine default account.
@@ -77,8 +86,10 @@ steps:
       # 3. Actualizar las variables de entorno para que config.py las lea.
       # NFC_BOOTSTRAP_IMPORT is set by hand for a first start only
       # (docs/infrastructure/nfc-key-management.md § 4); a deploy clears it.
+      # The HL7 v2 variables are left over from an integration the code no
+      # longer has. Removing a variable that is not there is a no-op.
       - '--remove-env-vars'
-      - 'NFC_BOOTSTRAP_IMPORT'
+      - 'NFC_BOOTSTRAP_IMPORT,GCP_HL7_STORE_ID,HL7_SENDING_APP,HL7_SENDING_FACILITY,HL7_RECEIVING_APP,HL7_RECEIVING_FACILITY,HL7_PROCESSING_ID,HL7_VERSION_ID'
       - '--update-env-vars'
       - 'INSTANCE_CONNECTION_NAME=migrants-unicef:us-central1:hwb-db-cluster,DB_USER=postgres,DB_NAME=hwb_db,GCP_PROJECT_ID=migrants-unicef,GCP_LOCATION=us-central1,GCP_DATASET_ID=hwb-dataset,GCP_FHIR_STORE_ID=hwb-fhir-store,ACCESS_TOKEN_EXPIRE_MINUTES=60,REFRESH_TOKEN_EXPIRE_MINUTES=10080'
 
