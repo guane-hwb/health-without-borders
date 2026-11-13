@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_current_user_allowing_temporary_password
 from app.db.models import UserRole
 from app.db.session import get_db
 from app.main import app
@@ -101,7 +101,7 @@ def test_get_me_returns_current_user_profile(client: TestClient):
         is_active = True
         must_change_password = True
 
-    app.dependency_overrides[get_current_user] = lambda: MockDoctor()
+    app.dependency_overrides[get_current_user_allowing_temporary_password] = lambda: MockDoctor()
 
     response = client.get("/api/v1/users/me")
 
@@ -128,7 +128,7 @@ def test_get_me_works_for_all_roles(client: TestClient):
             must_change_password = False
 
         MockUser.role = role
-        app.dependency_overrides[get_current_user] = lambda u=MockUser(): u
+        app.dependency_overrides[get_current_user_allowing_temporary_password] = lambda u=MockUser(): u
 
         response = client.get("/api/v1/users/me")
 

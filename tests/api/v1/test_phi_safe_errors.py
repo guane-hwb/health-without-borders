@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import DataError, IntegrityError
 from starlette.requests import Request
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_current_user_allowing_temporary_password
 from app.core.logging import PhiSafeFormatter, ScanUidAccessFilter, setup_logging
 from app.core.security import get_password_hash
 from app.db.models import Organization, User, UserRole
@@ -126,7 +126,7 @@ def test_unhandled_error_is_a_json_500_without_details(db_session, monkeypatch):
     monkeypatch.setattr("app.main.prepare_nfc_keyring_at_startup", lambda: None)
     monkeypatch.setattr("app.main.report_schema_drift_at_startup", lambda: None)
     monkeypatch.setattr("app.main.run_migrations_at_startup", lambda: None)
-    app.dependency_overrides[get_current_user] = _explode
+    app.dependency_overrides[get_current_user_allowing_temporary_password] = _explode
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.get("/api/v1/users/me")
 

@@ -28,8 +28,9 @@ version a chip names and encrypt with the current one.
 
 An account on a temporary password (`must_change_password`) gets no keys at
 login, refresh or `/users/me`, because whoever set the password saw it. The app
-only shows the password-change screen in that state, and the response to the
-change delivers the ring. A device that already holds a ring keeps it: this
+only shows the password-change screen in that state, the server refuses every
+other route (`403 password_change_required`), and the response to the change
+delivers the ring. A device that already holds a ring keeps it: this
 stops new deliveries, it removes nothing.
 
 A browser gets no keys from any of those responses: it has no NFC radio, so the
