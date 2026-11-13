@@ -35,6 +35,7 @@ from app.services.fhir_service import (
     _build_family_member_history,
 )
 from app.services.llm import prompts
+from app.services.llm.base import fallback_coding
 from app.services.terminology import normalize_icd10, terminology
 from tests.api.v1.test_patients import (
     MOCK_PATIENT_PAYLOAD,
@@ -64,9 +65,9 @@ class FakeLLM:
                 "description": "Diabetes mellitus, no especificada"}
 
     def code_chronic_condition(self, description):
+        """Fails, as the real service does when Vertex errors."""
         self.chronic_calls += 1
-        return {"icd10Code": "R69", "icd11Code": None,
-                "description": "Causas de morbilidad desconocidas y no especificadas"}
+        return fallback_coding()
 
 
 @pytest.fixture
@@ -275,7 +276,8 @@ def test_chronic_condition_keeps_original_text_next_to_the_code():
     code = _build_condition_statement(item, "Patient-1", "Condition-1")["code"]
 
     assert code["text"] == "Diabetes"
-    assert code["coding"][0]["display"] == "Diabetes mellitus, no especificada"
+    # The catalog's name for the code, so the display always matches the code.
+    assert code["coding"][0]["display"] == "Unspecified diabetes mellitus"
 
 
 def test_family_history_without_code_has_no_empty_coding():
@@ -296,8 +298,9 @@ def test_family_history_with_code_keeps_text_and_display():
 
     assert code["text"] == "Glaucoma"
     assert code["coding"][0] == {"system": code["coding"][0]["system"], "code": "H409",
-                                 "display": "Glaucoma"}
+                                 "display": "Glaucoma, unspecified"}
     assert code["coding"][1]["code"] == "9C61.Z"
+    assert code["coding"][1]["display"]  # the ICD-11 catalog names it in Spanish
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +341,7 @@ def test_prompt_examples_match_catalog():
         if icd11 != "null":
             assert icd11.strip('"') in catalog11, icd11
     assert '"Glaucoma"' in text and '"9A61.Z"' not in text
-    assert '"icd10Code": "E14", "icd11Code": "5A14"' in text
+    assert '"icd10Code": "E149", "icd11Code": "5A14"' in text
 
 
 def test_gemini_client_uses_configured_location(monkeypatch):

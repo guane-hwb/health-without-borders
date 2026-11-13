@@ -20,7 +20,9 @@ All three tasks run automatically during `POST /api/v1/patients/sync` before the
 
 ### Model Execution
 
-- **Model:** set by `LLM_MODEL_NAME` (default `gemini-3-flash-preview`), via Vertex AI in the region set by `LLM_LOCATION` (default `global`). Each call has a timeout (`LLM_TIMEOUT_SECONDS`, default 30 s); a timeout or error falls back to R69.
+- **Model:** `gemini-3.8-flash`, a GA model (`LLM_MODEL_NAME`, set in `cloudbuild.yaml`). Google lists it as available from 2026-09-02 until at least 2027-09-02; check the [model versions page](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions) before that date. Until 2026-11 the service used `gemini-3-flash-preview`, a preview model without SLA; `gemini-2.5-pro`, which `.env.example` used to name, was retired from Vertex AI on 2026-10-20.
+- **Region:** `us-central1` (`LLM_LOCATION`, set in `cloudbuild.yaml`), the FHIR Store's region, so the clinical notes are processed where the record is kept. `global` would let Google choose the region.
+- **Timeout and budget:** each call has a timeout (`LLM_TIMEOUT_SECONDS`, default 30 s); a timeout or error falls back to R69. One `/sync` makes at most `LLM_MAX_CALLS_PER_SYNC` calls (20), `LLM_MAX_CONCURRENT_CALLS` at a time (4), and starts none after `LLM_SYNC_BUDGET_SECONDS` (45 s). A new visit the budget does not reach gets the R69 fallback; a background item stays uncoded and a later `/sync` codes it. A visit whose four clinical notes are empty gets the R69 fallback without a call.
 - **Configuration:** `temperature=0.0` (Greedy Decoding) for deterministic coding. `thinking_config` enabled for internal step-by-step reasoning.
 
 ### Safety & Compliance
@@ -32,7 +34,10 @@ All three tasks run automatically during `POST /api/v1/patients/sync` before the
 
 - **Structured Output:** Each task uses a dedicated Gemini response schema (`DIAGNOSIS_RESPONSE_SCHEMA`, `FAMILY_HISTORY_RESPONSE_SCHEMA`, `CHRONIC_CONDITION_RESPONSE_SCHEMA`) to enforce the exact JSON structure returned.
 - **Pydantic Parsing:** Raw JSON is immediately parsed by `DiagnosisItem` Pydantic models.
-- **Post-LLM Terminology Validation:** Every ICD-10/11 code returned by the LLM is validated against the Vulcano IHCE terminology catalogs (`app/data/icd10_codes.json` and `app/data/icd11_codes.json`). If an ICD-10 code is not in the catalog, it is replaced with the honest fallback `R69`. If an ICD-11 code is invalid, it is stripped (set to `null`) since ICD-11 is optional per the IG.
+- **Post-LLM Terminology Validation:** Every ICD-10/11 code returned by the LLM is validated against the Vulcano IHCE terminology catalogs (`app/data/icd10_codes.json` and `app/data/icd11_codes.json`). If an ICD-10 code is not in the catalog, it is replaced with the honest fallback `R69`. If an ICD-11 code is invalid, it is stripped (set to `null`) since ICD-11 is optional per the IG; the response schemas declare `icd11Code` nullable.
+- **Terminal codes:** the prompts and the validation apply one rule. When the text gives no detail, a 3-character category that has subcategories is coded as its "unspecified" subcategory: the model is asked for it, and a category it returns anyway is completed (`E14` → `E149`, `J45` → `J459`). A category without a "9" subcategory stays as it is (`Z00`), and one without subcategories is complete (`E86`, `R69`).
+- **Codes sent by the client:** the app never sends diagnoses (it shows what the server coded), but a client that sends an ICD-10 code not in the catalog has that diagnosis dropped, and the visit is coded as if it had none; an invalid background code is cleared and the item is coded. Valid codes are kept as sent.
+- **Display in the RDA:** `Condition.code.coding.display` is the catalog's name for the code, so it always matches the code; the clinician's or the LLM's wording goes in `code.text`. The ICD-10 catalog has the WHO names, in English except where the Vulcano fragment gives a Spanish one.
 - **Honest Fallback:** On LLM error or invalid code, the system uses `R69` ("Causas de morbilidad desconocidas y no especificadas") instead of fabricating a false diagnosis. The bundle is always generated and sent — the fallback never blocks transmission.
 
 ## 4. Task Details
@@ -55,7 +60,7 @@ Output: Dictionary with `icd10Code`, `icd11Code` (nullable), and `description` i
 
 Only runs for `FamilyHistoryItem` entries that have a description but no ICD codes yet. An item whose text is already coded on the server reuses that coding instead of calling the LLM again.
 
-The clinician's `conditionDescription` is **never replaced**: the LLM's description is stored in `conditionCodedDisplay`, and `codingSource` records `ai_suggested` (or `ai_fallback` for R69).
+The clinician's `conditionDescription` is **never replaced**: the LLM's description is stored in `conditionCodedDisplay`, and `codingSource` records `ai_suggested`, or `ai_fallback` when no model answer stands behind the code (the call failed, the code was not in the catalog, or there was no call). An R69 that the model returns on purpose is `ai_suggested`.
 
 Fallback on error: `R69`, with the clinician's text untouched.
 
@@ -71,7 +76,7 @@ Fallback on error: `R69`, with the clinician's text untouched.
 
 ### 4.4. Provenance of AI output
 
-Every diagnosis the LLM produces is stored with `source` (`ai_suggested`, or `ai_fallback` for R69), `model` and `generatedAt`; a diagnosis the client sends for a new visit is marked `clinician`. In the RDA, a `Condition` is `confirmed` only for a clinician diagnosis of type 02/03 (confirmed); AI suggestions, fallbacks, legacy diagnoses with no source and diagnostic impressions (01) are sent as `provisional`. Only visits new to the server are sent to the LLM.
+Every diagnosis the LLM produces is stored with `source` (`ai_suggested`, or `ai_fallback` when the call failed, the code was not in the catalog or there was no call), `model` and `generatedAt`; a diagnosis the client sends for a new visit is marked `clinician`. In the RDA, a `Condition` is `confirmed` only for a clinician diagnosis of type 02/03 (confirmed); AI suggestions, fallbacks, legacy diagnoses with no source and diagnostic impressions (01) are sent as `provisional`. Only visits new to the server are sent to the LLM.
 
 ## 5. Terminology Validation
 

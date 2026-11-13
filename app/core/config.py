@@ -69,11 +69,20 @@ class Settings(BaseSettings):
     GCP_DATASET_ID: Optional[str] = None
     GCP_FHIR_STORE_ID: Optional[str] = None
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None
-    LLM_MODEL_NAME: str = "gemini-3-flash-preview"
-    # Vertex AI region that processes the clinical notes sent to the LLM.
-    # "global" keeps the historical behaviour (and is where preview models are
-    # served); set a region to pin where the notes are processed.
-    LLM_LOCATION: str = "global"
+    # A GA model: preview models carry no SLA and can change or go away without
+    # notice. Retirement dates: docs/architecture/ai-integration.md.
+    LLM_MODEL_NAME: str = "gemini-3.8-flash"
+    # Vertex AI region that processes the clinical notes sent to the LLM: the
+    # FHIR Store's region, so the notes stay where the record is kept. "global"
+    # lets Google pick the region.
+    LLM_LOCATION: str = "us-central1"
+    # Budget of one /sync for LLM coding. Calls beyond it are not made: a new
+    # visit gets the R69 fallback, a background item stays uncoded and is coded
+    # by a later /sync. Without it one /sync with hundreds of uncoded items
+    # made hundreds of calls in a row (backend audit 2026-11-04).
+    LLM_MAX_CALLS_PER_SYNC: int = 20
+    LLM_SYNC_BUDGET_SECONDS: float = 45.0
+    LLM_MAX_CONCURRENT_CALLS: int = 4
     # Upper bounds for the external calls made while serving /sync. Without
     # them a hung Vertex or Healthcare API call held a worker thread (and a DB
     # connection) forever.

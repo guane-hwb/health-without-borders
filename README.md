@@ -32,7 +32,7 @@ This repository contains the source code for the Backend API of the Health Witho
 * **Database:** PostgreSQL 15 (Cloud SQL in Production)
 * **ORM:** SQLAlchemy 2.0
 * **FHIR Store:** Google Cloud Healthcare API (R4)
-* **LLM:** Google Vertex AI (Gemini; model set by `LLM_MODEL_NAME`, default `gemini-3-flash-preview`)
+* **LLM:** Google Vertex AI (Gemini; `gemini-3.8-flash` in `us-central1`, set by `LLM_MODEL_NAME` and `LLM_LOCATION`)
 * **Package Manager:** `uv` (Astral)
 * **Infrastructure:** Docker, Google Artifact Registry, Google Cloud Build.
 

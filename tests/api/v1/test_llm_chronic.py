@@ -65,6 +65,7 @@ class TestCodeChronicConditionHappyPath:
 
         with patch("app.services.llm.gemini.terminology") as mock_term:
             mock_term.validate_icd10.return_value = True
+            mock_term.terminal_icd10.side_effect = lambda code: code.replace(".", "")
             mock_term.validate_icd11.return_value = True
             result = gemini_service.code_chronic_condition("Diabetes mellitus tipo 2")
 
@@ -81,6 +82,7 @@ class TestCodeChronicConditionHappyPath:
 
         with patch("app.services.llm.gemini.terminology") as mock_term:
             mock_term.validate_icd10.return_value = True
+            mock_term.terminal_icd10.side_effect = lambda code: code.replace(".", "")
             mock_term.validate_icd11.return_value = True
             gemini_service.code_chronic_condition("Hipertensión")
 
@@ -98,6 +100,7 @@ class TestCodeChronicConditionHappyPath:
 
         with patch("app.services.llm.gemini.terminology") as mock_term:
             mock_term.validate_icd10.return_value = True
+            mock_term.terminal_icd10.side_effect = lambda code: code.replace(".", "")
             mock_term.validate_icd11.return_value = True
             result = gemini_service.code_chronic_condition("Asma")
 

@@ -25,6 +25,7 @@ DIAGNOSIS_RESPONSE_SCHEMA = {
             },
             "icd11Code": {
                 "type": "STRING",
+                "nullable": True,
                 "description": (
                     "The corresponding WHO ICD-11 MMS code, or null if not 100% certain. "
                     "ICD-11 codes keep their original format with dots (e.g., '1A40.Z')."
@@ -55,6 +56,7 @@ FAMILY_HISTORY_RESPONSE_SCHEMA = {
         },
         "icd11Code": {
             "type": "STRING",
+            "nullable": True,
             "description": (
                 "The corresponding WHO ICD-11 MMS code, or null if not 100% certain."
             ),
@@ -81,6 +83,7 @@ CHRONIC_CONDITION_RESPONSE_SCHEMA = {
         },
         "icd11Code": {
             "type": "STRING",
+            "nullable": True,
             "description": (
                 "The corresponding WHO ICD-11 MMS code, or null if not 100% certain."
             ),

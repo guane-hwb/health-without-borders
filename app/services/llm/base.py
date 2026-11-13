@@ -88,18 +88,46 @@ class MedicalCodingService(Protocol):
         ...
 
 
-def ai_code_source(icd10_code: Optional[str]) -> CodeSource:
-    """R69 is what every LLM failure path returns; anything else is a suggestion."""
-    return (
-        CodeSource.AI_FALLBACK if icd10_code == FALLBACK_ICD10_CODE else CodeSource.AI_SUGGESTED
+# Set on a background coding dict when no model answer stands behind it (the
+# call failed, the code was not in the catalog, or there was no call at all).
+# R69 alone does not say that: the model may also answer R69 on purpose.
+FALLBACK_FLAG = "fallback"
+
+
+def fallback_coding() -> dict:
+    """The R69 coding of a background item that the LLM did not code."""
+    return {
+        "icd10Code": FALLBACK_ICD10_CODE,
+        "icd11Code": None,
+        "description": FALLBACK_ICD10_DESCRIPTION,
+        FALLBACK_FLAG: True,
+    }
+
+
+def fallback_diagnosis() -> DiagnosisItem:
+    """The R69 diagnosis of a visit that the LLM did not code."""
+    return DiagnosisItem(
+        icd10Code=FALLBACK_ICD10_CODE,
+        description=FALLBACK_ICD10_DESCRIPTION,
+        source=CodeSource.AI_FALLBACK,
     )
 
 
+def ai_code_source(coded: dict) -> CodeSource:
+    """A fallback is AI_FALLBACK; any answer of the model, R69 included, is a suggestion."""
+    return CodeSource.AI_FALLBACK if coded.get(FALLBACK_FLAG) else CodeSource.AI_SUGGESTED
+
+
 def mark_ai_diagnoses(diagnoses: List[DiagnosisItem], model: str) -> List[DiagnosisItem]:
-    """Stamp LLM-produced diagnoses with their provenance."""
+    """
+    Stamp LLM-produced diagnoses with their provenance. A fallback keeps
+    AI_FALLBACK; every diagnosis the model returned, R69 included, is
+    AI_SUGGESTED.
+    """
     generated_at = datetime.now(timezone.utc)
     for diagnosis in diagnoses:
-        diagnosis.source = ai_code_source(diagnosis.icd10Code)
+        if diagnosis.source != CodeSource.AI_FALLBACK:
+            diagnosis.source = CodeSource.AI_SUGGESTED
         diagnosis.model = model
         diagnosis.generatedAt = generated_at
     return diagnoses
