@@ -177,6 +177,7 @@ Deployed services apply new migrations themselves on startup.
 
 ## Test suites
 
+* **No test reaches Google.** `tests/conftest.py` sets `FHIR_BACKEND=noop` and `LLM_BACKEND=noop` before the application is imported, whatever your `.env` says. It also refuses every request to a Google host (`*.googleapis.com` and the metadata server) through `requests` or `httpx`, and fails the test that tried it. A test that needs a real backend must mock its transport, as `tests/api/v1/test_fhir_idempotency.py` does. The guard exists because local runs with the GCP backends in `.env` sent synthetic bundles to the pilot's FHIR Store, authenticated with the machine's application-default credentials (`gcloud auth application-default login`), which are separate from the account `gcloud` itself uses.
 * **Unit and API tests** (`tests/api/`, SQLite in memory) and **contract tests** (`tests/contract/`, payloads shaped exactly as the mobile app serializes them) run with a plain `uv run pytest`. CI requires 100 % line coverage.
 * **PostgreSQL integration tests** (`tests/integration/`) run the real application — startup and migrations included — with real users and tokens against PostgreSQL. They are skipped unless `DATABASE_URL` points to PostgreSQL, and they **drop and recreate the schema**, so the database name must contain `test`:
 
