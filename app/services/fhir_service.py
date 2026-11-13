@@ -163,7 +163,8 @@ def _fhir_datetime(dt_obj) -> str:
     """
     FHIR ``dateTime`` for a clinical timestamp.
 
-    The app sends local wall-clock time without an offset. Appending "Z" (the
+    Older app builds sent local wall-clock time without an offset (current
+    ones send it; stored records keep both kinds). Appending "Z" (the
     previous behaviour) declared a 10:30 visit in Colombia as 10:30 UTC — five
     hours early, sometimes on the previous day — and turned a value that did
     carry ``-05:00`` into the invalid ``…-05:00Z``. A naive value is read in

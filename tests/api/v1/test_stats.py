@@ -728,3 +728,31 @@ def test_clinical_date_helper_accepts_datetimes_and_junk():
     assert stats_service._clinical_date(naive, tz) == date(2026, 6, 1)
     assert stats_service._clinical_date("nonsense", tz) is None
     assert stats_service._clinical_date(42, tz) is None
+
+
+def test_statistics_read_only_the_lists_they_count(db_session, monkeypatch):
+    """Audit 2026-11-04 be-nov26-estadisticas-recorren-todos-los-registros:
+    every request loaded each whole record, consent signatures included."""
+    from app.services import stats_service
+
+    _patient(
+        db_session, _org(db_session, "Org keys"), created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        record={
+            "guardianInfo": {"consent": {"signatureBase64": "S" * 1000}},
+            "allergies": [{"allergen": "Mani"}],
+            "vaccinationRecord": [],
+            "medicalHistory": [],
+        },
+    )
+    seen = []
+    real_fold = stats_service._fold_patient
+
+    def spy(acc, **kwargs):
+        seen.append(kwargs["record"])
+        return real_fold(acc, **kwargs)
+
+    monkeypatch.setattr(stats_service, "_fold_patient", spy)
+    stats_service.build_overview(db_session)
+
+    assert seen == [{"allergies": [{"allergen": "Mani"}], "vaccinationRecord": [],
+                     "medicalHistory": []}]

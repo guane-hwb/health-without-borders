@@ -141,6 +141,47 @@ def test_empty_batch_rejected(client):
     assert resp.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "field, length",
+    [("client_event_id", 129), ("patient_uid", 129), ("patient_name", 201),
+     ("user_id", 129), ("reason", 65), ("occurred_at", 41)],
+)
+def test_oversized_text_is_rejected(client, db_session, field, length):
+    """Audit 2026-11-04 be-nov26-emergency-access-sin-limites-de-longitud: the
+    append-only ledger accepted texts of any length."""
+    value = "2026-08-20T14:30:00" + "0" * (length - 19) if field == "occurred_at" else "x" * length
+    _override(MockDoctor())
+    resp = client.post(
+        "/api/v1/patients/emergency-access", json={"entries": [_entry(**{field: value})]}
+    )
+    _clear()
+
+    assert resp.status_code == 422
+    assert db_session.query(EmergencyAccessLog).count() == 0
+
+
+def test_a_reason_of_ten_thousand_characters_is_rejected(client):
+    _override(MockDoctor())
+    resp = client.post(
+        "/api/v1/patients/emergency-access", json={"entries": [_entry(reason="r" * 10_000)]}
+    )
+    _clear()
+    assert resp.status_code == 422
+
+
+def test_what_the_app_sends_fits(client):
+    entry = _entry(
+        "0b2c7f0e-6a4e-4c8f-9f53-0d6c2a1b9e77",
+        patient_uid="04:A2:B3:C4:D5:E6:F7",
+        user_id="5f0c2f8a-1d2b-4e5c-8a9b-0c1d2e3f4a5b",
+        occurred_at="2026-11-13T10:00:00.123456-05:00",
+    )
+    _override(MockDoctor())
+    resp = client.post("/api/v1/patients/emergency-access", json={"entries": [entry]})
+    _clear()
+    assert resp.status_code == 200
+
+
 def _flush_raising(db_session, monkeypatch, message):
     """Make the insert flush fail once with an IntegrityError carrying ``message``."""
     real_flush = db_session.flush

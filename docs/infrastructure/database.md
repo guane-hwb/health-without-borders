@@ -185,7 +185,7 @@ Every `User` belongs to an `Organization`, but **patient records do not**. A pat
 * Uniqueness is on **type + number**, so the same digits under a different `documentType` are a different identity. A child whose `RC` is later re-issued as a `TI` with the same number is therefore *not* recognised as a duplicate — reconciling that transition still needs the planned search-and-relink flow.
 * Placeholder types `AS`, `MS` and `SI` (adulto/menor sin identificar, sin identificación) are exempt: their numbers are assigned locally at registration, so enforcing uniqueness would block every unnamed patient after the first.
 * The guard runs on the **creation path only**. Re-syncs and device replacements target an existing record, whose identification block is immutable, so they can never take over another patient's document.
-* Enforcement is at application level; there is no `UNIQUE(document_type, document_number)` constraint, since existing data may already contain duplicates and the exempt types would violate it.
+* Enforcement is at application level; there is no `UNIQUE(document_type, document_number)` constraint, since existing data may already contain duplicates and the exempt types would violate it. On PostgreSQL the check takes a transaction-scoped advisory lock (`pg_advisory_xact_lock`) keyed on type + canonical number, so two simultaneous registrations of the same document are serialised: the second waits for the first to commit, finds its row and gets `409 duplicate_identity`.
 
 ### 3.2. Hybrid Relational-Document Model (JSON)
 Migrant populations often have unstructured or transient data.

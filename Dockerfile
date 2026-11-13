@@ -1,5 +1,11 @@
+# Base image pinned by digest, so a rebuild of the same commit gets the same
+# operating system packages. To take security updates, replace the digest
+# with the one `docker pull python:3.11-slim` reports (docs/infrastructure/
+# gcp-deploy.md § 7). This one was published 2026-11-05.
+ARG PYTHON_IMAGE=python:3.11-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
+
 # ---- build stage: resolve the virtualenv from the lockfile -----------------
-FROM python:3.11-slim AS builder
+FROM ${PYTHON_IMAGE} AS builder
 
 # Pinned by version and digest so a rebuild of the same commit uses the same
 # uv (the version that produced uv.lock).
@@ -21,16 +27,22 @@ COPY . .
 RUN uv sync --frozen --no-dev
 
 # ---- runtime stage: the app and its virtualenv, nothing else --------------
-FROM python:3.11-slim
+FROM ${PYTHON_IMAGE}
 
 WORKDIR /app
 
 # Run as an unprivileged user instead of root.
 RUN useradd --create-home --uid 10001 appuser
 
-COPY --from=builder --chown=appuser:appuser /app /app
+# Owned by root: the process can read and run the code and the virtualenv but
+# not change them, so a flaw that lets it write files cannot plant code that
+# the next import would run. The app writes nothing under /app.
+COPY --from=builder /app /app
 
 ENV PATH="/app/.venv/bin:$PATH"
+# Bytecode is compiled at build time (UV_COMPILE_BYTECODE); do not try to
+# write __pycache__ into a directory the process cannot write to.
+ENV PYTHONDONTWRITEBYTECODE=1
 
 USER appuser
 

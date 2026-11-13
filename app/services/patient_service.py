@@ -5,7 +5,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
@@ -371,6 +371,36 @@ def get_patient_by_document(
     )
 
 
+def _identity_lock_key(document_type: str, normalized_number: str) -> int:
+    """A signed 64-bit key for pg_advisory_xact_lock, the same in every instance."""
+    digest = hashlib.sha256(
+        f"hwb-identity|{document_type}|{normalized_number}".encode()
+    ).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
+
+
+def _lock_identity(db: Session, document_type: str, document_number: Optional[str]) -> None:
+    """
+    Serialise registrations of the same identity document.
+
+    The duplicate check reads before it writes, and nothing in the schema stops
+    two copies (there is no unique index: existing data may hold duplicates).
+    Two simultaneous registrations of the same child from two devices both
+    passed the check and created two patients (backend audit 2026-11-04,
+    be-nov26-guardia-de-identidad-duplicada-sin-restriccion). The second one
+    now waits here until the first commits, then finds its row and gets the
+    409. The lock belongs to the transaction, so commit or rollback frees it.
+    SQLite (tests, local) runs one writer at a time and needs none.
+    """
+    normalized = normalize_document_number(document_number)
+    if not normalized or db.get_bind().dialect.name != "postgresql":
+        return
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"),
+        {"key": _identity_lock_key(document_type, normalized)},
+    )
+
+
 def _ensure_identity_available(
     db: Session,
     document_type: Optional[str],
@@ -392,6 +422,7 @@ def _ensure_identity_available(
     """
     if not document_type or document_type in UNIDENTIFIED_DOCUMENT_TYPES:
         return
+    _lock_identity(db, document_type, document_number)
     owner = get_patient_by_document(db, document_type, document_number)
     if owner is not None and owner.id != exclude_patient_id:
         logger.warning(

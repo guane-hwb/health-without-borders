@@ -1070,8 +1070,9 @@ def get_retired_devices(
     so some hashes repeat). The list only grows: the ledger it comes from is
     append-only.
 
-    **Allowed roles:** `doctor`, `nurse`, `org_admin` — everyone whose phone
-    holds the NFC keyring and reads devices.
+    **Allowed roles:** `doctor`, `nurse`, `org_admin`. Doctors and nurses read
+    devices with the NFC keyring. `org_admin` has not received the keyring
+    since PR #77, but may still list the hashes, which carry no patient data.
 
     **Responses:**
     - `200`: `uid_hashes` (sorted, no duplicates) and `server_time`.

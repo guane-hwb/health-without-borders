@@ -273,6 +273,51 @@ def test_concurrent_retry_sends_each_encounter_once(api, staff, monkeypatch):
     assert len(sent) == 1
 
 
+def test_simultaneous_registrations_of_one_document_make_one_patient(api, staff, db, monkeypatch):
+    """Audit 2026-11-04 be-nov26-guardia-de-identidad-duplicada-sin-restriccion:
+    two devices registering the same child at the same time both passed the
+    duplicate check and created two patients."""
+    from app.services import patient_service
+
+    real_lookup = patient_service.get_patient_by_document
+
+    def slow_lookup(*args, **kwargs):
+        # Widen the gap between the check and the insert, so both requests
+        # are inside it at once every time instead of now and then.
+        owner = real_lookup(*args, **kwargs)
+        time.sleep(0.5)
+        return owner
+
+    monkeypatch.setattr(patient_service, "get_patient_by_document", slow_lookup)
+    doc = staff["tokens"]["doc_a"]
+    barrier = threading.Barrier(2)
+    codes = []
+
+    def device(i):
+        payload = _payload(patientId=f"PID-SAME-DOC-{i}", device_uid=f"UID-SAME-DOC-{i}")
+        payload["patientInfo"]["identification"]["documentNumber"] = "SINT-DOC-777"
+        payload["guardianInfo"]["device_uid"] = f"GUARD-SAME-DOC-{i}"
+        from app.main import app
+
+        client = TestClient(app)
+        barrier.wait()
+        response = client.post("/api/v1/patients/sync", headers=doc["headers"], json=payload)
+        codes.append((response.status_code, (response.json().get("error") or {}).get("code")
+                      if isinstance(response.json(), dict) else None))
+
+    threads = [threading.Thread(target=device, args=(i,)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(code for code, _ in codes) == [201, 409], codes
+    count = db.execute(text(
+        "SELECT count(*) FROM patients WHERE document_number = 'SINT-DOC-777'"
+    )).scalar_one()
+    assert count == 1
+
+
 def test_integrity_errors_name_the_constraints_the_code_expects(api, staff, db):
     """be-oct26-integrityerror-mal-clasificado: the names checked on PostgreSQL are real."""
     import pytest
