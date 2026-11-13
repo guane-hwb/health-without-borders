@@ -7,7 +7,12 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import find_user_by_email, get_current_user, revoke_all_sessions
+from app.api.deps import (
+    find_user_by_email,
+    get_current_user,
+    get_current_user_allowing_temporary_password,
+    revoke_all_sessions,
+)
 from app.core.config import settings
 from app.core.errors import CURRENT_PASSWORD_INCORRECT, PASSWORD_UNCHANGED, ApiError
 from app.core.rate_limit import limiter
@@ -188,7 +193,7 @@ def get_users_by_organization(
 @router.get("/me", response_model=UserResponse)
 def get_current_user_profile(
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_allowing_temporary_password),
     db: Session = Depends(get_db),
 ):
     """Return the current user's profile, including the NFC keyring so the
@@ -308,7 +313,7 @@ def change_own_password(
     request: Request,
     body: PasswordChange,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_allowing_temporary_password),
 ):
     """
     Change the caller's own password.
@@ -317,7 +322,9 @@ def change_own_password(
     must not leave a stolen device signed in); this device gets a new token
     pair in the response, so it stays signed in. Clears `must_change_password`.
 
-    - **Allowed roles:** any authenticated user.
+    - **Allowed roles:** any authenticated user, also on a temporary password
+      (with `GET /users/me`, the only routes it reaches; the rest answer `403`
+      `password_change_required`).
     - **Responses:**
     - `200`: Password changed; new token pair (same shape as the login response).
     - `400`: The current password is wrong (`code` `current_password_incorrect`),

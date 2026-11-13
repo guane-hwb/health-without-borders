@@ -1,4 +1,5 @@
 
+import logging
 from datetime import timezone
 from typing import Optional
 
@@ -9,25 +10,36 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.errors import ORGANIZATION_INACTIVE, USER_INACTIVE, ApiError
+from app.core.errors import (
+    ORGANIZATION_INACTIVE,
+    PASSWORD_CHANGE_REQUIRED,
+    USER_INACTIVE,
+    ApiError,
+)
 from app.core.security import decode_token
 from app.db.models import Organization, RevokedToken, User
 from app.db.session import get_db
+
+logger = logging.getLogger(__name__)
 
 # Define where the frontend goes to get the token (the login URL)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/login/access-token")
 
 
-def get_current_user(
+def get_current_user_allowing_temporary_password(
     db: Session = Depends(get_db),
     token: str = Depends(oauth2_scheme)
 ) -> User:
     """
     Dependency that validates the JWT Token sent in the Authorization header.
-    
+
     Token validation rules:
       - Verifies token type is "access" (rejects refresh tokens).
       - Checks the JTI against the revocation list.
+
+    It accepts an account on a temporary password: only ``GET /users/me`` and
+    ``POST /users/me/password`` use it directly. Every other route uses
+    ``get_current_user``, which refuses that account.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -71,6 +83,29 @@ def get_current_user(
     ensure_account_is_active(user, status.HTTP_403_FORBIDDEN)
     if not token_is_current(user, payload):
         raise credentials_exception
+    return user
+
+
+def get_current_user(
+    user: User = Depends(get_current_user_allowing_temporary_password),
+) -> User:
+    """
+    The signed-in user, refused while they are on a temporary password.
+
+    An administrator who creates an account or resets a password knows that
+    password, so a session opened with it may not be the account holder's:
+    until they choose their own (``POST /users/me/password``), it reads no
+    patient and writes nothing, and the access log never names someone who did
+    not act. 403 ``password_change_required``: the session stays valid for the
+    password change.
+    """
+    if user.must_change_password:
+        logger.warning("Request refused: password change required user_id=%s", user.id)
+        raise ApiError(
+            status.HTTP_403_FORBIDDEN,
+            "Password change required.",
+            code=PASSWORD_CHANGE_REQUIRED,
+        )
     return user
 
 

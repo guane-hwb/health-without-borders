@@ -225,3 +225,117 @@ def test_existing_accounts_are_not_flagged(client, db_session, people):
     assert tokens["must_change_password"] is False
     refreshed = client.post("/api/v1/login/refresh", json={"refresh_token": tokens["refresh_token"]})
     assert refreshed.json()["must_change_password"] is False
+
+
+# ---------------------------------------------------------------------------
+# A temporary password opens only the password change
+#
+# Audit finding (2026-11-04): be-nov26-sesion-con-contrasena-temporal-accede-a-phi.
+# The administrator who sets a temporary password knows it; with that session
+# they could search and write minors' records, logged under the account holder.
+# ---------------------------------------------------------------------------
+
+#: The only routes a session on a temporary password may use (besides login,
+#: refresh and logout, which take no access token).
+ALLOWED_ON_A_TEMPORARY_PASSWORD = {
+    ("GET", "/api/v1/users/me"),
+    ("POST", "/api/v1/users/me/password"),
+}
+
+
+def _authenticated_operations():
+    """Every (method, path) that takes an access token, from the OpenAPI schema."""
+    from app.main import app
+
+    return sorted(
+        (method.upper(), path)
+        for path, operations in app.openapi()["paths"].items()
+        for method, operation in operations.items()
+        if operation.get("security")
+    )
+
+
+def _reset_and_sign_in(client, people, who="doctor", email="doc@clinic.org"):
+    """The administrator resets the password and signs in with the temporary one."""
+    admin = _login(client, "admin@clinic.org").json()
+    reset = client.post(f"/api/v1/users/{people[who]}/reset-password", headers=_auth(admin))
+    temporary = reset.json()["temporary_password"]
+    tokens = _login(client, email, temporary).json()
+    assert tokens["must_change_password"] is True
+    return tokens, temporary
+
+
+def _assert_password_change_required(response):
+    assert response.status_code == 403, response.text
+    assert response.json() == {"detail": "Password change required.", "code": "password_change_required"}
+
+
+def test_the_exemptions_are_routes_that_exist():
+    assert ALLOWED_ON_A_TEMPORARY_PASSWORD <= set(_authenticated_operations())
+
+
+def test_a_temporary_password_reaches_no_other_route(client, db_session, people):
+    tokens, _ = _reset_and_sign_in(client, people)
+    refused = [op for op in _authenticated_operations() if op not in ALLOWED_ON_A_TEMPORARY_PASSWORD]
+    assert len(refused) > 20  # patients, users, organizations, stats
+
+    for method, path in refused:
+        url = path.replace("{user_id}", people["nurse"]).replace("{org_id}", "an-organization")
+        response = client.request(method, url, headers=_auth(tokens))
+        assert response.status_code == 403, f"{method} {path}: {response.status_code}"
+        assert response.json()["code"] == "password_change_required", f"{method} {path}"
+
+
+def test_a_temporary_session_cannot_search_or_write_a_record(client, db_session, people, app_log):
+    """PoC-7 of the audit: the administrator's own sign-in with the temporary password."""
+    tokens, _ = _reset_and_sign_in(client, people, who="nurse", email="nurse@clinic.org")
+
+    search = client.post("/api/v1/patients/search", headers=_auth(tokens), json={
+        "documentType": "CC", "documentNumber": "SINT-1122334455",
+    })
+    sync = client.post("/api/v1/patients/sync", headers=_auth(tokens), json={})
+
+    _assert_password_change_required(search)
+    _assert_password_change_required(sync)
+    logged = " ".join(record.getMessage() for record in app_log.records)
+    assert f"password change required user_id={people['nurse']}" in logged
+
+
+def test_a_temporary_session_can_still_read_itself_refresh_and_sign_out(client, db_session, people):
+    tokens, _ = _reset_and_sign_in(client, people)
+
+    assert _me(client, tokens).json()["must_change_password"] is True
+    refreshed = client.post("/api/v1/login/refresh", json={"refresh_token": tokens["refresh_token"]})
+    assert refreshed.status_code == 200
+    assert refreshed.json()["must_change_password"] is True
+    logout = client.post("/api/v1/logout", headers=_auth(refreshed.json()),
+                         json={"refresh_token": refreshed.json()["refresh_token"]})
+    assert logout.status_code == 204
+
+
+def test_after_the_change_the_new_session_reaches_everything(client, db_session, people):
+    admin = _login(client, "admin@clinic.org").json()
+    sa = _login(client, "sa@hq.org").json()
+    reset = client.post(f"/api/v1/users/{people['admin']}/reset-password", headers=_auth(sa))
+    temporary = reset.json()["temporary_password"]
+    tokens = _login(client, "admin@clinic.org", temporary).json()
+    _assert_password_change_required(client.get("/api/v1/users/", headers=_auth(tokens)))
+
+    changed = _change(client, tokens, current=temporary).json()
+
+    assert client.get("/api/v1/users/", headers=_auth(changed)).status_code == 200
+    assert client.get("/api/v1/users/", headers=_auth(admin)).status_code == 401  # reset ended it
+
+
+def test_a_deactivated_account_reads_as_deactivated_not_as_a_password_change(
+    client, db_session, people
+):
+    tokens, _ = _reset_and_sign_in(client, people)
+    doctor = _reload(db_session, people["doctor"])
+    doctor.is_active = False
+    db_session.commit()
+
+    response = client.get("/api/v1/patients/retired-devices", headers=_auth(tokens))
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "user_inactive"  # the app signs out on this one
