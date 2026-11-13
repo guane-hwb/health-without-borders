@@ -94,6 +94,21 @@ class GCPHealthcareBackend(FHIRStoreBackend):
             f"fhirStores/{self.fhir_store_id}/fhir/Bundle"
         )
 
+    @staticmethod
+    def _if_none_exist(bundle: dict) -> Optional[str]:
+        """
+        Conditional create on the bundle's identifier.
+
+        Bundle ids are derived from the encounter (RDA-Consulta) or from the
+        patient and its background (RDA-Paciente), so a bundle that was stored
+        but whose response never arrived is recognised when it is sent again.
+        """
+        identifier = bundle.get("identifier") or {}
+        system, value = identifier.get("system"), identifier.get("value")
+        if not value:
+            return None
+        return f"identifier={system}|{value}" if system else f"identifier={value}"
+
     def send_bundle(self, bundle: dict) -> FHIRBundleSendResult:
         if not self._is_configured():
             logger.warning("GCP Healthcare backend is not fully configured. Skipping upload.")
@@ -107,6 +122,9 @@ class GCPHealthcareBackend(FHIRStoreBackend):
                 "Authorization": f"Bearer {self._access_token()}",
                 "Content-Type": "application/fhir+json; charset=utf-8",
             }
+            condition = self._if_none_exist(bundle)
+            if condition:
+                headers["If-None-Exist"] = condition
 
             logger.debug("POST %s", url)
             response = self._session.post(
@@ -118,10 +136,24 @@ class GCPHealthcareBackend(FHIRStoreBackend):
                     settings.FHIR_READ_TIMEOUT_SECONDS,
                 ),
             )
+            if response.status_code == 412 and condition:
+                # More than one bundle already has this identifier (sent twice
+                # before conditional create existed, or by a race). It is
+                # stored; sending it again would not change that.
+                logger.warning("FHIR Bundle already stored more than once; not created again.")
+                return {"status": "success", "response": {}}
             response.raise_for_status()
 
-            logger.info("FHIR Bundle successfully ingested by GCP Healthcare API.")
-            return {"status": "success", "response": response.json()}
+            if response.status_code == 200 and condition:
+                logger.info("FHIR Bundle already stored; not created again.")
+            else:
+                logger.info("FHIR Bundle successfully ingested by GCP Healthcare API.")
+            # A conditional create that matched may answer without a body.
+            try:
+                body = response.json() if response.content else {}
+            except ValueError:
+                body = {}
+            return {"status": "success", "response": body}
 
         except requests.exceptions.RequestException as e:
             error_msg = f"GCP Healthcare API error: {type(e).__name__}"

@@ -871,7 +871,15 @@ class PatientSyncRecord(PatientFullRecord):
 class PatientSyncResponse(BaseModel):
     status: str
     internal_id: str
-    fhir_status: Optional[str] = "unknown"
+    fhir_status: Optional[str] = Field(
+        "unknown",
+        description=(
+            "'success' when every RDA bundle this sync needed is in the FHIR Store; "
+            "'error' or 'skipped' when one was not delivered; 'in_progress' when "
+            "another /sync for the same patient is sending them right now. Anything "
+            "but 'success' means: keep the row pending and sync it again later."
+        ),
+    )
     vida_code: Optional[str] = Field(None, description="Código VIDA retornado por IHCE")
     message: str
     record_version: Optional[int] = Field(

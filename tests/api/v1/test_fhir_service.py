@@ -80,6 +80,7 @@ from app.services.fhir_service import (
     _environment_display,
     _family_rel_display,
     _fhir_datetime,
+    _fhir_id,
     _modality_display,
     _patient_id,
     _risk_factor_display,
@@ -364,9 +365,10 @@ class TestDisplayHelpers:
 
 
 class TestPatientId:
-    def test_patient_id_format(self):
+    def test_patient_id_is_derived_from_the_document(self):
         patient = _make_patient()
-        assert _patient_id(patient) == "PT-VZ-9876543"
+        assert _patient_id(patient) == _fhir_id("Patient", "PT", "VZ-9876543")
+        assert _patient_id(patient) == _patient_id(_make_patient())  # stable
 
 
 class TestAssignFullUrls:
@@ -415,7 +417,7 @@ class TestBuildPatientResource:
         patient = _make_patient()
         r = _build_patient_resource(patient)
         assert r["resourceType"] == "Patient"
-        assert r["id"] == "PT-VZ-9876543"
+        assert r["id"] == _fhir_id("Patient", "PT", "VZ-9876543")
         assert r["active"] is True
         assert r["gender"] == "male"
         assert r["birthDate"] == "2020-01-01"
@@ -479,7 +481,8 @@ class TestBuildOrganizationIps:
         provider = ProviderInfo(repsCode="540015400101", name="Hospital Meoz", nitNumber="890500600")
         r = _build_organization_ips(provider)
         assert r["resourceType"] == "Organization"
-        assert r["id"] == "540015400101"
+        assert r["id"] == _fhir_id("Organization", "REPS", "540015400101")
+        assert r["identifier"][1]["value"] == "540015400101"
         # Two identifiers: NIT + CodigoPrestador
         assert len(r["identifier"]) == 2
 
@@ -499,7 +502,8 @@ class TestBuildOrganizationEapb:
     def test_basic_structure(self):
         r = _build_organization_eapb(PayerInfo(code="EPS001", name="EPS Test"))
         assert r["resourceType"] == "Organization"
-        assert r["id"] == "EPS001"
+        assert r["id"] == _fhir_id("Organization", "EAPB", "EPS001")
+        assert r["identifier"] == [{"use": "official", "value": "EPS001"}]
         assert r["name"] == "EPS Test"
 
 
@@ -536,13 +540,16 @@ class TestBuildLocation:
         provider = ProviderInfo(repsCode="540015400101", name="Hospital Meoz",
                                 locationSeatCode="540015400101-01")
         r = _build_location(provider)
-        assert r["id"] == "540015400101-01"
+        assert r["id"] == _fhir_id("Location", "REPS", "540015400101-01")
+        assert r["identifier"][0]["value"] == "540015400101-01"
         assert r["name"] == "Hospital Meoz"
 
     def test_defaults_seat_code_when_absent(self):
         provider = ProviderInfo(repsCode="540015400101", name="Hospital Meoz")
         r = _build_location(provider)
-        assert r["id"] == "540015400101-01"  # defaults to repsCode-01
+        # defaults to repsCode-01
+        assert r["identifier"][0]["value"] == "540015400101-01"
+        assert r["id"] == _fhir_id("Location", "REPS", "540015400101-01")
 
 
 class TestBuildEncounter:

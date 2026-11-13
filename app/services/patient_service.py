@@ -2,13 +2,14 @@ import copy
 import hashlib
 import json
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import func
 from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.phi_sanitizer import pseudonym, safe_patient_ref
 from app.core.text_normalizer import (
     DOCUMENT_SEPARATORS,
@@ -724,11 +725,54 @@ def get_stored_record_for_sync(
     return existing.id, copy.deepcopy(existing.full_record_json or {})
 
 
+def _as_utc(value: datetime) -> datetime:
+    # SQLite gives back naive datetimes; PostgreSQL keeps the zone.
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def claim_fhir_delivery(
+    db: Session,
+    patient_id: str,
+    now: Optional[datetime] = None,
+) -> Optional[tuple[list[str], Optional[str], bool]]:
+    """
+    Take the right to send this patient's RDA bundles, or None if another
+    /sync holds it.
+
+    Two overlapping /sync requests for the same patient used to read the same
+    delivered encounters and both send the new RDA-Consulta (backend audit
+    2026-11-04, be-nov26-reintento-duplica-rda-en-fhir). The claim is taken
+    under the row lock and returns the delivery state read under that lock,
+    so the bundles are decided after any delivery the other request recorded.
+    It expires after FHIR_DELIVERY_CLAIM_SECONDS, so a request that dies while
+    sending does not hold it.
+
+    Returns (synced_encounter_ids, background_data_hash, rda_paciente_sent).
+    """
+    now = now or datetime.now(timezone.utc)
+    patient = db.query(Patient).filter(Patient.id == patient_id).with_for_update().one()
+    held_until = patient.fhir_delivery_claimed_until
+    if held_until is not None and _as_utc(held_until) > now:
+        db.rollback()
+        return None
+    patient.fhir_delivery_claimed_until = now + timedelta(
+        seconds=settings.FHIR_DELIVERY_CLAIM_SECONDS
+    )
+    state = (
+        list(patient.synced_encounter_ids or []),
+        patient.background_data_hash,
+        bool(patient.rda_paciente_sent),
+    )
+    db.commit()
+    return state
+
+
 def record_fhir_delivery(
     db: Session,
     patient_id: str,
     accepted_encounter_ids: list[str],
     sent_background_hash: Optional[str],
+    release_claim: bool = False,
 ) -> None:
     """
     Record what the FHIR Store accepted, bundle by bundle.
@@ -738,10 +782,15 @@ def record_fhir_delivery(
     RDA-Consulta does not force the ones that were accepted to be sent (and
     stored) again. The row is re-read under a lock and the ids are united with
     what is stored, so a concurrent sync's deliveries are not overwritten.
+
+    ``release_claim`` gives back the claim taken by claim_fhir_delivery, in the
+    same transaction, so the next /sync sees what this one delivered.
     """
-    if not accepted_encounter_ids and sent_background_hash is None:
+    if not accepted_encounter_ids and sent_background_hash is None and not release_claim:
         return
     patient = db.query(Patient).filter(Patient.id == patient_id).with_for_update().one()
+    if release_claim:
+        patient.fhir_delivery_claimed_until = None
     if accepted_encounter_ids:
         patient.synced_encounter_ids = sorted(
             set(patient.synced_encounter_ids or []) | set(accepted_encounter_ids)

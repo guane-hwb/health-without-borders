@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     RUN_MIGRATIONS_ON_STARTUP: bool = True
     FHIR_CONNECT_TIMEOUT_SECONDS: float = 5.0
     FHIR_READ_TIMEOUT_SECONDS: float = 30.0
+    # How long one /sync keeps the right to send a patient's RDA bundles. Longer
+    # than any request can live (Cloud Run's request timeout is 300 s), plus a
+    # FHIR read timeout for a send still running when the request was cut.
+    FHIR_DELIVERY_CLAIM_SECONDS: int = 360
     
     # --- SECURITY ---
     SECRET_KEY: str

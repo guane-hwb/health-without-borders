@@ -30,6 +30,22 @@ On each `/sync` call:
 2. **RDA-Consulta** bundles are generated only for visits whose `encounterIdentifier` UUID is **not** in the `synced_encounter_ids` list. This encounter-based delta is robust against record merges from multiple devices — unlike index-based slicing, the order of entries in `medicalHistory` does not matter.
 3. Tracking columns are updated **only after successful GCP upload** — if GCP fails, the next sync retries automatically.
 
+### 2.1. Each Bundle Reaches the FHIR Store Once
+
+A bundle can be sent twice: the app retries a `/sync` that was slow, or the FHIR Store stores a bundle but its answer does not arrive within the read timeout, and the next `/sync` sends it again. Three things keep that from creating a second document (backend audit 2026-11-04, `be-nov26-reintento-duplica-rda-en-fhir`):
+
+- **Deterministic bundle ids.** `Bundle.id` and `Bundle.identifier.value` are a UUID v5, the same every time the same document is built:
+  - RDA-Consulta: from the visit's `encounterIdentifier`;
+  - RDA-Paciente: from `patientId` and `background_data_hash`, so a changed background is a new document.
+- **Conditional create.** The GCP backend sends each bundle with `If-None-Exist: identifier=<system>|<value>`. When the FHIR Store already holds it, it answers `200` without creating anything, and that counts as delivered. A `412` (more than one match, left by sends before this existed) also counts as delivered.
+- **One sender per patient.** Before sending, `/sync` claims the delivery in `patients.fhir_delivery_claimed_until`, under the row lock, and decides the bundles from the tracking columns read under that lock. A second `/sync` for the same patient that arrives meanwhile does not send; it answers `fhir_status: "in_progress"`, the app keeps the row pending, and its next attempt finds the bundles recorded. The claim is given back with the delivery record and expires after `FHIR_DELIVERY_CLAIM_SECONDS` (360 s, longer than any request can live), so a request that dies while sending does not hold it.
+
+Bundles sent before this change have random identifiers, so the first re-send of one of those is not recognised.
+
+### 2.2. Resource Ids
+
+FHIR R4 only allows `[A-Za-z0-9\-\.]{1,64}` in an id, and the FHIR Store rejects the whole bundle when one resource breaks it. Documents and codes are typed by people (`1023 456 789`, `SINT/1122`), so no resource id is built from them any more (`be-nov26-id-patient-fhir-invalido-bloquea-envio`). `Patient`, `Practitioner`, both `Organization`s (IPS by REPS code, EAPB by payer code) and `Location` get a UUID v5 of their type and value; the readable value stays in their `identifier`. The same person or place has the same id in every bundle. A bundle whose ids still fail the pattern is logged with the resource types only.
+
 ---
 
 ## 3. FHIR Resource Mapping
