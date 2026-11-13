@@ -1,10 +1,11 @@
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from jwt import PyJWTError
+from sqlalchemy import CursorResult
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session
 
@@ -84,7 +85,8 @@ def _revoke_once(
         )
         .on_conflict_do_nothing(index_elements=["jti"])
     )
-    return db.execute(statement).rowcount == 1
+    # An INSERT returns a CursorResult, which carries the row count.
+    return cast(CursorResult, db.execute(statement)).rowcount == 1
 
 
 def _retry_within_grace(db: Session, jti: str, issued_jti: str) -> bool:

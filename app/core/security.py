@@ -318,7 +318,8 @@ def _resolve_keyring(db: Optional[Any]) -> tuple[dict[int, str], Optional[int]]:
         except Exception:
             # Never let a keyring lookup break authentication.
             logger.error("Could not read the NFC keyring from the database.")
-            db.rollback()
+            if db is not None:
+                db.rollback()
         if kek_mode:
             fallback = last_known_keyring()
             if fallback is not None:

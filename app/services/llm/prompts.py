@@ -127,7 +127,12 @@ Condition: {chronic_description}
 """
 
 
-def build_clinical_prompt(history: str, physical: str, systems: str, plan: str) -> str:
+def build_clinical_prompt(
+    history: str | None,
+    physical: str | None,
+    systems: str | None,
+    plan: str | None,
+) -> str:
     """Builds the prompt for extracting diagnoses from clinical evaluation notes."""
     return f"""Please extract the diagnoses from the following clinical evaluation.
 Return ICD-10 codes WITHOUT dots (e.g., 'A099' not 'A09.9', 'J069' not 'J06.9').
