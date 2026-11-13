@@ -1,9 +1,11 @@
 """
 The time zone the platform reads naive local times in.
 
-The app records clinical times as local wall-clock time without an offset
-(``DateTime.now().toIso8601String()``). Statistics and FHIR must agree on what
-those values mean: the reporting zone, Colombia by default.
+Current app builds send clinical times with their offset
+(``lib/src/core/utils/clinical_time.dart``); builds before it sent local
+wall-clock time without one (``DateTime.now().toIso8601String()``), and
+records keep those values. A value without an offset is read in the reporting
+zone, Colombia by default, so statistics and FHIR agree on what it means.
 """
 
 import logging

@@ -303,6 +303,12 @@ Create a trigger for merges/pushes to `develop`:
 - **`develop` and `main` are protected on GitHub** (since 2026-11-04): a change needs a pull request, with `Lint & Test (Python 3.11)` and `Integration (PostgreSQL 15)` as required checks. This matters because the trigger deploys whatever lands on `develop`, and `cloudbuild.yaml` re-runs lint and tests, but not coverage, `pip-audit`, `alembic check` or the PostgreSQL suite.
 - **`hwb-pr-quality-gate`** (pull requests to `^develop$`, pointing to the removed `cloudbuild.pr.yaml`) was deleted on 2026-10-22. It was disabled, but it ran as a service account with `roles/editor`, and Cloud Build reads the build file from the commit that fired it. Pull requests are checked by GitHub Actions.
 
+### The container image
+
+- **Base image pinned by digest.** Both stages of the `Dockerfile` use `PYTHON_IMAGE`, `python:3.11-slim@sha256:…`. A rebuild of the same commit gets the same system packages, and new ones arrive only when the digest changes. To take security updates, run `docker pull python:3.11-slim`, read the digest it reports (`docker image inspect python:3.11-slim --format '{{index .RepoDigests 0}}'`), and change it in a pull request. Do this at least once a month, or when a vulnerability report names a package of the image.
+- **Read-only code.** The code and the virtualenv belong to `root`; the process runs as `appuser` (uid 10001) and can read them but not change them. The app writes nothing under `/app`.
+- **No test database.** Step 1 of `cloudbuild.yaml` runs the tests with SQLite in `/tmp`, and `.dockerignore` excludes `*.db`, so the file the tests leave never reaches the image.
+
 ### Service account for triggers
 
 The trigger runs as `hwb-deployer@`, which can build, push and deploy, and

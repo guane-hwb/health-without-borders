@@ -12,7 +12,8 @@ steps:
         uv sync --all-groups
         export SECRET_KEY="dummy_secret_for_testing_only"
         export DB_PASS="dummy_pass"
-        export DATABASE_URL="sqlite:///./test.db"
+        # Outside /workspace: step 2 builds the image from that directory.
+        export DATABASE_URL="sqlite:////tmp/test.db"
         export FHIR_BACKEND="noop"
         export LLM_BACKEND="noop"
         uv run ruff check

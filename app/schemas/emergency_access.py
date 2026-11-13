@@ -16,28 +16,36 @@ from app.core.timezone import reporting_timezone
 
 
 class EmergencyAccessEntry(BaseModel):
-    """A single break-glass access event recorded on the device."""
+    """
+    A single break-glass access event recorded on the device.
+
+    Every text field has a ceiling: the ledger is append-only and never
+    trimmed, and a batch of 5000 entries with free-length text could fill it
+    with hundreds of kilobytes each (backend audit 2026-11-04,
+    be-nov26-emergency-access-sin-limites-de-longitud). The limits are far
+    above what the app sends (UUIDs, a hex UID, "guardian_absent_offline").
+    """
 
     client_event_id: str = Field(
-        ..., min_length=1,
+        ..., min_length=1, max_length=128,
         description="Client-generated UUID — idempotency/dedup key across retries",
     )
     patient_uid: str = Field(
-        ..., min_length=1,
+        ..., min_length=1, max_length=128,
         description="Hardware UID of the record that was accessed",
     )
     patient_name: Optional[str] = Field(
-        None, description="Patient name (decrypted by the client before sync)"
+        None, max_length=200, description="Patient name (decrypted by the client before sync)"
     )
     user_id: Optional[str] = Field(
-        None, description="Acting user — the break-glass actor"
+        None, max_length=128, description="Acting user — the break-glass actor"
     )
     reason: str = Field(
-        ..., min_length=1,
+        ..., min_length=1, max_length=64,
         description="Why the emergency access happened (e.g. guardian_absent_offline)",
     )
     occurred_at: str = Field(
-        ..., min_length=1,
+        ..., min_length=1, max_length=40,
         description=(
             "ISO 8601 timestamp as recorded on the device. Without an offset it is "
             "read as local time in the reporting zone (older app builds); it is "

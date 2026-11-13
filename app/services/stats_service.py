@@ -286,6 +286,10 @@ def _performed_by(entry: Mapping[str, Any], patient_org: Optional[str]) -> Optio
     return _text(entry.get("recordedByOrganizationId")) or patient_org
 
 
+# The parts of full_record_json that _fold_patient reads.
+STATS_RECORD_KEYS = ("allergies", "vaccinationRecord", "medicalHistory")
+
+
 def _fold_patient(
     acc: _Accumulator,
     *,
@@ -469,17 +473,23 @@ def build_overview(
 
     # Not filtered by organization: acts performed by the scoped organization
     # can sit on a patient another organization registered.
+    # Only the three lists the figures use are read out of full_record_json:
+    # the whole record carries the consent signatures (up to 2 MB per
+    # guardian) and every identity field, and each request used to load all
+    # of it for every patient (backend audit 2026-11-04,
+    # be-nov26-estadisticas-recorren-todos-los-registros).
     statement = select(
         Patient.organization_id,
         Patient.created_at,
         Patient.birth_date,
         Patient.nationality_code,
-        Patient.full_record_json,
+        *(Patient.full_record_json[key] for key in STATS_RECORD_KEYS),
     )
 
     acc = _Accumulator()
     rows = db.execute(statement.execution_options(yield_per=YIELD_PER))
-    for patient_org, created_at, birth_date, nationality_code, record in rows:
+    for patient_org, created_at, birth_date, nationality_code, *parts in rows:
+        record = dict(zip(STATS_RECORD_KEYS, parts))
         _fold_patient(
             acc,
             scope_org=organization_id,

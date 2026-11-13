@@ -47,7 +47,11 @@ gcp_key.json
 *.pem
 cloud-sql-proxy
 
-# Testing
+# Testing (cloudbuild.yaml runs the tests in the build context before the
+# image is built, and they leave a SQLite file there)
+*.db
+*.sqlite
+*.sqlite3
 .pytest_cache/
 tests/
 pytest.ini

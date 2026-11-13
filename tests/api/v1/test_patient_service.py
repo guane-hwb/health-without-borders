@@ -226,3 +226,46 @@ def test_a_strict_lookup_with_more_candidates_than_the_cap_is_denied(db_session)
         db_session, document_number="VZ-123", birth_date=date(2020, 1, 1),
         first_name="Ana", last_name="Diaz",
     ) is None
+
+
+# ---------------------------------------------------------------------------
+# Identity lock (audit 2026-11-04 be-nov26-guardia-de-identidad-duplicada-sin-restriccion)
+# ---------------------------------------------------------------------------
+
+
+def test_identity_lock_key_is_a_stable_signed_64_bit_number():
+    from app.services.patient_service import _identity_lock_key
+
+    key = _identity_lock_key("TI", "1122334455")
+    assert key == _identity_lock_key("TI", "1122334455")
+    assert key != _identity_lock_key("RC", "1122334455")
+    assert -(2**63) <= key < 2**63
+
+
+def test_identity_lock_is_taken_on_postgresql_with_the_canonical_number():
+    from unittest.mock import MagicMock
+
+    from app.services.patient_service import _identity_lock_key, _lock_identity
+
+    db = MagicMock()
+    db.get_bind.return_value.dialect.name = "postgresql"
+
+    _lock_identity(db, "TI", "vz 987.6543")
+
+    statement, params = db.execute.call_args.args
+    assert "pg_advisory_xact_lock" in str(statement)
+    assert params == {"key": _identity_lock_key("TI", "vz9876543")}
+
+
+def test_identity_lock_is_skipped_without_a_number_or_on_sqlite():
+    from unittest.mock import MagicMock
+
+    from app.services.patient_service import _lock_identity
+
+    db = MagicMock()
+    db.get_bind.return_value.dialect.name = "postgresql"
+    _lock_identity(db, "TI", "  ")
+    db.get_bind.return_value.dialect.name = "sqlite"
+    _lock_identity(db, "TI", "1122334455")
+
+    db.execute.assert_not_called()
