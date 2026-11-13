@@ -114,6 +114,27 @@ def test_get_me_returns_current_user_profile(client: TestClient):
     assert data["must_change_password"] is True
 
 
+def test_get_me_without_a_stored_name_shows_the_email(client: TestClient):
+    """full_name is nullable in the table. No creation path leaves it empty,
+    but a row edited by hand must not turn /me into a 500."""
+
+    class MockDoctor:
+        id = "user-doc-002"
+        email = "noname@clinic.org"
+        full_name = None
+        role = UserRole.doctor
+        organization_id = "org-123"
+        is_active = True
+        must_change_password = False
+
+    app.dependency_overrides[get_current_user_allowing_temporary_password] = lambda: MockDoctor()
+
+    response = client.get("/api/v1/users/me")
+
+    assert response.status_code == 200
+    assert response.json()["full_name"] == "noname@clinic.org"
+
+
 def test_get_me_works_for_all_roles(client: TestClient):
     """GET /me is accessible to any authenticated role — no privilege check on this endpoint."""
 

@@ -167,16 +167,18 @@ def list_organizations(
         )
 
     # Aggregate membership counts in two grouped queries to avoid N+1 lookups.
-    user_counts = dict(
-        db.query(User.organization_id, func.count(User.id))
+    user_counts: dict[str, int] = {
+        org_id: count
+        for org_id, count in db.query(User.organization_id, func.count(User.id))
         .group_by(User.organization_id)
         .all()
-    )
-    patient_counts = dict(
-        db.query(Patient.organization_id, func.count(Patient.id))
+    }
+    patient_counts: dict[str, int] = {
+        org_id: count
+        for org_id, count in db.query(Patient.organization_id, func.count(Patient.id))
         .group_by(Patient.organization_id)
         .all()
-    )
+    }
     return [
         OrganizationResponse(
             id=o.id,

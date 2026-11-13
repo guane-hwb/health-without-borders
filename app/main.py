@@ -101,11 +101,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     exception type — never its message, since database errors embed PHI.
     """
     error_id = uuid.uuid4().hex[:12]
+    route = request.scope.get("route")
     logger.error(
         "Unhandled error error_id=%s method=%s route=%s type=%s",
         error_id,
         request.method,
-        request.scope.get("route").path if request.scope.get("route") else "unknown",
+        route.path if route else "unknown",
         type(exc).__name__,
     )
     return JSONResponse(
@@ -141,7 +142,8 @@ async def validation_exception_handler(
 
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# slowapi types its handler for RateLimitExceeded; Starlette expects Exception.
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 app.add_middleware(SlowAPIMiddleware)
 
 cors_origins = [origin.strip() for origin in settings.BACKEND_CORS_ORIGINS.split(",") if origin.strip()]

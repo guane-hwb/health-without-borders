@@ -203,7 +203,9 @@ def get_current_user_profile(
     return UserResponse(
         id=current_user.id,
         email=current_user.email,
-        full_name=current_user.full_name,
+        # Every creation path sets a name; a row edited by hand to NULL shows
+        # the email instead of failing the response.
+        full_name=current_user.full_name or current_user.email,
         role=current_user.role,
         is_active=current_user.is_active,
         organization_id=current_user.organization_id,
