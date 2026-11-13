@@ -25,6 +25,7 @@ KEY CHANGES v2.0 → v3.0 (all verified against Postman):
 """
 
 import logging
+import re
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -298,9 +299,71 @@ def _assign_fullurls_and_rewrite_refs(bundle: Dict[str, Any]) -> Dict[str, Any]:
     return bundle
 
 
+# ============================================================================
+# RESOURCE AND BUNDLE IDS
+# ============================================================================
+
+# Namespace of every id derived below. Changing it changes every id, so a
+# bundle sent before the change would no longer be recognised as the same one.
+HWB_FHIR_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "urn:hwb:fhir-ids")
+
+# FHIR R4 id: [A-Za-z0-9\-\.]{1,64}. The FHIR Store rejects the whole bundle
+# when one of its resources has another id.
+FHIR_ID_PATTERN = re.compile(r"[A-Za-z0-9\-.]{1,64}")
+
+
+def _fhir_id(kind: str, *parts: str) -> str:
+    """
+    A valid FHIR id for ``kind`` that does not carry the text it comes from.
+
+    Documents and codes are typed by people (a practitioner may write "1023
+    456 789"), and a space, a slash or more than 64 characters made the FHIR
+    Store reject the bundle on every retry. The value stays readable in the
+    resource's ``identifier``; the id only has to be valid and the same every
+    time for the same value.
+    """
+    return str(uuid.uuid5(HWB_FHIR_ID_NAMESPACE, "|".join((kind, *parts))))
+
+
 def _patient_id(patient: PatientFullRecord) -> str:
     ident = patient.patientInfo.identification
-    return f"{ident.documentType.value}-{ident.documentNumber}"
+    return _fhir_id("Patient", ident.documentType.value, ident.documentNumber)
+
+
+def _practitioner_id(pract) -> str:
+    return _fhir_id("Practitioner", pract.documentType.value, pract.documentNumber)
+
+
+def _provider_id(provider) -> str:
+    return _fhir_id("Organization", "REPS", provider.repsCode)
+
+
+def _payer_id(payer) -> str:
+    return _fhir_id("Organization", "EAPB", payer.code)
+
+
+def _location_seat(provider) -> str:
+    return provider.locationSeatCode or f"{provider.repsCode}-01"
+
+
+def rda_paciente_bundle_id(patient_id: str, background_hash: str) -> str:
+    """The same patient with the same background is the same document."""
+    return _fhir_id("Bundle", "rda-paciente", patient_id, background_hash)
+
+
+def rda_consulta_bundle_id(encounter_identifier: str) -> str:
+    """One RDA-Consulta per encounter, however many times it is sent."""
+    return _fhir_id("Bundle", "rda-consulta", encounter_identifier)
+
+
+def invalid_resource_ids(bundle: Dict[str, Any]) -> List[str]:
+    """resourceType of every entry whose id is not a valid FHIR id."""
+    return [
+        str(entry.get("resource", {}).get("resourceType"))
+        for entry in bundle.get("entry", [])
+        if "id" in entry.get("resource", {})
+        and not FHIR_ID_PATTERN.fullmatch(str(entry["resource"]["id"]))
+    ]
 
 
 # ============================================================================
@@ -532,11 +595,10 @@ def _build_patient_resource(patient: PatientFullRecord) -> Dict[str, Any]:
 def _build_organization_ips(provider) -> Optional[Dict[str, Any]]:
     if not provider:
         return None
-    org_id = provider.repsCode
     nit = provider.nitNumber or "Desconocido"
     return {
         "resourceType": "Organization",
-        "id": org_id,
+        "id": _provider_id(provider),
         "meta": {"profile": [PROFILE_ORG_IPS]},
         "identifier": [
             {
@@ -562,7 +624,7 @@ def _build_organization_ips(provider) -> Optional[Dict[str, Any]]:
                     ]
                 },
                 "system": NAMING_SYSTEM_REPS,
-                "value": org_id,
+                "value": provider.repsCode,
             },
         ],
     }
@@ -573,7 +635,8 @@ def _build_organization_eapb(payer) -> Optional[Dict[str, Any]]:
         return None
     return {
         "resourceType": "Organization",
-        "id": payer.code,
+        "id": _payer_id(payer),
+        "identifier": [{"use": "official", "value": payer.code}],
         "name": payer.name or "",
     }
 
@@ -624,14 +687,14 @@ def _build_practitioner(pract, pract_id: str) -> Optional[Dict[str, Any]]:
 def _build_location(provider) -> Optional[Dict[str, Any]]:
     if not provider:
         return None
-    seat = provider.locationSeatCode or f"{provider.repsCode}-01"
+    seat = _location_seat(provider)
     return {
         "resourceType": "Location",
-        "id": seat,
+        "id": _fhir_id("Location", "REPS", seat),
         "meta": {"profile": [PROFILE_LOCATION]},
         "identifier": [{"use": "official", "system": NAMING_SYSTEM_REPS, "value": seat}],
         "name": provider.name,
-        "managingOrganization": {"reference": _ref(provider.repsCode)},
+        "managingOrganization": {"reference": _ref(_provider_id(provider))},
     }
 
 
@@ -993,10 +1056,14 @@ def _build_attendance_allowance(incap: IncapacityInfo, patient_id: str,
 # BUNDLE BUILDERS — RDA-Paciente
 # ============================================================================
 
-def build_rda_paciente(patient: PatientFullRecord) -> Dict[str, Any]:
+def build_rda_paciente(patient: PatientFullRecord, background_hash: str = "") -> Dict[str, Any]:
     """
     RDA-Paciente: Composition type LOINC 102089-0.
     Matches Postman "enviar-rda-paciente" field by field.
+
+    ``background_hash`` (patient_service.compute_background_hash of the stored
+    record) is part of the bundle id: re-sending the same background is the
+    same document, a changed background is a new one.
     """
     logger.debug("Building RDA-Paciente for patient %s", safe_patient_ref(patient.patientId))
 
@@ -1013,7 +1080,7 @@ def build_rda_paciente(patient: PatientFullRecord) -> Dict[str, Any]:
     if patient.medicalHistory:
         provider = patient.medicalHistory[0].provider
     if provider:
-        org_id = provider.repsCode
+        org_id = _provider_id(provider)
         entries.append({"resource": _build_organization_ips(provider)})
 
     # Practitioner (from first visit if available)
@@ -1022,7 +1089,7 @@ def build_rda_paciente(patient: PatientFullRecord) -> Dict[str, Any]:
     if patient.medicalHistory:
         pract = patient.medicalHistory[0].practitioner
     if pract:
-        pract_id = f"{pract.documentType.value}-{pract.documentNumber}"
+        pract_id = _practitioner_id(pract)
         entries.append({"resource": _build_practitioner(pract, pract_id)})
 
     # --- Sections ---
@@ -1114,7 +1181,8 @@ def build_rda_paciente(patient: PatientFullRecord) -> Dict[str, Any]:
         }]
 
     bundle = _build_bundle_shell(
-        bundle_id=str(uuid.uuid4()), profile=PROFILE_BUNDLE_PATIENT,
+        bundle_id=rda_paciente_bundle_id(patient.patientId, background_hash),
+        profile=PROFILE_BUNDLE_PATIENT,
         timestamp=now, composition_entry=composition, resource_entries=entries)
 
     bundle = _assign_fullurls_and_rewrite_refs(bundle)
@@ -1145,7 +1213,7 @@ def build_rda_consulta(patient: PatientFullRecord,
     org_id = None
     location_id = None
     if visit.provider:
-        org_id = visit.provider.repsCode
+        org_id = _provider_id(visit.provider)
         entries.append({"resource": _build_organization_ips(visit.provider)})
         loc_resource = _build_location(visit.provider)
         if loc_resource:
@@ -1155,7 +1223,7 @@ def build_rda_consulta(patient: PatientFullRecord,
     # 3. Practitioner
     pract_id = None
     if visit.practitioner:
-        pract_id = f"{visit.practitioner.documentType.value}-{visit.practitioner.documentNumber}"
+        pract_id = _practitioner_id(visit.practitioner)
         entries.append({"resource": _build_practitioner(visit.practitioner, pract_id)})
 
     # 4. Encounter
@@ -1312,7 +1380,11 @@ def build_rda_consulta(patient: PatientFullRecord,
     }
 
     bundle = _build_bundle_shell(
-        bundle_id=str(uuid.uuid4()), profile=PROFILE_BUNDLE_AMB,
+        bundle_id=(
+            rda_consulta_bundle_id(visit.encounterIdentifier)
+            if visit.encounterIdentifier else str(uuid.uuid4())
+        ),
+        profile=PROFILE_BUNDLE_AMB,
         timestamp=now, composition_entry=comp, resource_entries=entries)
 
     bundle = _assign_fullurls_and_rewrite_refs(bundle)
@@ -1329,6 +1401,7 @@ def convert_to_fhir_rda(
     synced_encounter_ids: list[str] | None = None,
     rda_paciente_already_sent: bool = False,
     background_data_changed: bool = False,
+    background_hash: str = "",
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """
     Generates only the FHIR RDA bundles that need to be sent.
@@ -1357,6 +1430,8 @@ def convert_to_fhir_rda(
         synced_encounter_ids: Set of encounter UUIDs already sent to FHIR.
         rda_paciente_already_sent: Whether RDA-Paciente was sent at least once.
         background_data_changed: Whether the background data hash changed.
+        background_hash: Hash of the stored background; part of the
+            RDA-Paciente bundle id.
 
     Returns:
         Tuple of (list of FHIR bundles, list of NEW encounter IDs that were bundled).
@@ -1382,7 +1457,7 @@ def convert_to_fhir_rda(
     )
 
     if needs_rda_paciente:
-        bundles.append(build_rda_paciente(patient))
+        bundles.append(build_rda_paciente(patient, background_hash))
         if background_data_changed and rda_paciente_already_sent:
             logger.info(
                 "Background data changed for patient %s — regenerating RDA-Paciente",
@@ -1402,6 +1477,16 @@ def convert_to_fhir_rda(
         logger.info("First sync for patient %s, no visits yet", patient_ref)
     elif not needs_rda_paciente:
         logger.info("No changes for patient %s, skipping all bundles", patient_ref)
+
+    for bundle in bundles:
+        invalid = invalid_resource_ids(bundle)
+        if invalid:
+            # The FHIR Store would reject the bundle. Never the values: they
+            # are documents and codes.
+            logger.error(
+                "RDA bundle has invalid FHIR ids patient_ref=%s resource_types=%s",
+                patient_ref, sorted(set(invalid)),
+            )
 
     logger.info("Generated %d RDA bundle(s) for patient %s", len(bundles), patient_ref)
     return bundles, new_encounter_ids

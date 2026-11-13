@@ -224,6 +224,55 @@ def test_no_connection_is_held_while_waiting_on_the_llm_or_fhir(api, staff, db, 
     assert samples == [0] * 6
 
 
+def test_concurrent_retry_sends_each_encounter_once(api, staff, monkeypatch):
+    """Audit 2026-11-04 PoC-4 (be-nov26-reintento-duplica-rda-en-fhir): a retry
+    that arrived while the first /sync was still sending sent the same
+    RDA-Consulta again."""
+    from app.services.fhir import fhir_backend
+
+    consulta = "51845-6"
+    sent = []
+    lock = threading.Lock()
+
+    def slow_send(bundle):
+        time.sleep(1.5)  # the FHIR Store is slow; the retry arrives meanwhile
+        kind = bundle["entry"][0]["resource"]["type"]["coding"][0]["code"]
+        if kind == consulta:
+            with lock:
+                sent.append(bundle["identifier"]["value"])
+        return {"status": "success"}
+
+    monkeypatch.setattr(fhir_backend, "send_bundle", slow_send)
+    doc = staff["tokens"]["doc_a"]
+    assert _sync(api, doc, _payload()).status_code == 201
+    visit = deepcopy(VISIT_1)
+    visit["diagnosis"] = []
+    payload = _payload(medicalHistory=[visit])
+    statuses = []
+
+    def device(delay):
+        from app.main import app
+
+        time.sleep(delay)
+        response = TestClient(app).post(
+            "/api/v1/patients/sync", headers=doc["headers"], json=payload
+        )
+        statuses.append((response.status_code, response.json()["fhir_status"]))
+
+    threads = [threading.Thread(target=device, args=(d,)) for d in (0, 0.4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(sent) == 1
+    assert sorted(statuses) == [(201, "in_progress"), (201, "success")]
+
+    # The app's next attempt finds the visit delivered and sends nothing.
+    assert _sync(api, doc, payload).json()["fhir_status"] == "success"
+    assert len(sent) == 1
+
+
 def test_integrity_errors_name_the_constraints_the_code_expects(api, staff, db):
     """be-oct26-integrityerror-mal-clasificado: the names checked on PostgreSQL are real."""
     import pytest

@@ -90,6 +90,7 @@ Stores the core identity data of migrant children. Relational columns mirror the
 | `synced_encounter_ids`| JSON | Default: [] | List of `encounterIdentifier` UUIDs already sent to the FHIR Store. Used for encounter-based delta sync. |
 | `background_data_hash`| Varchar(64) | Nullable | SHA-256 hash of background data fields (demographics, guardians, allergies, chronic conditions). Used to detect changes for RDA-Paciente regeneration. |
 | `rda_paciente_sent`| Boolean | Default: false | Whether the RDA-Paciente bundle has been sent to the FHIR Store at least once. |
+| `fhir_delivery_claimed_until`| DateTime (tz) | Nullable | Set while one `/sync` sends this patient's RDA bundles, so an overlapping `/sync` does not send them again; cleared with the delivery record, expires on its own (migration `0011`). |
 | `created_at` | DateTime | Default: now() | Audit metadata — record creation timestamp. |
 | `updated_at` | DateTime | Default: now(), onupdate | Audit metadata — last modification timestamp. |
 
@@ -193,7 +194,7 @@ Migrant populations often have unstructured or transient data.
 * **FHIR Source:** The JSON is the source of truth used to build FHIR R4 RDA bundles for interoperability.
 
 ### 3.3. Delta Sync Tracking
-Three columns track sync state: `synced_encounter_ids` (JSON list of encounter UUIDs already sent), `rda_paciente_sent` (boolean), and `background_data_hash` (SHA-256). Visits are identified by their `encounterIdentifier` UUID rather than list index, preventing duplicates when records are merged from multiple devices. The background hash detects changes in demographics, allergies, and chronic conditions to avoid unnecessary RDA-Paciente retransmission. Tracking is updated **only after successful FHIR Store upload** — if GCP fails, the next sync retries automatically.
+Three columns track sync state: `synced_encounter_ids` (JSON list of encounter UUIDs already sent), `rda_paciente_sent` (boolean), and `background_data_hash` (SHA-256). Visits are identified by their `encounterIdentifier` UUID rather than list index, preventing duplicates when records are merged from multiple devices. The background hash detects changes in demographics, allergies, and chronic conditions to avoid unnecessary RDA-Paciente retransmission. Tracking is updated **only after successful FHIR Store upload** — if GCP fails, the next sync retries automatically. `fhir_delivery_claimed_until` lets only one `/sync` at a time send a patient's bundles; see [FHIR RDA § 2.1](../architecture/fhir-rda.md#21-each-bundle-reaches-the-fhir-store-once).
 
 ### 3.4. Soft Deletion (`is_active`)
 Deactivation (`PATCH` with `is_active: false`) is the way to retire a user or an organization: it keeps every row and blocks access. `DELETE` exists but only succeeds when nothing references the rows: a user or organization referenced by audit records (patient access log, NFC telemetry and key events) cannot be deleted and the API answers `409`, and an organization with patients or with a `superadmin` cannot be deleted either. This preserves historical integrity for audits.
