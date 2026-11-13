@@ -67,7 +67,7 @@ from app.services.emergency_access_service import store_emergency_access_entries
 from app.services.fhir import fhir_backend
 from app.services.fhir_service import convert_to_fhir_rda
 from app.services.llm import medical_llm_processor
-from app.services.llm.base import ai_code_source, mark_ai_diagnoses
+from app.services.llm.base import ai_code_source, fallback_diagnosis, mark_ai_diagnoses
 from app.services.nfc_key_service import (
     keyring_status,
     revoke_version,
@@ -95,6 +95,7 @@ from app.services.patient_service import (
 )
 from app.services.record_merger import adopt_stored_item_ids
 from app.services.retired_device_service import list_retired_device_hashes
+from app.services.terminology import terminology
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +323,90 @@ def _code_source(value: Optional[str]) -> Optional[CodeSource]:
     return CodeSource(value) if value else None
 
 
+_NOTE_FIELDS = (
+    "historyOfCurrentIllness",
+    "generalPhysicalExamination",
+    "systemsExamination",
+    "treatmentPlanObservations",
+)
+
+
+def _has_clinical_notes(evaluation) -> bool:
+    return any((getattr(evaluation, f, None) or "").strip() for f in _NOTE_FIELDS)
+
+
+def _valid_client_diagnoses(diagnoses: list) -> list:
+    """
+    The diagnoses a client sent on a new visit whose ICD-10 code is in the
+    catalog; an invalid ICD-11 is dropped from the diagnosis that keeps it.
+    The app never sends any (it shows what the server coded), so this guards
+    the RDA against other clients (backend audit 2026-11-04,
+    be-nov26-codigos-cie-sin-contrastar-con-catalogo).
+    """
+    valid = []
+    for diagnosis in diagnoses:
+        # Kept as sent ("J06.9"): rewriting it would make every later copy of
+        # the visit look edited. The RDA normalises it.
+        if not terminology.validate_icd10(diagnosis.icd10Code):
+            continue
+        if not terminology.validate_icd11(diagnosis.icd11Code):
+            diagnosis.icd11Code = None
+        valid.append(diagnosis)
+    if len(valid) < len(diagnoses):
+        logger.warning(
+            "Client diagnoses dropped: ICD-10 not in the catalog count=%d",
+            len(diagnoses) - len(valid),
+        )
+    return valid
+
+
+def _client_code_is_valid(icd10: Optional[str], icd11: Optional[str]) -> bool:
+    return terminology.validate_icd10(icd10) and terminology.validate_icd11(icd11)
+
+
+class _LlmJob:
+    """One LLM call /sync may make: ``run`` makes it, ``skip`` is what happens
+    when the budget does not reach it."""
+
+    def __init__(self, run, skip) -> None:
+        self.run = run
+        self.skip = skip
+
+
+async def _run_llm_jobs(jobs: list[_LlmJob]) -> None:
+    """
+    Make at most LLM_MAX_CALLS_PER_SYNC calls, LLM_MAX_CONCURRENT_CALLS at a
+    time, and start none after LLM_SYNC_BUDGET_SECONDS. The rest are skipped.
+    A /sync therefore lasts at most the budget plus one call timeout, however
+    many uncoded items it carries (backend audit 2026-11-04,
+    be-nov26-sync-llamadas-llm-sin-tope).
+    """
+    if not jobs:
+        return
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + settings.LLM_SYNC_BUDGET_SECONDS
+    semaphore = asyncio.Semaphore(settings.LLM_MAX_CONCURRENT_CALLS)
+    allowed = jobs[: settings.LLM_MAX_CALLS_PER_SYNC]
+    skipped = len(jobs) - len(allowed)
+    for job in jobs[len(allowed):]:
+        job.skip()
+
+    async def guarded(job: _LlmJob) -> bool:
+        async with semaphore:
+            if loop.time() >= deadline:
+                job.skip()
+                return False
+            await job.run()
+            return True
+
+    made = await asyncio.gather(*(guarded(job) for job in allowed))
+    skipped += made.count(False)
+    if skipped:
+        logger.warning(
+            "LLM budget reached in /sync calls_made=%d skipped=%d", made.count(True), skipped
+        )
+
+
 async def _apply_llm_coding(
     patient_data: PatientFullRecord,
     new_visits: list,
@@ -333,44 +418,113 @@ async def _apply_llm_coding(
     - Diagnoses: only NEW visits without a diagnosis go to the LLM; visits the
       server already holds keep their stored diagnosis in the merge, so asking
       again only re-sent clinical notes to Vertex and threw the answer away.
-      Every AI diagnosis is stamped with its provenance; a diagnosis the client
-      sent on a new visit is the clinician's.
+      Every AI diagnosis is stamped with its provenance; a valid diagnosis the
+      client sent on a new visit is the clinician's. A visit without any
+      clinical note gets the R69 fallback without a call.
     - Background (family history, chronic conditions): the clinician's text is
       never replaced. The code and its display go to separate fields. An item
       whose text is already coded on the server reuses that coding instead of
-      calling the LLM again.
+      calling the LLM again. A code the client sent that is not in the catalog
+      is dropped, and the item is coded like an uncoded one.
+    - Every call goes through one budget per /sync (_run_llm_jobs). A new visit
+      the budget does not reach gets the R69 fallback; a background item stays
+      uncoded, and a later /sync codes it.
     """
     model = getattr(medical_llm_processor, "model_name", "unknown")
+    jobs: list[_LlmJob] = []
 
     for visit in new_visits:
+        if visit.diagnosis:
+            visit.diagnosis = _valid_client_diagnoses(visit.diagnosis)
         if visit.diagnosis:
             for diagnosis in visit.diagnosis:
                 if diagnosis.source is None:
                     diagnosis.source = CodeSource.CLINICIAN
             continue
         evaluation = visit.clinicalEvaluation
-        diagnoses = await asyncio.to_thread(
-            medical_llm_processor.extract_diagnoses,
-            history=evaluation.historyOfCurrentIllness,
-            physical=evaluation.generalPhysicalExamination,
-            systems=evaluation.systemsExamination,
-            plan=evaluation.treatmentPlanObservations,
-        )
-        visit.diagnosis = mark_ai_diagnoses(diagnoses, model)
+        if not _has_clinical_notes(evaluation):
+            visit.diagnosis = [fallback_diagnosis()]
+            continue
+
+        async def code_visit(visit=visit, evaluation=evaluation) -> None:
+            diagnoses = await asyncio.to_thread(
+                medical_llm_processor.extract_diagnoses,
+                history=evaluation.historyOfCurrentIllness,
+                physical=evaluation.generalPhysicalExamination,
+                systems=evaluation.systemsExamination,
+                plan=evaluation.treatmentPlanObservations,
+            )
+            visit.diagnosis = mark_ai_diagnoses(diagnoses, model)
+
+        def skip_visit(visit=visit) -> None:
+            visit.diagnosis = [fallback_diagnosis()]
+
+        jobs.append(_LlmJob(code_visit, skip_visit))
 
     background = patient_data.backgroundHistory
-    if background is None:
-        return
-    stored_background = (stored_record or {}).get("backgroundHistory") or {}
+    if background is not None:
+        stored_background = (stored_record or {}).get("backgroundHistory") or {}
+        jobs.extend(_chronic_condition_jobs(background, stored_background))
+        jobs.extend(_family_history_jobs(background, stored_background))
 
+    await _run_llm_jobs(jobs)
+
+
+def _chronic_condition_jobs(background, stored_background: dict) -> list[_LlmJob]:
+    stored_chronic = {
+        _normalized_text(item.get("chronicDescription")): item
+        for item in stored_background.get("chronicConditions") or []
+        if item.get("chronicCie10Code")
+    }
+    jobs: list[_LlmJob] = []
+    for cc_item in background.chronicConditions:
+        if not cc_item.chronicDescription:
+            continue
+        if cc_item.chronicCie10Code:
+            if _client_code_is_valid(cc_item.chronicCie10Code, cc_item.chronicCie11Code):
+                continue
+            logger.warning("Client chronic condition code not in the catalog; recoding it")
+            cc_item.chronicCie10Code = cc_item.chronicCie11Code = None
+            cc_item.chronicCodedDisplay = None
+            cc_item.codingSource = None
+        known = stored_chronic.get(_normalized_text(cc_item.chronicDescription))
+        if known is not None:
+            cc_item.chronicCie10Code = known.get("chronicCie10Code")
+            cc_item.chronicCie11Code = known.get("chronicCie11Code")
+            cc_item.chronicCodedDisplay = known.get("chronicCodedDisplay")
+            cc_item.codingSource = _code_source(known.get("codingSource"))
+            continue
+
+        async def code_chronic(cc_item=cc_item) -> None:
+            coded = await asyncio.to_thread(
+                medical_llm_processor.code_chronic_condition, cc_item.chronicDescription
+            )
+            cc_item.chronicCie10Code = coded.get("icd10Code")
+            cc_item.chronicCie11Code = coded.get("icd11Code")
+            cc_item.chronicCodedDisplay = coded.get("description")
+            cc_item.codingSource = ai_code_source(coded)
+
+        jobs.append(_LlmJob(code_chronic, lambda: None))
+    return jobs
+
+
+def _family_history_jobs(background, stored_background: dict) -> list[_LlmJob]:
     stored_family = {
         (_normalized_text(item.get("conditionDescription")), item.get("relationship")): item
         for item in stored_background.get("familyHistory") or []
         if item.get("conditionCie10Code")
     }
+    jobs: list[_LlmJob] = []
     for item in background.familyHistory:
-        if not item.conditionDescription or item.conditionCie10Code:
+        if not item.conditionDescription:
             continue
+        if item.conditionCie10Code:
+            if _client_code_is_valid(item.conditionCie10Code, item.conditionCie11Code):
+                continue
+            logger.warning("Client family history code not in the catalog; recoding it")
+            item.conditionCie10Code = item.conditionCie11Code = None
+            item.conditionCodedDisplay = None
+            item.codingSource = None
         known = stored_family.get(
             (_normalized_text(item.conditionDescription), item.relationship.value)
         )
@@ -380,36 +534,18 @@ async def _apply_llm_coding(
             item.conditionCodedDisplay = known.get("conditionCodedDisplay")
             item.codingSource = _code_source(known.get("codingSource"))
             continue
-        coded = await asyncio.to_thread(
-            medical_llm_processor.code_family_history_item, item.conditionDescription
-        )
-        item.conditionCie10Code = coded.get("icd10Code")
-        item.conditionCie11Code = coded.get("icd11Code")
-        item.conditionCodedDisplay = coded.get("description")
-        item.codingSource = ai_code_source(item.conditionCie10Code)
 
-    stored_chronic = {
-        _normalized_text(item.get("chronicDescription")): item
-        for item in stored_background.get("chronicConditions") or []
-        if item.get("chronicCie10Code")
-    }
-    for cc_item in background.chronicConditions:
-        if not cc_item.chronicDescription or cc_item.chronicCie10Code:
-            continue
-        known = stored_chronic.get(_normalized_text(cc_item.chronicDescription))
-        if known is not None:
-            cc_item.chronicCie10Code = known.get("chronicCie10Code")
-            cc_item.chronicCie11Code = known.get("chronicCie11Code")
-            cc_item.chronicCodedDisplay = known.get("chronicCodedDisplay")
-            cc_item.codingSource = _code_source(known.get("codingSource"))
-            continue
-        coded = await asyncio.to_thread(
-            medical_llm_processor.code_chronic_condition, cc_item.chronicDescription
-        )
-        cc_item.chronicCie10Code = coded.get("icd10Code")
-        cc_item.chronicCie11Code = coded.get("icd11Code")
-        cc_item.chronicCodedDisplay = coded.get("description")
-        cc_item.codingSource = ai_code_source(cc_item.chronicCie10Code)
+        async def code_family(item=item) -> None:
+            coded = await asyncio.to_thread(
+                medical_llm_processor.code_family_history_item, item.conditionDescription
+            )
+            item.conditionCie10Code = coded.get("icd10Code")
+            item.conditionCie11Code = coded.get("icd11Code")
+            item.conditionCodedDisplay = coded.get("description")
+            item.codingSource = ai_code_source(coded)
+
+        jobs.append(_LlmJob(code_family, lambda: None))
+    return jobs
 
 
 @router.post("/sync", response_model=PatientSyncResponse, status_code=status.HTTP_201_CREATED)

@@ -65,6 +65,7 @@ class TerminologyService:
         self._icd10: dict[str, str] = {}
         self._icd11: dict[str, str] = {}
         self._icd10_set: frozenset[str] = frozenset()
+        self._icd10_with_subcategories: frozenset[str] = frozenset()
         self._icd11_set: frozenset[str] = frozenset()
         self._loaded = False
         self._icd10_full_catalog = False
@@ -75,6 +76,10 @@ class TerminologyService:
         self._icd10 = self._load_file(ICD10_FILE, "ICD-10")
         self._icd11 = self._load_file(ICD11_FILE, "ICD-11")
         self._icd10_set = frozenset(self._icd10.keys())
+        self._icd10_with_subcategories = frozenset(
+            code[:3] for code in self._icd10_set
+            if len(code) == 4 and _ICD10_CODE_SHAPE.match(code)
+        )
         self._icd11_set = frozenset(self._icd11.keys())
         self._loaded = True
 
@@ -155,6 +160,27 @@ class TerminologyService:
 
         # Fragment or empty — fall back to format validation
         return bool(_ICD10_PATTERN.match(normalized))
+
+    def terminal_icd10(self, code: Optional[str]) -> Optional[str]:
+        """
+        The code an LLM answer should be stored as, or None if it is not valid.
+
+        The prompts ask for the most specific code the text supports and, when
+        the text gives no detail, the category's "unspecified" subcategory. A
+        3-character category that has subcategories is completed to that
+        subcategory when the catalog has it ("E14" -> "E149", "J45" -> "J459");
+        otherwise it stays as it is ("Z00": its subcategories have no "9").
+        """
+        normalized = normalize_icd10(code)
+        if not self.validate_icd10(normalized):
+            return None
+        if (
+            len(normalized) == 3
+            and normalized in self._icd10_with_subcategories
+            and normalized + "9" in self._icd10_set
+        ):
+            return normalized + "9"
+        return normalized
 
     def get_icd10_display(self, code: str) -> Optional[str]:
         """Get the Spanish display name for an ICD-10 code, or None."""

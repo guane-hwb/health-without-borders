@@ -21,6 +21,7 @@ All tests are pure-Python — no DB, no HTTP client.
 """
 
 from datetime import date, datetime
+from unittest.mock import patch
 
 from app.schemas.patient import (
     Address,
@@ -92,6 +93,7 @@ from app.services.fhir_service import (
     build_rda_paciente,
     convert_to_fhir_rda,
 )
+from app.services.terminology import terminology
 
 # ============================================================================
 # FIXTURES — minimal valid patient record
@@ -615,7 +617,18 @@ class TestBuildCondition:
         diag = DiagnosisItem(icd10Code="J06.9", description="Infección respiratoria")
         r = _build_condition(diag, "PT-VZ-001", "Condition-0")
         assert r["resourceType"] == "Condition"
-        assert r["code"]["coding"][0]["code"] == "J06.9"
+        # Sent as the IHCE catalog writes it; named as the catalog names it.
+        assert r["code"]["coding"][0]["code"] == "J069"
+        assert r["code"]["coding"][0]["display"] == terminology.get_icd10_display("J069")
+        assert r["code"]["text"] == "Infección respiratoria"
+
+    def test_display_falls_back_to_the_description_when_the_catalog_has_no_name(self):
+        diag = DiagnosisItem(icd10Code="J069", icd11Code="CA07.0", description="Infección")
+        with patch.object(terminology, "get_icd10_display", return_value=None), \
+                patch.object(terminology, "get_icd11_display", return_value=None):
+            r = _build_condition(diag, "PT-VZ-001", "Condition-0")
+        assert r["code"]["coding"][0]["display"] == "Infección"
+        assert r["code"]["coding"][1] == {"system": r["code"]["coding"][1]["system"], "code": "CA07.0"}
 
     def test_verification_status_has_system(self):
         diag = DiagnosisItem(icd10Code="J06.9", description="Infección respiratoria")

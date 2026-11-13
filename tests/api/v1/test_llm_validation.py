@@ -56,6 +56,7 @@ class TestPostLLMValidation:
         """A code that exists in the catalog is accepted as-is."""
         with patch("app.services.llm.gemini.terminology") as mock_term:
             mock_term.validate_icd10.return_value = True
+            mock_term.terminal_icd10.side_effect = lambda code: code.replace(".", "")
             mock_term.validate_icd11.return_value = True
 
             diag = DiagnosisItem(icd10Code="A09", icd11Code="1A40.Z", description="Diarrea")
@@ -68,6 +69,7 @@ class TestPostLLMValidation:
         """A code NOT in the catalog is replaced with R69."""
         with patch("app.services.llm.gemini.terminology") as mock_term:
             mock_term.validate_icd10.return_value = False
+            mock_term.terminal_icd10.return_value = None
 
             diag = DiagnosisItem(icd10Code="Z00.129", description="Fake code")
             result = _validate_and_fix_diagnosis(diag)
@@ -80,6 +82,7 @@ class TestPostLLMValidation:
         """Invalid ICD-11 is stripped (set to None), not the whole diagnosis."""
         with patch("app.services.llm.gemini.terminology") as mock_term:
             mock_term.validate_icd10.return_value = True
+            mock_term.terminal_icd10.side_effect = lambda code: code.replace(".", "")
             mock_term.validate_icd11.return_value = False
 
             diag = DiagnosisItem(icd10Code="A09", icd11Code="INVALID", description="Diarrea")
@@ -92,6 +95,7 @@ class TestPostLLMValidation:
         """Family history / chronic condition dict with invalid ICD-10 → R69."""
         with patch("app.services.llm.gemini.terminology") as mock_term:
             mock_term.validate_icd10.return_value = False
+            mock_term.terminal_icd10.return_value = None
 
             result = _validate_and_fix_dict({
                 "icd10Code": "INVENTED",
@@ -105,6 +109,7 @@ class TestPostLLMValidation:
     def test_dict_validation_passes_valid_code(self):
         with patch("app.services.llm.gemini.terminology") as mock_term:
             mock_term.validate_icd10.return_value = True
+            mock_term.terminal_icd10.side_effect = lambda code: code.replace(".", "")
             mock_term.validate_icd11.return_value = True
 
             result = _validate_and_fix_dict({
@@ -162,13 +167,14 @@ class TestGeminiErrorFallback:
         ]))
         with patch("app.services.llm.gemini.terminology") as mock_term:
             mock_term.validate_icd10.return_value = True
+            mock_term.terminal_icd10.side_effect = lambda code: code.replace(".", "")
             mock_term.validate_icd11.return_value = True
 
             result = gemini_service.extract_diagnoses("h", "p", "s", "t")
 
             assert len(result) == 1
             assert result[0].icd10Code == "A09"
-            mock_term.validate_icd10.assert_called_with("A09")
+            mock_term.terminal_icd10.assert_called_with("A09")
 
 class TestGeminiHappyPathValidation:
     """Cover validation branches in happy paths."""
@@ -205,6 +211,7 @@ class TestGeminiHappyPathValidation:
         }))
         with patch("app.services.llm.gemini.terminology") as mock_term:
             mock_term.validate_icd10.return_value = True
+            mock_term.terminal_icd10.side_effect = lambda code: code.replace(".", "")
             mock_term.validate_icd11.return_value = True
             result = gemini_service.code_family_history_item("Diabetes")
 
@@ -215,6 +222,7 @@ class TestGeminiHappyPathValidation:
         """Covers the ICD-11 stripping branch in _validate_and_fix_dict."""
         with patch("app.services.llm.gemini.terminology") as mock_term:
             mock_term.validate_icd10.return_value = True
+            mock_term.terminal_icd10.side_effect = lambda code: code.replace(".", "")
             mock_term.validate_icd11.return_value = False
 
             result = _validate_and_fix_dict({

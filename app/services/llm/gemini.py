@@ -16,8 +16,12 @@ from google import genai
 from google.genai import types
 
 from app.core.config import settings
-from app.schemas.patient import CodeSource, DiagnosisItem
-from app.services.llm.base import FALLBACK_ICD10_CODE, FALLBACK_ICD10_DESCRIPTION
+from app.schemas.patient import DiagnosisItem
+from app.services.llm.base import (
+    FALLBACK_ICD10_CODE,
+    fallback_coding,
+    fallback_diagnosis,
+)
 from app.services.llm.prompts import (
     SYSTEM_INSTRUCTION,
     SYSTEM_INSTRUCTION_CHRONIC_CONDITION,
@@ -31,7 +35,7 @@ from app.services.llm.schemas import (
     DIAGNOSIS_RESPONSE_SCHEMA,
     FAMILY_HISTORY_RESPONSE_SCHEMA,
 )
-from app.services.terminology import normalize_icd10, terminology
+from app.services.terminology import terminology
 
 logger = logging.getLogger(__name__)
 
@@ -42,35 +46,27 @@ def _make_fallback_diagnosis(reason: str) -> DiagnosisItem:
     clinical description a professional will read.
     """
     logger.warning("Diagnosis extraction fell back to %s: %s", FALLBACK_ICD10_CODE, reason)
-    return DiagnosisItem(
-        icd10Code=FALLBACK_ICD10_CODE,
-        description=FALLBACK_ICD10_DESCRIPTION,
-        source=CodeSource.AI_FALLBACK,
-    )
+    return fallback_diagnosis()
 
 
 def _make_fallback_dict(reason: str) -> dict:
     """Honest fallback (R69) for family history / chronic conditions."""
     logger.warning("Background coding fell back to %s: %s", FALLBACK_ICD10_CODE, reason)
-    return {
-        "icd10Code": FALLBACK_ICD10_CODE,
-        "icd11Code": None,
-        "description": FALLBACK_ICD10_DESCRIPTION,
-    }
+    return fallback_coding()
 
 
 def _validate_and_fix_diagnosis(diag: DiagnosisItem) -> DiagnosisItem:
     """
-    Validate ICD-10/11 codes against the Vulcano catalog.
-    ICD-10 is normalised first ('J45.9' → 'J459'); if it is still invalid, the
-    whole diagnosis becomes R69. If ICD-11 is invalid, strip it (ICD-11 is
-    optional).
+    Validate ICD-10/11 codes against the catalog.
+    ICD-10 is normalised ('J45.9' → 'J459') and a category with subcategories
+    becomes its unspecified one ('J45' → 'J459'), the same rule the prompt
+    gives; if it is still invalid, the whole diagnosis becomes R69. If ICD-11
+    is invalid, strip it (ICD-11 is optional).
     """
-    diag.icd10Code = normalize_icd10(diag.icd10Code)
-    if not terminology.validate_icd10(diag.icd10Code):
-        return _make_fallback_diagnosis(
-            f"LLM ICD-10 code '{diag.icd10Code}' not in the catalog"
-        )
+    icd10 = terminology.terminal_icd10(diag.icd10Code)
+    if icd10 is None:
+        return _make_fallback_diagnosis("LLM ICD-10 code not in the catalog")
+    diag.icd10Code = icd10
 
     # ICD-11 is optional — if invalid, just strip it
     if diag.icd11Code and not terminology.validate_icd11(diag.icd11Code):
@@ -85,9 +81,9 @@ def _validate_and_fix_diagnosis(diag: DiagnosisItem) -> DiagnosisItem:
 
 def _validate_and_fix_dict(result: dict) -> dict:
     """Validate ICD codes in a family history / chronic condition dict."""
-    icd10 = normalize_icd10(result.get("icd10Code"))
-    if not terminology.validate_icd10(icd10):
-        return _make_fallback_dict(f"LLM ICD-10 code '{icd10}' not in the catalog")
+    icd10 = terminology.terminal_icd10(result.get("icd10Code"))
+    if icd10 is None:
+        return _make_fallback_dict("LLM ICD-10 code not in the catalog")
     result["icd10Code"] = icd10
 
     icd11 = result.get("icd11Code")

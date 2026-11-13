@@ -48,6 +48,7 @@ from app.schemas.patient import (
     RiskFactorType,
 )
 from app.services import iso3166
+from app.services.terminology import normalize_icd10, terminology
 
 logger = logging.getLogger(__name__)
 
@@ -807,12 +808,34 @@ def _diagnosis_verification(diag, diagnosis_type: DiagnosisType) -> Tuple[str, s
     return "provisional", "Provisional"
 
 
+def _icd_coding(icd10: str, icd11: Optional[str], fallback_display: Optional[str]) -> List[Dict[str, Any]]:
+    """
+    CIE-10 (and CIE-11) codings of a condition.
+
+    The display is the catalog's name for the code, so it always matches the
+    code (backend audit 2026-11-04: the LLM described H669 as "Otitis media
+    aguda"). The clinician's or the LLM's own wording goes in ``code.text``.
+    The code is sent without separators, as the IHCE catalog writes it.
+    """
+    code10 = normalize_icd10(icd10)
+    coding: List[Dict[str, Any]] = [{
+        "system": SYSTEM_CIE10,
+        "code": code10,
+        "display": terminology.get_icd10_display(code10) or fallback_display or "",
+    }]
+    if icd11:
+        coding11: Dict[str, Any] = {"system": SYSTEM_CIE11, "code": icd11}
+        display11 = terminology.get_icd11_display(icd11)
+        if display11:
+            coding11["display"] = display11
+        coding.append(coding11)
+    return coding
+
+
 def _build_condition(diag, patient_id: str, cond_id: str,
                      diagnosis_type: DiagnosisType = DiagnosisType.IMPRESION_DIAGNOSTICA,
                      ) -> Dict[str, Any]:
-    coding = [{"system": SYSTEM_CIE10, "code": diag.icd10Code, "display": diag.description}]
-    if diag.icd11Code:
-        coding.append({"system": SYSTEM_CIE11, "code": diag.icd11Code})
+    coding = _icd_coding(diag.icd10Code, diag.icd11Code, diag.description)
     status_code, status_display = _diagnosis_verification(diag, diagnosis_type)
     return {
         "resourceType": "Condition",
@@ -825,7 +848,7 @@ def _build_condition(diag, patient_id: str, cond_id: str,
         "category": [{"coding": [{"system": SYSTEM_CONDITION_CATEGORY,
                                    "code": "encounter-diagnosis",
                                    "display": "Encounter Diagnosis"}]}],
-        "code": {"coding": coding},
+        "code": {"coding": coding, "text": diag.description},
         "subject": {"reference": _ref(patient_id)},
     }
 
@@ -846,10 +869,10 @@ def _build_condition_statement(cond: ChronicConditionItem, patient_id: str,
         "subject": {"reference": _ref(patient_id)},
     }
     if cond.chronicCie10Code:
-        coding = [{"system": SYSTEM_CIE10, "code": cond.chronicCie10Code,
-                   "display": cond.chronicCodedDisplay or cond.chronicDescription}]
-        if cond.chronicCie11Code:
-            coding.append({"system": SYSTEM_CIE11, "code": cond.chronicCie11Code})
+        coding = _icd_coding(
+            cond.chronicCie10Code, cond.chronicCie11Code,
+            cond.chronicCodedDisplay or cond.chronicDescription,
+        )
         # code.text carries what the professional wrote; the coding is the
         # (possibly AI-suggested) interpretation of it.
         resource["code"] = {"coding": coding, "text": cond.chronicDescription}
@@ -893,11 +916,10 @@ def _build_allergy_encounter(allergy, patient_id: str, encounter_id: str,
 def _build_family_member_history(fh, patient_id: str, fmh_id: str) -> Dict[str, Any]:
     condition_code: Dict[str, Any] = {"text": fh.conditionDescription}
     if fh.conditionCie10Code:
-        coding = [{"system": SYSTEM_CIE10, "code": fh.conditionCie10Code,
-                   "display": fh.conditionCodedDisplay or fh.conditionDescription}]
-        if fh.conditionCie11Code:
-            coding.append({"system": SYSTEM_CIE11, "code": fh.conditionCie11Code})
-        condition_code["coding"] = coding
+        condition_code["coding"] = _icd_coding(
+            fh.conditionCie10Code, fh.conditionCie11Code,
+            fh.conditionCodedDisplay or fh.conditionDescription,
+        )
     return {
         "resourceType": "FamilyMemberHistory",
         "id": fmh_id,
