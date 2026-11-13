@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import NFC_MAX_KEY_VERSION, settings
+from app.core.errors import StartupCheckError
 from app.core.key_wrapper import (
     EnvKekWrapper,
     KeyWrapper,
@@ -159,7 +160,7 @@ def ensure_initialised(db: Session) -> None:
     restore from a backup older than the KEK, or a table emptied by mistake,
     looks like; importing then would bring back a version 0 that may have been
     revoked after a leak, as the current version, with nothing said. Raises
-    ``RuntimeError`` instead, and also when the event log shows the ring
+    ``StartupCheckError`` instead, and also when the event log shows the ring
     existed before, flag or not.
     """
     wrapper = kek_wrapper()
@@ -176,14 +177,14 @@ def ensure_initialised(db: Session) -> None:
 
     master = settings.NFC_MASTER_KEY.strip()
     if master and db.query(NfcKeyEvent).count() > 0:
-        raise RuntimeError(
+        raise StartupCheckError(
             "The NFC keyring table is empty but its event log is not: the ring "
             "existed and its rows are missing. NFC_MASTER_KEY is not imported, "
             "since it may be a revoked version. Restore nfc_keys and "
             "nfc_keyring_state from a backup."
         )
     if master and not settings.NFC_BOOTSTRAP_IMPORT:
-        raise RuntimeError(
+        raise StartupCheckError(
             "The NFC keyring table is empty. NFC_MASTER_KEY is imported as "
             "version 0 only with NFC_BOOTSTRAP_IMPORT=true, on the first start "
             "with a KEK. If this database was restored or the table emptied, "

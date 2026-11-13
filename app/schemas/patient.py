@@ -263,14 +263,14 @@ class MedicationRequestIntent(str, Enum):
 
 class RetiredDeviceReason(str, Enum):
     """
-    Motivo por el que se retira la manilla anterior en un re-etiquetado.
+    Motivo por el que se retira el dispositivo anterior en un re-etiquetado.
 
     Solo aplica cuando un ``/sync`` reemplaza el ``device_uid`` de un registro
     existente. Si el ``device_uid`` cambia y la app no envía el motivo, el
     servidor registra el retiro igual con el valor genérico ``replaced``.
     """
-    LOST = "lost"        # Manilla perdida
-    DAMAGED = "damaged"  # Manilla dañada
+    LOST = "lost"        # Dispositivo perdido
+    DAMAGED = "damaged"  # Dispositivo dañado
 
 
 # ============================================================================
@@ -340,32 +340,32 @@ class PatientInfo(BaseModel):
 
 class GuardianConsent(BaseModel):
     """
-    Prueba de consentimiento informado del guardián — Ley 1581/2012 (Habeas Data).
+    Prueba de consentimiento informado del cuidador — Ley 1581/2012 (Habeas Data).
 
-    Almacena la evidencia de que el guardián autorizó el tratamiento de datos
+    Almacena la evidencia de que el cuidador autorizó el tratamiento de datos
     del menor. La firma se almacena como imagen PNG codificada en base64.
     """
-    accepted: bool = Field(..., description="Guardián aceptó la política de privacidad")
+    accepted: bool = Field(..., description="El cuidador aceptó la política de privacidad")
     acceptedAt: datetime = Field(..., description="Timestamp ISO 8601 del momento de aceptación")
     email: Optional[str] = Field(None, description="Correo para envío del comprobante de consentimiento")
     signatureBase64: Optional[str] = Field(None, description="Firma biométrica como imagen PNG en base64")
     policyVersion: Optional[str] = Field(
         None,
         description=(
-            "Versión de la política de tratamiento de datos que aceptó el acudiente "
+            "Versión de la política de tratamiento de datos que aceptó el cuidador "
             "(p. ej. 'v1.1'). Ausente en consentimientos anteriores a este campo."
         ),
     )
 
 
 class GuardianInfo(BaseModel):
-    """Información del acudiente/tutor del menor."""
+    """Información del cuidador/tutor del menor."""
     name: str
     relationship: str
     phone: str
-    device_uid: Optional[str] = Field(None, description="Hardware ID de la manilla NFC")
-    documentType: Optional[str] = Field(None, description="Tipo de documento del guardián")
-    documentNumber: Optional[str] = Field(None, description="Número de documento del guardián")
+    device_uid: Optional[str] = Field(None, description="Hardware ID del dispositivo NFC del cuidador")
+    documentType: Optional[str] = Field(None, description="Tipo de documento del cuidador")
+    documentNumber: Optional[str] = Field(None, description="Número de documento del cuidador")
     consent: Optional[GuardianConsent] = Field(None, description="Consentimiento informado — Ley 1581/2012")
 
 
@@ -621,13 +621,13 @@ class PatientFullRecord(BaseModel):
     Payload de POST /sync y respuesta de GET /scan.
     """
     patientId: str = Field(..., description="UUID v4 generado por el frontend")
-    device_uid: str = Field(..., description="UID del hardware NFC/QR de la manilla")
+    device_uid: str = Field(..., description="UID del hardware NFC/QR del dispositivo del paciente")
 
     retiredDeviceReason: Optional[RetiredDeviceReason] = Field(
         None,
         description=(
-            "Motivo de retiro de la manilla anterior cuando este sync reemplaza "
-            "el device_uid (re-etiquetado por manilla perdida o dañada). Solo se "
+            "Motivo de retiro del dispositivo anterior cuando este sync reemplaza "
+            "el device_uid (re-etiquetado por dispositivo perdido o dañado). Solo se "
             "usa si el device_uid cambia respecto al registro existente; si no se "
             "envía, el retiro se registra como 'replaced'. Es una señal de "
             "transporte: no se persiste en el registro clínico ni se devuelve en "
@@ -640,10 +640,13 @@ class PatientFullRecord(BaseModel):
         description=(
             "recordVersion de la copia sobre la que trabajó el dispositivo (la "
             "recibida en /scan, /search o /sync). Si es menor que la del servidor, "
-            "el payload se trata como una copia antigua: no cambia manilla ni "
-            "acudientes, las alergias y antecedentes se unen en lugar de "
-            "reemplazarse, y se informa en `conflicts`. Si no se envía, el "
-            "comportamiento es el de siempre. Señal de transporte: no se guarda."
+            "el payload se trata como una copia antigua: no cambia el dispositivo "
+            "del paciente ni los cuidadores, las alergias y antecedentes se unen "
+            "en lugar de reemplazarse, y se informa en `conflicts` "
+            "(`stale_payload_base_version`). Si no se envía para un registro "
+            "existente, el servidor no sabe si la copia es antigua: si quitaría "
+            "alergias, antecedentes o medicamentos, esas listas se unen y se "
+            "informa `missing_base_version`. Señal de transporte: no se guarda."
         ),
     )
     recordVersion: Optional[int] = Field(
@@ -656,7 +659,7 @@ class PatientFullRecord(BaseModel):
 
     patientInfo: PatientInfo
     guardianInfo: GuardianInfo
-    guardian2Info: Optional[GuardianInfo] = Field(None, description="Segundo guardián/tutor (opcional)")
+    guardian2Info: Optional[GuardianInfo] = Field(None, description="Segundo cuidador/tutor (opcional)")
 
     backgroundHistory: Optional[BackgroundHistory] = None
     allergies: List[AllergyInfo] = Field(default_factory=list)
@@ -868,7 +871,15 @@ class PatientSyncRecord(PatientFullRecord):
 class PatientSyncResponse(BaseModel):
     status: str
     internal_id: str
-    fhir_status: Optional[str] = "unknown"
+    fhir_status: Optional[str] = Field(
+        "unknown",
+        description=(
+            "'success' when every RDA bundle this sync needed is in the FHIR Store; "
+            "'error' or 'skipped' when one was not delivered; 'in_progress' when "
+            "another /sync for the same patient is sending them right now. Anything "
+            "but 'success' means: keep the row pending and sync it again later."
+        ),
+    )
     vida_code: Optional[str] = Field(None, description="Código VIDA retornado por IHCE")
     message: str
     record_version: Optional[int] = Field(
@@ -881,8 +892,12 @@ class PatientSyncResponse(BaseModel):
             "older than what it holds (e.g. a retired patient device), or not the "
             "device's to change, or edits of a visit / vaccination it already "
             "holds (visit_edit_not_applied:<encounterIdentifier>, "
-            "vaccination_edit_not_applied:<vaccinationId>). The rest of the "
-            "record was synced."
+            "vaccination_edit_not_applied:<vaccinationId>). "
+            "missing_base_version: no baseVersion, and the payload would remove "
+            "allergies or background items; the lists were united. "
+            "identity_edit_not_applied: names, birth date, sex or document "
+            "differ from the stored ones, which a sync never changes. The rest "
+            "of the record was synced."
         ),
     )
     record: Optional[PatientFullRecord] = Field(
@@ -929,13 +944,13 @@ class PatientSearchRequest(BaseModel):
     )
     guardian_name: Optional[str] = Field(
         None, min_length=3,
-        description="Nombre completo del acudiente (refuerza la verificación si el paciente tiene guardián)",
+        description="Nombre completo del cuidador (refuerza la verificación si el paciente tiene cuidador)",
     )
     access_reason: Optional[str] = Field(
         None, max_length=500,
         description=(
             "Motivo de la consulta. Se guarda en el registro de accesos junto con "
-            "quién buscó y cuándo; la búsqueda no exige la tarjeta del acudiente."
+            "quién buscó y cuándo; la búsqueda no exige el dispositivo del cuidador."
         ),
     )
 
@@ -952,7 +967,7 @@ class PatientScanRequest(BaseModel):
                             description="UID de hardware del dispositivo del paciente")
     guardian_device_uid: Optional[str] = Field(
         None, max_length=128,
-        description="UID del dispositivo del guardián; obligatorio para menores",
+        description="UID del dispositivo del cuidador; obligatorio para menores",
     )
 
 

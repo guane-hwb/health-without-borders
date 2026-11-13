@@ -40,3 +40,13 @@ STORED_RECORD_INVALID = "stored_record_invalid"
 CURRENT_PASSWORD_INCORRECT = "current_password_incorrect"  # noqa: S105
 PASSWORD_UNCHANGED = "password_unchanged"  # noqa: S105
 PASSWORD_CHANGE_REQUIRED = "password_change_required"  # noqa: S105
+
+
+class StartupCheckError(RuntimeError):
+    """
+    A startup check refused to start the service.
+
+    Its message is fixed text written here, with no data in it, and tells the
+    operator what to do, so the startup log keeps it whole. Any other exception
+    a startup step raises is logged with its message redacted (app.main).
+    """

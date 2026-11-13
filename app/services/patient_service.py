@@ -2,13 +2,14 @@ import copy
 import hashlib
 import json
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import func
 from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.phi_sanitizer import pseudonym, safe_patient_ref
 from app.core.text_normalizer import (
     DOCUMENT_SEPARATORS,
@@ -20,7 +21,7 @@ from app.db.errors import violates
 from app.db.models import Patient, RetiredDeviceUid
 from app.schemas.patient import UNKNOWN_NATIONALITY_CODE, PatientFullRecord
 from app.services.iso3166 import to_alpha3
-from app.services.record_merger import merge_patient_records
+from app.services.record_merger import drops_declarative_items, merge_patient_records
 
 # Setup Logger
 logger = logging.getLogger(__name__)
@@ -624,6 +625,46 @@ def _stale_rule_changes_nothing(stored_record: dict, incoming_record: dict) -> b
     )
 
 
+#: The identity fields a sync never changes on a stored patient (RULE 1 in
+#: create_or_update_patient), compared as identity is matched elsewhere.
+_IDENTITY_TEXT_FIELDS = ("firstName", "secondName", "firstLastName", "secondLastName")
+
+
+def _identity_edits(stored_info: dict, incoming_info: dict) -> list[str]:
+    """
+    The identity fields where the payload says something else than the stored
+    record, which the sync will not apply.
+
+    A field the payload leaves empty is not an edit: a copy rebuilt from a
+    device may lack the second names. Names compare without accents, case or
+    extra spaces, the document number without separators. A field the stored
+    record lacks (written by an older version) takes the payload's value, so it
+    is not reported either, except the second names, which RULE 1 always keeps.
+    """
+    edits = []
+    for field in _IDENTITY_TEXT_FIELDS:
+        incoming = normalize_text(incoming_info.get(field))
+        if not incoming:
+            continue
+        if field not in ("secondName", "secondLastName") and field not in stored_info:
+            continue
+        if incoming != normalize_text(stored_info.get(field)):
+            edits.append(field)
+    for field in ("dob", "biologicalSex"):
+        incoming = incoming_info.get(field)
+        if incoming and field in stored_info and str(incoming) != str(stored_info.get(field)):
+            edits.append(field)
+    stored_id = stored_info.get("identification")
+    incoming_id = incoming_info.get("identification") or {}
+    if isinstance(stored_id, dict) and (
+        incoming_id.get("documentType") != stored_id.get("documentType")
+        or normalize_document_number(incoming_id.get("documentNumber"))
+        != normalize_document_number(stored_id.get("documentNumber"))
+    ):
+        edits.append("identification")
+    return edits
+
+
 def _same_person(existing: Patient, patient_in: PatientFullRecord) -> bool:
     """
     Whether a payload that reached ``existing`` through its patient device UID is the
@@ -684,11 +725,54 @@ def get_stored_record_for_sync(
     return existing.id, copy.deepcopy(existing.full_record_json or {})
 
 
+def _as_utc(value: datetime) -> datetime:
+    # SQLite gives back naive datetimes; PostgreSQL keeps the zone.
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def claim_fhir_delivery(
+    db: Session,
+    patient_id: str,
+    now: Optional[datetime] = None,
+) -> Optional[tuple[list[str], Optional[str], bool]]:
+    """
+    Take the right to send this patient's RDA bundles, or None if another
+    /sync holds it.
+
+    Two overlapping /sync requests for the same patient used to read the same
+    delivered encounters and both send the new RDA-Consulta (backend audit
+    2026-11-04, be-nov26-reintento-duplica-rda-en-fhir). The claim is taken
+    under the row lock and returns the delivery state read under that lock,
+    so the bundles are decided after any delivery the other request recorded.
+    It expires after FHIR_DELIVERY_CLAIM_SECONDS, so a request that dies while
+    sending does not hold it.
+
+    Returns (synced_encounter_ids, background_data_hash, rda_paciente_sent).
+    """
+    now = now or datetime.now(timezone.utc)
+    patient = db.query(Patient).filter(Patient.id == patient_id).with_for_update().one()
+    held_until = patient.fhir_delivery_claimed_until
+    if held_until is not None and _as_utc(held_until) > now:
+        db.rollback()
+        return None
+    patient.fhir_delivery_claimed_until = now + timedelta(
+        seconds=settings.FHIR_DELIVERY_CLAIM_SECONDS
+    )
+    state = (
+        list(patient.synced_encounter_ids or []),
+        patient.background_data_hash,
+        bool(patient.rda_paciente_sent),
+    )
+    db.commit()
+    return state
+
+
 def record_fhir_delivery(
     db: Session,
     patient_id: str,
     accepted_encounter_ids: list[str],
     sent_background_hash: Optional[str],
+    release_claim: bool = False,
 ) -> None:
     """
     Record what the FHIR Store accepted, bundle by bundle.
@@ -698,10 +782,15 @@ def record_fhir_delivery(
     RDA-Consulta does not force the ones that were accepted to be sent (and
     stored) again. The row is re-read under a lock and the ids are united with
     what is stored, so a concurrent sync's deliveries are not overwritten.
+
+    ``release_claim`` gives back the claim taken by claim_fhir_delivery, in the
+    same transaction, so the next /sync sees what this one delivered.
     """
-    if not accepted_encounter_ids and sent_background_hash is None:
+    if not accepted_encounter_ids and sent_background_hash is None and not release_claim:
         return
     patient = db.query(Patient).filter(Patient.id == patient_id).with_for_update().one()
+    if release_claim:
+        patient.fhir_delivery_claimed_until = None
     if accepted_encounter_ids:
         patient.synced_encounter_ids = sorted(
             set(patient.synced_encounter_ids or []) | set(accepted_encounter_ids)
@@ -833,7 +922,7 @@ def create_or_update_patient(
             conflicts.append("stale_payload_retired_device_uid")
 
         # The general case: the device says which version its copy is based on.
-        # Without baseVersion (apps that predate it) nothing changes.
+        # Without baseVersion, see keep_server_lists below.
         current_version = existing_patient.record_version or 1
         if (
             patient_in.baseVersion is not None
@@ -848,6 +937,23 @@ def create_or_update_patient(
             )
             stale = True
             conflicts.append("stale_payload_base_version")
+
+        # Without baseVersion (apps before 2026-10-06, or a copy from a guardian
+        # device written before the record had a version) the server cannot
+        # tell an old copy from a fresh one. "Last write wins" let such a copy erase an
+        # allergy recorded since. It still adds what it brings, but what it
+        # would remove from the declarative lists stays, and the app is told.
+        keep_server_lists = (
+            not stale
+            and patient_in.baseVersion is None
+            and drops_declarative_items(old_record_dump, new_record_dump)
+        )
+        if keep_server_lists:
+            logger.warning(
+                "Sync without baseVersion would remove declarative items; kept patient=%s",
+                safe_patient_ref(existing_patient.id),
+            )
+            conflicts.append("missing_base_version")
         synced_encounter_ids = list(existing_patient.synced_encounter_ids or [])
         old_bg_hash = existing_patient.background_data_hash or ""
         rda_paciente_sent = existing_patient.rda_paciente_sent
@@ -858,6 +964,16 @@ def create_or_update_patient(
         # KeyError, which the app retries forever.
         old_info = old_record_dump.get("patientInfo") or {}
         new_info = new_record_dump["patientInfo"]
+        # Say so instead of dropping a correction without a word. Field names
+        # only: the values are PHI.
+        identity_edits = _identity_edits(old_info, new_info)
+        if identity_edits:
+            logger.warning(
+                "Identity edit not applied patient=%s fields=%s",
+                safe_patient_ref(existing_patient.id),
+                ",".join(identity_edits),
+            )
+            conflicts.append("identity_edit_not_applied")
         for field in ("firstName", "firstLastName", "dob", "biologicalSex", "identification"):
             new_info[field] = old_info.get(field, new_info[field])
         new_info["secondLastName"] = old_info.get("secondLastName")
@@ -872,6 +988,7 @@ def create_or_update_patient(
             old_record_dump,
             new_record_dump,
             stale=stale,
+            keep_server_lists=keep_server_lists,
             keep_server_guardians=keep_guardians,
             conflicts=conflicts,
             recorded_by=_recorded_by(org_id, actor_user_id),

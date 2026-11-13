@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.app_version import app_version
 from app.core.config import settings
 from app.core.errors import (
     DEVICE_RETIRED,
@@ -83,6 +84,7 @@ from app.services.patient_service import (
     DuplicateIdentityError,
     IdentityMismatchError,
     InvalidPatientDataError,
+    claim_fhir_delivery,
     compute_background_hash,
     create_or_update_patient,
     find_patient_strict,
@@ -465,6 +467,16 @@ async def sync_patient(
     `visit_edit_not_applied:<encounterIdentifier>` or
     `vaccination_edit_not_applied:<vaccinationId>`; the rest of the record syncs.
 
+    **Identity:** names, birth date, sex and document of a stored patient never
+    change by sync. A payload that says otherwise gets
+    `identity_edit_not_applied` in `conflicts` (an empty field is not an edit).
+
+    **No `baseVersion`:** for an existing record the server cannot tell an old
+    copy from a fresh one. If the payload would remove allergies or background
+    items (chronic conditions, family history, medications, notes), the stored
+    ones are kept, what the payload adds is taken, and `conflicts` gets
+    `missing_base_version`.
+
     **The stored record back:** when `conflicts` is not empty and the payload is
     the device's own copy (same `patientId`), `record` carries the record as
     stored after this sync, with its `recordVersion`. Not for a copy matched by
@@ -511,6 +523,11 @@ async def sync_patient(
         # Release the connection: the LLM calls below can take seconds each and
         # must not hold a pooled connection "idle in transaction".
         await asyncio.to_thread(db.rollback)
+
+        # Which builds still sync an existing record without baseVersion, so
+        # the field can be made mandatory once none is left in the field.
+        if stored_record is not None and patient_data.baseVersion is None:
+            logger.info("Sync without baseVersion app_version=%s", app_version(request))
 
         # An item the app re-sent without its id (the edit screens drop it)
         # takes the id of the stored item it is, so it is not added twice.
@@ -591,15 +608,37 @@ async def sync_patient(
             organization_id=actor_org_id,
             channel=SYNC,
         )
-        # background_data_hash is the hash the FHIR Store last accepted.
-        background_data_changed = rda_paciente_sent and old_bg_hash != current_bg_hash
 
-        fhir_bundles, new_encounter_ids = convert_to_fhir_rda(
-            rda_source,
-            synced_encounter_ids=synced_encounter_ids,
-            rda_paciente_already_sent=rda_paciente_sent,
-            background_data_changed=background_data_changed,
+        def build_bundles(synced_ids, last_bg_hash, paciente_sent):
+            # background_data_hash is the hash the FHIR Store last accepted.
+            return convert_to_fhir_rda(
+                rda_source,
+                synced_encounter_ids=synced_ids,
+                rda_paciente_already_sent=paciente_sent,
+                background_data_changed=paciente_sent and last_bg_hash != current_bg_hash,
+                background_hash=current_bg_hash,
+            )
+
+        fhir_bundles, new_encounter_ids = build_bundles(
+            synced_encounter_ids, old_bg_hash, rda_paciente_sent
         )
+        claimed = False
+        delivering_elsewhere = False
+        if fhir_bundles:
+            # Only one /sync at a time sends this patient's bundles. The state
+            # read under the claim may already hold what an overlapping request
+            # delivered, so the delta is computed again from it.
+            claim = await asyncio.to_thread(claim_fhir_delivery, db, saved_patient_id)
+            if claim is None:
+                delivering_elsewhere = True
+                logger.info(
+                    "Patient sync FHIR delivery in progress elsewhere patient_ref=%s",
+                    mask_id(saved_patient_id),
+                )
+                fhir_bundles, new_encounter_ids = [], []
+            else:
+                claimed = True
+                fhir_bundles, new_encounter_ids = build_bundles(*claim)
         logger.debug("Generated %d FHIR RDA Bundle(s) (delta)", len(fhir_bundles))
         # RDA-Paciente, when generated, is first; then one RDA-Consulta per id.
         bundle_kinds = [None] * (len(fhir_bundles) - len(new_encounter_ids)) + new_encounter_ids
@@ -607,8 +646,13 @@ async def sync_patient(
         # Do not hold a pooled connection while waiting on the FHIR Store.
         await asyncio.to_thread(db.rollback)
 
-        # 3. Send each Bundle to the configured FHIR Store
-        fhir_status = "success" if not fhir_bundles else "unknown"
+        # 3. Send each Bundle to the configured FHIR Store. A request that found
+        # another one sending reports it as not delivered yet: the app keeps the
+        # row pending and its next attempt finds the bundles recorded.
+        if delivering_elsewhere:
+            fhir_status = "in_progress"
+        else:
+            fhir_status = "success" if not fhir_bundles else "unknown"
         accepted_encounter_ids: list[str] = []
         sent_background_hash = None
         for i, (bundle, encounter_id) in enumerate(zip(fhir_bundles, bundle_kinds)):
@@ -635,10 +679,12 @@ async def sync_patient(
                 mask_id(saved_patient_id), i
             )
 
-        # 4. Record every accepted bundle, even if another one failed.
+        # 4. Record every accepted bundle, even if another one failed, and give
+        # the claim back.
         await asyncio.to_thread(
             record_fhir_delivery,
             db, saved_patient_id, accepted_encounter_ids, sent_background_hash,
+            claimed,
         )
 
         # The server kept part of its own copy: send it back, so the device

@@ -7,7 +7,33 @@ This document details the data persistence layer for the **Health Without Border
 * **Engine:** PostgreSQL 15 (Managed via Google Cloud SQL in production, Docker for local development).
 * **ORM (Object-Relational Mapping):** SQLAlchemy 2.0. Leverages the Data Mapper pattern to translate database schemas into Python objects, ensuring type safety and preventing SQL injection.
 * **Driver:** `psycopg2-binary` for standard TCP connections and Google Cloud Unix Socket integration.
-* **Migration Strategy:** Schema initialization and catalog seeding are handled via idempotent Python scripts located in the `scripts/` directory.
+* **Migration Strategy:** Alembic migrations in `migrations/versions/`, applied when an instance starts (`app/db/migrations.py`, controlled by `RUN_MIGRATIONS_ON_STARTUP`).
+
+### 1.1. Connection Capacity
+
+Every Cloud Run instance has its own SQLAlchemy pool, so the database sees the sum of all of them. Two settings must stay in step:
+
+| Setting | Where | Pilot value |
+|---|---|---|
+| `DB_POOL_SIZE` (connections kept open) | `app/core/config.py` | 2 |
+| `DB_MAX_OVERFLOW` (extra connections under load, closed after use) | `app/core/config.py` | 3 |
+| `DB_POOL_TIMEOUT` (seconds a request waits for a connection, then fails) | `app/core/config.py` | 10 |
+| `--max-instances` | `cloudbuild.yaml` | 3 |
+| `--min-instances` | `cloudbuild.yaml` | 1 |
+
+The rule is:
+
+```
+max_instances × (pool_size + max_overflow) + max_instances × pool_size ≤ max_connections − 3
+        3     ×            5               +      3        ×     2     = 21 ≤ 22
+```
+
+- **`max_connections`:** the pilot instance is a `db-f1-micro` with no database flags, so it has Cloud SQL's default for that tier, 25. Three are reserved for superusers, and the Cloud SQL `postgres` user the service connects as is not one, which leaves 22.
+- **The second term** covers a deploy: the old revision's instances may still hold their idle pool while the new revision scales up.
+- **When the pool is full,** a request waits up to `DB_POOL_TIMEOUT` and then fails with a `500`, instead of the database refusing new connections for every instance.
+- **Usage so far:** in the 30 days before 2026-11-12, the most connections open at once was 5 and the most instances was 6, during deploys.
+- **To grow,** move to a larger tier first (`db-g1-small` allows 50 connections), then raise `--max-instances`. `tests/api/v1/test_infrastructure.py` fails if `cloudbuild.yaml` and the pool settings break the rule.
+- **`--min-instances=1`** keeps one instance up, so a login after a quiet period does not wait for a cold start: the app gives up on the login after 20 s, and in the 30 days to 2026-11-04 three logins took longer than that. The idle instance costs roughly USD 10 per month at list price (1 vCPU and 512 MiB, us-central1).
 
 ---
 
@@ -64,6 +90,7 @@ Stores the core identity data of migrant children. Relational columns mirror the
 | `synced_encounter_ids`| JSON | Default: [] | List of `encounterIdentifier` UUIDs already sent to the FHIR Store. Used for encounter-based delta sync. |
 | `background_data_hash`| Varchar(64) | Nullable | SHA-256 hash of background data fields (demographics, guardians, allergies, chronic conditions). Used to detect changes for RDA-Paciente regeneration. |
 | `rda_paciente_sent`| Boolean | Default: false | Whether the RDA-Paciente bundle has been sent to the FHIR Store at least once. |
+| `fhir_delivery_claimed_until`| DateTime (tz) | Nullable | Set while one `/sync` sends this patient's RDA bundles, so an overlapping `/sync` does not send them again; cleared with the delivery record, expires on its own (migration `0011`). |
 | `created_at` | DateTime | Default: now() | Audit metadata — record creation timestamp. |
 | `updated_at` | DateTime | Default: now(), onupdate | Audit metadata — last modification timestamp. |
 
@@ -140,6 +167,10 @@ Every `User` belongs to an `Organization`, but **patient records do not**. A pat
 
 **Stale payloads.** A sync that still carries a patient or guardian device UID already present in `retired_device_uids` is an offline copy from before a replacement. It keeps the stored patient device and guardians, merges allergies and background lists as a union (nothing stored is dropped), adds its new visits/vaccinations, and reports `stale_payload_retired_device_uid` in `conflicts`. A retired patient device UID can never be bound to a new patient (`409 device_retired`). A copy that sends `baseVersion` lower than `record_version` is treated the same way (`stale_payload_base_version`), unless it says the same as the stored record about everything the rule protects (patient device, guardians, allergies, background): then nothing would be lost either way, which is what a retry looks like when the first attempt was saved but its answer never reached the device.
 
+**Copies without `baseVersion`.** An app build from before 2026-10-06, or a copy rebuilt from a guardian device written before the record had a version, syncs an existing record without `baseVersion`, so the server cannot tell an old copy from a fresh one. If the payload would remove something from the declarative lists (an allergy, chronic condition, family history item or medication, or empty a background note), those lists become the union of both sides and `conflicts` gets `missing_base_version`. Since 2026-11 (backend audit `be-nov26-copia-sin-baseversion-borra-alergias`): before, "last write wins" let an old offline copy erase an allergy recorded since. What the payload adds is taken, and its devices and guardians follow the usual rules. A copy that removes nothing is applied as before. Each such sync logs `Sync without baseVersion app_version=…`, to see when the field can be made mandatory.
+
+**Identity edits.** Names, birth date, sex and identity document of a stored patient never change by sync (§ 3.1). A payload that says otherwise gets `identity_edit_not_applied` in `conflicts`, and the stored record comes back in `record`, instead of the correction being dropped without a word; the log names the fields, never the values. A field the payload leaves empty is not an edit (a copy rebuilt from a device may lack the second names); names compare without accents, case or extra spaces, the document number without separators. There is no way yet to correct a stored identity: that is a product decision.
+
 **Retired devices offline.** A retired patient or guardian device still holds its data, and offline the app opens a record from the devices alone, without asking the server. `GET /patients/retired-devices` gives the app the list to check first: `sha256("hwb-retired-device:v1:" + UID)` of every UID in `retired_device_uids`, where the UID keeps only its hex digits, in upper case, as the app's `normalizeNfcUid` does. The phone keeps hashes, not UIDs. They are a pseudonym, not a secret: the prefix is public and NFC UIDs are short. The app downloads the list on every sync and passes the previous `server_time` as `since` to get only what is new. `retired_at` is the start of the sync's transaction, not its commit, so the server reads back 10 minutes before `since` and a few hashes repeat. The test vectors shared with the app are in `tests/contract/fixtures/retired_device_hashes.json`.
 
 **The stored record back.** When `conflicts` is not empty and the payload is the device's own copy (matched by `patientId`), the `/sync` response carries `record`: the record as stored after the merge, with its `recordVersion`, so the app shows and writes to the chips what the server holds. A copy matched by the patient device UID gets no `record`: that would let the patient device UID read a minor's record without the guardian device.
@@ -163,7 +194,7 @@ Migrant populations often have unstructured or transient data.
 * **FHIR Source:** The JSON is the source of truth used to build FHIR R4 RDA bundles for interoperability.
 
 ### 3.3. Delta Sync Tracking
-Three columns track sync state: `synced_encounter_ids` (JSON list of encounter UUIDs already sent), `rda_paciente_sent` (boolean), and `background_data_hash` (SHA-256). Visits are identified by their `encounterIdentifier` UUID rather than list index, preventing duplicates when records are merged from multiple devices. The background hash detects changes in demographics, allergies, and chronic conditions to avoid unnecessary RDA-Paciente retransmission. Tracking is updated **only after successful FHIR Store upload** — if GCP fails, the next sync retries automatically.
+Three columns track sync state: `synced_encounter_ids` (JSON list of encounter UUIDs already sent), `rda_paciente_sent` (boolean), and `background_data_hash` (SHA-256). Visits are identified by their `encounterIdentifier` UUID rather than list index, preventing duplicates when records are merged from multiple devices. The background hash detects changes in demographics, allergies, and chronic conditions to avoid unnecessary RDA-Paciente retransmission. Tracking is updated **only after successful FHIR Store upload** — if GCP fails, the next sync retries automatically. `fhir_delivery_claimed_until` lets only one `/sync` at a time send a patient's bundles; see [FHIR RDA § 2.1](../architecture/fhir-rda.md#21-each-bundle-reaches-the-fhir-store-once).
 
 ### 3.4. Soft Deletion (`is_active`)
 Deactivation (`PATCH` with `is_active: false`) is the way to retire a user or an organization: it keeps every row and blocks access. `DELETE` exists but only succeeds when nothing references the rows: a user or organization referenced by audit records (patient access log, NFC telemetry and key events) cannot be deleted and the API answers `409`, and an organization with patients or with a `superadmin` cannot be deleted either. This preserves historical integrity for audits.

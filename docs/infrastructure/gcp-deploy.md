@@ -259,6 +259,8 @@ gcloud run deploy <CLOUD_RUN_SERVICE> \
     --region <REGION> \
     --service-account hwb-backend@<GCP_PROJECT_ID>.iam.gserviceaccount.com \
     --allow-unauthenticated \
+    --min-instances 1 \
+    --max-instances 3 \
     --add-cloudsql-instances="<GCP_PROJECT_ID>:<REGION>:<DB_INSTANCE_NAME>" \
     --set-env-vars="INSTANCE_CONNECTION_NAME=<GCP_PROJECT_ID>:<REGION>:<DB_INSTANCE_NAME>" \
     --set-env-vars="DB_USER=postgres" \
@@ -297,6 +299,7 @@ Create a trigger for merges/pushes to `develop`:
 ### What the pilot project actually has
 
 - **`hwb-backend-dev-deploy`:** push to `^develop$`, runs `cloudbuild.yaml`, as `hwb-deployer@`, with no approval step. Every merge to `develop` is a deployment. The service itself runs as `hwb-backend@` (§ 4).
+- **Capacity:** the deploy sets `--min-instances 1` and `--max-instances 3`, which go with the connection pool of each instance. See [Database § 1.1](database.md#11-connection-capacity) before changing either.
 - **`develop` and `main` are protected on GitHub** (since 2026-11-04): a change needs a pull request, with `Lint & Test (Python 3.11)` and `Integration (PostgreSQL 15)` as required checks. This matters because the trigger deploys whatever lands on `develop`, and `cloudbuild.yaml` re-runs lint and tests, but not coverage, `pip-audit`, `alembic check` or the PostgreSQL suite.
 - **`hwb-pr-quality-gate`** (pull requests to `^develop$`, pointing to the removed `cloudbuild.pr.yaml`) was deleted on 2026-10-22. It was disabled, but it ran as a service account with `roles/editor`, and Cloud Build reads the build file from the commit that fired it. Pull requests are checked by GitHub Actions.
 
@@ -394,4 +397,5 @@ gcloud sql instances patch <DB_INSTANCE_NAME> --no-assign-ip
 * **Application Logs:** [Cloud Run Console](https://console.cloud.google.com/run) -> "Logs" tab.
 * **Database Performance:** [Cloud SQL Console](https://console.cloud.google.com/sql).
 * **FHIR Store Metrics:** [Cloud Healthcare API Dashboard](https://console.cloud.google.com/healthcare).
+* **Who read or wrote FHIR data:** Logs Explorer, scope the `hwb-fhir-audit` log bucket (Data Access audit logs, 400 days; see [Healthcare API](healthcare-api.md) § 4.1).
 * **CI/CD Pipeline:** [Cloud Build History](https://console.cloud.google.com/cloud-build/builds).

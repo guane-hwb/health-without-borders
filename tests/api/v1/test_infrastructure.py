@@ -6,17 +6,20 @@ Covers:
 - Database URI strategies and the get_db session dependency
 - Application startup in app.main (NFC config guard, CORS, health check)
 """
+import re
 import runpy
 import warnings
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
 
 from app.core.config import Settings, settings
 from app.db import session as db_session_module
-from app.db.session import get_database_uri, get_db
+from app.db.session import get_database_uri, get_db, get_engine_options
 from app.services.fhir.factory import get_fhir_backend
 from app.services.fhir.noop import NoOpFHIRBackend
 from app.services.llm.base import FALLBACK_ICD10_CODE
@@ -140,6 +143,49 @@ class TestDatabaseUri:
 
     def test_localhost_fallback(self):
         assert get_database_uri() == "postgresql://hwb:secret@localhost:5432/hwb_db"
+
+
+# Connections the application may open on the pilot's db-f1-micro instance:
+# max_connections 25 (Cloud SQL default for the tier) minus 3 reserved for
+# superusers, which the Cloud SQL "postgres" user is not.
+CLOUD_SQL_APP_CONNECTIONS = 22
+CLOUDBUILD = Path(__file__).resolve().parents[3] / "cloudbuild.yaml"
+
+
+def _deploy_flag(name: str) -> int:
+    match = re.search(rf"- '--{name}'\n\s*- '(\d+)'", CLOUDBUILD.read_text())
+    assert match, f"cloudbuild.yaml does not set --{name}"
+    return int(match.group(1))
+
+
+class TestEnginePool:
+    def test_engine_pool_is_bounded(self):
+        uri = "postgresql+psycopg2://hwb:secret@/hwb_db?host=/cloudsql/proj:region:inst"
+
+        engine = create_engine(uri, **get_engine_options(uri))  # connects lazily
+
+        assert engine.pool.size() == settings.DB_POOL_SIZE == 2
+        assert engine.pool._max_overflow == settings.DB_MAX_OVERFLOW == 3
+        assert engine.pool._timeout == settings.DB_POOL_TIMEOUT == 10
+        assert engine.hide_parameters is True
+
+    def test_sqlite_keeps_its_own_pool(self):
+        options = get_engine_options("sqlite:///:memory:")
+
+        assert options == {"pool_pre_ping": True, "hide_parameters": True}
+        create_engine("sqlite:///:memory:", **options)
+
+    def test_every_instance_together_fits_in_cloud_sql(self):
+        """Also during a deploy, when the old revision's instances may still
+        hold their idle pool while the new revision scales to its maximum."""
+        max_instances = _deploy_flag("max-instances")
+        per_instance = settings.DB_POOL_SIZE + settings.DB_MAX_OVERFLOW
+        draining = max_instances * settings.DB_POOL_SIZE
+
+        assert max_instances * per_instance + draining <= CLOUD_SQL_APP_CONNECTIONS
+
+    def test_one_instance_stays_up(self):
+        assert _deploy_flag("min-instances") == 1
 
 
 class TestGetDb:

@@ -97,6 +97,26 @@ def test_stale_offline_copy_keeps_allergy_and_patient_device(api, staff):
     assert _scan(api, doc).status_code == 410
 
 
+def test_payload_without_base_version_keeps_newer_allergy(api, staff):
+    """PoC-6 of the 2026-11-04 audit: device B's copy predates the allergy
+    device A recorded, and carries no baseVersion."""
+    doc = staff["tokens"]["doc_a"]
+    version = _sync(api, doc, _payload()).json()["record_version"]
+    device_b = _payload()  # an old build: no baseVersion
+    device_a = _payload(baseVersion=version)
+    device_a["allergies"].append({"category": "02", "allergen": "Mani"})
+    assert _sync(api, doc, device_a).json()["conflicts"] == []
+
+    device_b["medicalHistory"] = [deepcopy(VISIT_1)]
+    response = _sync(api, doc, device_b)
+
+    assert response.status_code == 201
+    assert response.json()["conflicts"] == ["missing_base_version"]
+    record = _scan(api, doc).json()
+    assert "Mani" in [a["allergen"] for a in record["allergies"]]
+    assert len(record["medicalHistory"]) == 1  # what B brings is still taken
+
+
 def test_base_version_protects_a_stale_copy(api, staff):
     doc = staff["tokens"]["doc_a"]
     version = _sync(api, doc, _payload()).json()["record_version"]
@@ -202,6 +222,55 @@ def test_no_connection_is_held_while_waiting_on_the_llm_or_fhir(api, staff, db, 
         thread.join()
 
     assert samples == [0] * 6
+
+
+def test_concurrent_retry_sends_each_encounter_once(api, staff, monkeypatch):
+    """Audit 2026-11-04 PoC-4 (be-nov26-reintento-duplica-rda-en-fhir): a retry
+    that arrived while the first /sync was still sending sent the same
+    RDA-Consulta again."""
+    from app.services.fhir import fhir_backend
+
+    consulta = "51845-6"
+    sent = []
+    lock = threading.Lock()
+
+    def slow_send(bundle):
+        time.sleep(1.5)  # the FHIR Store is slow; the retry arrives meanwhile
+        kind = bundle["entry"][0]["resource"]["type"]["coding"][0]["code"]
+        if kind == consulta:
+            with lock:
+                sent.append(bundle["identifier"]["value"])
+        return {"status": "success"}
+
+    monkeypatch.setattr(fhir_backend, "send_bundle", slow_send)
+    doc = staff["tokens"]["doc_a"]
+    assert _sync(api, doc, _payload()).status_code == 201
+    visit = deepcopy(VISIT_1)
+    visit["diagnosis"] = []
+    payload = _payload(medicalHistory=[visit])
+    statuses = []
+
+    def device(delay):
+        from app.main import app
+
+        time.sleep(delay)
+        response = TestClient(app).post(
+            "/api/v1/patients/sync", headers=doc["headers"], json=payload
+        )
+        statuses.append((response.status_code, response.json()["fhir_status"]))
+
+    threads = [threading.Thread(target=device, args=(d,)) for d in (0, 0.4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(sent) == 1
+    assert sorted(statuses) == [(201, "in_progress"), (201, "success")]
+
+    # The app's next attempt finds the visit delivered and sends nothing.
+    assert _sync(api, doc, payload).json()["fhir_status"] == "success"
+    assert len(sent) == 1
 
 
 def test_integrity_errors_name_the_constraints_the_code_expects(api, staff, db):

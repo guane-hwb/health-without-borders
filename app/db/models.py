@@ -176,6 +176,14 @@ class Patient(Base):
         comment="Whether the RDA-Paciente bundle has been sent at least once"
     )
 
+    fhir_delivery_claimed_until = Column(
+        DateTime(timezone=True), nullable=True,
+        comment=(
+            "Set while one /sync sends this patient's RDA bundles, so a concurrent "
+            "/sync does not send them again; expires on its own if that request dies"
+        ),
+    )
+
     record_version = Column(
         Integer, nullable=False, default=1, server_default=text("1"),
         comment=(

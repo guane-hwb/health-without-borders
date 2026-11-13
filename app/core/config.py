@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     # Fallback for local development (standard TCP connection string)
     DATABASE_URL: Optional[str] = None
 
+    # Connections each instance may hold. Cloud Run --max-instances (in
+    # cloudbuild.yaml) times DB_POOL_SIZE + DB_MAX_OVERFLOW must stay below
+    # what Cloud SQL lets the application open; see
+    # docs/infrastructure/database.md § 1.1 before changing either side.
+    DB_POOL_SIZE: int = 2
+    DB_MAX_OVERFLOW: int = 3
+    # Seconds a request waits for a free connection before it fails.
+    DB_POOL_TIMEOUT: int = 10
+
     # --- INTEROPERABILITY BACKEND SELECTION ---
     # Controls which concrete implementation is used for the FHIR Store and LLM.
     # Supported values for FHIR_BACKEND: "gcp", "noop"
@@ -73,6 +82,10 @@ class Settings(BaseSettings):
     RUN_MIGRATIONS_ON_STARTUP: bool = True
     FHIR_CONNECT_TIMEOUT_SECONDS: float = 5.0
     FHIR_READ_TIMEOUT_SECONDS: float = 30.0
+    # How long one /sync keeps the right to send a patient's RDA bundles. Longer
+    # than any request can live (Cloud Run's request timeout is 300 s), plus a
+    # FHIR read timeout for a send still running when the request was cut.
+    FHIR_DELIVERY_CLAIM_SECONDS: int = 360
     
     # --- SECURITY ---
     SECRET_KEY: str

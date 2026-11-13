@@ -353,7 +353,7 @@ seven days of these lines cover every device that can still read chips offline:
 ```
 gcloud logging read 'resource.type="cloud_run_revision"
   AND resource.labels.service_name="hwb-backend-dev"
-  AND textPayload:"app_version="' --freshness=7d --format='value(textPayload)'
+  AND jsonPayload.message:"app_version="' --freshness=7d --format='value(jsonPayload.message)'
 ```
 
 How to read it:
