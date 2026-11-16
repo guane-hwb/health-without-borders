@@ -682,8 +682,8 @@ def _identity_edits(stored_info: dict, incoming_info: dict) -> list[str]:
         if incoming != normalize_text(stored_info.get(field)):
             edits.append(field)
     for field in ("dob", "biologicalSex"):
-        incoming = incoming_info.get(field)
-        if incoming and field in stored_info and str(incoming) != str(stored_info.get(field)):
+        value = incoming_info.get(field)
+        if value and field in stored_info and str(value) != str(stored_info.get(field)):
             edits.append(field)
     stored_id = stored_info.get("identification")
     incoming_id = incoming_info.get("identification") or {}
@@ -895,17 +895,18 @@ def create_or_update_patient(
         existing_patient is not None
         and existing_patient.frontend_patient_id != patient_in.patientId
     )
-    if resolved_by_tag and not _same_person(existing_patient, patient_in):
-        logger.warning(
-            "Sync tag identity mismatch existing_ref=%s device=%s",
-            safe_patient_ref(existing_patient.id),
-            pseudonym(patient_in.device_uid or ""),
-        )
-        raise IdentityMismatchError(
-            "This device tag is registered to a patient with a different identity."
-        )
-    if resolved_by_tag and _guardians_differ(existing_patient.full_record_json, patient_in):
-        conflicts.append("guardians_not_changed_by_tag_resolved_sync")
+    if existing_patient is not None and resolved_by_tag:
+        if not _same_person(existing_patient, patient_in):
+            logger.warning(
+                "Sync tag identity mismatch existing_ref=%s device=%s",
+                safe_patient_ref(existing_patient.id),
+                pseudonym(patient_in.device_uid or ""),
+            )
+            raise IdentityMismatchError(
+                "This device tag is registered to a patient with a different identity."
+            )
+        if _guardians_differ(existing_patient.full_record_json, patient_in):
+            conflicts.append("guardians_not_changed_by_tag_resolved_sync")
 
     # Serialize the full JSON once to ensure consistency
     new_record_dump = patient_in.model_dump(mode="json")
@@ -924,7 +925,8 @@ def create_or_update_patient(
 
     if existing_patient:
         logger.info("Updating existing patient: %s", safe_patient_ref(existing_patient.id))
-        old_record_dump = existing_patient.full_record_json
+        # A row written without its JSON is treated as an empty record.
+        old_record_dump = existing_patient.full_record_json or {}
 
         # A payload that still carries a patient device or guardian device the server
         # has already retired is, by construction, older than the stored

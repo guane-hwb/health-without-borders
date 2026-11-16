@@ -17,7 +17,7 @@ steps:
         export FHIR_BACKEND="noop"
         export LLM_BACKEND="noop"
         uv run ruff check
-        uv run mypy app/core/rate_limit.py app/core/logging.py --ignore-missing-imports
+        uv run mypy app
         uv run pytest --cov=app tests/
 
   # ======================================================

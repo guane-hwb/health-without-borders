@@ -1,11 +1,11 @@
 import enum  # stdlib
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from typing import Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
-    Column,
     Date,
     DateTime,
     ForeignKey,
@@ -16,7 +16,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from app.db.base import Base
@@ -29,13 +29,13 @@ class Organization(Base):
     """
     __tablename__ = "organizations"
     
-    id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
-    name = Column(String, unique=True, index=True, nullable=False)
-    is_active = Column(Boolean, default=True)
+    id: Mapped[str] = mapped_column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    is_active: Mapped[bool | None] = mapped_column(Boolean, default=True)
     
     # Relationships
-    users = relationship("User", back_populates="organization")
-    patients = relationship("Patient", back_populates="organization")
+    users: Mapped[list["User"]] = relationship("User", back_populates="organization")
+    patients: Mapped[list["Patient"]] = relationship("Patient", back_populates="organization")
 
 class UserRole(str, enum.Enum):
     superadmin = "superadmin"
@@ -51,26 +51,26 @@ class User(Base):
     """
     __tablename__ = "users"
 
-    id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
     
     # Foreign Key: Binds user to an organization securely
-    organization_id = Column(String, ForeignKey("organizations.id"), nullable=False) 
+    organization_id: Mapped[str] = mapped_column(String, ForeignKey("organizations.id"), nullable=False) 
     
-    full_name = Column(String, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
-    hashed_password = Column(String, nullable=False)
+    full_name: Mapped[str | None] = mapped_column(String, index=True)
+    email: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    hashed_password: Mapped[str] = mapped_column(String, nullable=False)
     
     # Allowed roles: "superadmin", "org_admin", "doctor", "nurse"
-    role = Column(SAEnum(UserRole), nullable=False, default=UserRole.doctor)
-    is_active = Column(Boolean, default=True)
-    token_version = Column(
+    role: Mapped[UserRole] = mapped_column(SAEnum(UserRole), nullable=False, default=UserRole.doctor)
+    is_active: Mapped[bool | None] = mapped_column(Boolean, default=True)
+    token_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0"),
         comment=(
             "Stamped into every token as 'tv'. Incrementing it invalidates every "
             "token issued before (deactivation, revoke-sessions, refresh reuse)."
         ),
     )
-    created_at = Column(
+    created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
         # No server default on purpose: rows that predate the column stay NULL
         # instead of getting the migration time, which would invalidate every
@@ -78,20 +78,20 @@ class User(Base):
         default=lambda: datetime.now(timezone.utc),
         comment="Account creation time; NULL for accounts created before September 2026",
     )
-    must_change_password = Column(
+    must_change_password: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false",
         comment=(
             "Set for an account created or reset by an administrator (who knows "
             "the password); cleared when the user chooses their own."
         ),
     )
-    password_changed_at = Column(
+    password_changed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
         comment="Last change or reset of the password; NULL if never changed",
     )
 
     # Relationships
-    organization = relationship("Organization", back_populates="users")
+    organization: Mapped["Organization"] = relationship("Organization", back_populates="users")
 
 
 class Patient(Base):
@@ -110,7 +110,7 @@ class Patient(Base):
     __tablename__ = "patients"
 
     # 1. SERVER-GENERATED PRIMARY KEY
-    id = Column(
+    id: Mapped[str] = mapped_column(
         String, primary_key=True, index=True,
         default=lambda: str(uuid.uuid4()),
         comment="Server-generated UUID4 — the authoritative patient ID"
@@ -119,64 +119,64 @@ class Patient(Base):
     # Frontend-generated ID kept for sync correlation
     # Unique per organization so two orgs can independently register
     # the same frontend-generated ID without collision.
-    frontend_patient_id = Column(
+    frontend_patient_id: Mapped[str] = mapped_column(
         String, nullable=False, index=True,
         comment="Frontend-generated UUID sent during first sync"
     )
 
     # Foreign Key: Binds patient to the organization that registered them
-    organization_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    organization_id: Mapped[str] = mapped_column(String, ForeignKey("organizations.id"), nullable=False)
     
     # 2. THE HARDWARE ID (NFC patient device)
-    device_uid = Column(String, unique=True, index=True, nullable=False) 
+    device_uid: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False) 
 
     # --- RDA Identification (Res. 866/2021 Elems. 2.1, 2.2) ---
-    document_type = Column(String(5), index=True, nullable=True,
+    document_type: Mapped[str | None] = mapped_column(String(5), index=True, nullable=True,
                            comment="Tipo de documento — CC, CE, PA, RC, TI, PT, etc.")
-    document_number = Column(String, index=True, nullable=True,
+    document_number: Mapped[str | None] = mapped_column(String, index=True, nullable=True,
                              comment="Número de documento de identidad del paciente")
     
     # --- Demographics ---
-    first_name = Column(String, index=True)
-    last_name = Column(String, index=True, comment="Primer apellido (Elem. 3.1)")
-    second_last_name = Column(String, nullable=True, comment="Segundo apellido (Elem. 3.2)")
-    birth_date = Column(Date)
-    biological_sex = Column(String(2), nullable=True, comment="Sexo biológico M/F/I (Elem. 5)")
-    blood_type = Column(String(5))
+    first_name: Mapped[str | None] = mapped_column(String, index=True)
+    last_name: Mapped[str | None] = mapped_column(String, index=True, comment="Primer apellido (Elem. 3.1)")
+    second_last_name: Mapped[str | None] = mapped_column(String, nullable=True, comment="Segundo apellido (Elem. 3.2)")
+    birth_date: Mapped[date | None] = mapped_column(Date)
+    biological_sex: Mapped[str | None] = mapped_column(String(2), nullable=True, comment="Sexo biológico M/F/I (Elem. 5)")
+    blood_type: Mapped[str | None] = mapped_column(String(5))
 
     # --- Nationality (Elems. 1.1, 1.2) — critical for migrant population ---
-    nationality_code = Column(String(3), index=True, nullable=True,
+    nationality_code: Mapped[str | None] = mapped_column(String(3), index=True, nullable=True,
                               comment="Código ISO 3166-1 alfa-3 del país de nacionalidad; "
                                       "el bundle FHIR lo convierte a numérico")
 
     # --- Guardian ---
-    guardian_name = Column(String)
-    guardian_phone = Column(String)
-    guardian2_name = Column(String, nullable=True, comment="Nombre del segundo guardián (opcional)")
-    guardian2_phone = Column(String, nullable=True, comment="Teléfono del segundo guardián (opcional)")
+    guardian_name: Mapped[str | None] = mapped_column(String)
+    guardian_phone: Mapped[str | None] = mapped_column(String)
+    guardian2_name: Mapped[str | None] = mapped_column(String, nullable=True, comment="Nombre del segundo guardián (opcional)")
+    guardian2_phone: Mapped[str | None] = mapped_column(String, nullable=True, comment="Teléfono del segundo guardián (opcional)")
     
     # --- Raw Full JSON Storage (authoritative clinical payload) ---
-    full_record_json = Column(JSON) 
+    full_record_json: Mapped[dict[str, Any] | None] = mapped_column(JSON) 
     
     # --- FHIR Sync Tracking ---
     # Track synced encounters by UUID instead of count
-    synced_encounter_ids = Column(
+    synced_encounter_ids: Mapped[list[str]] = mapped_column(
         JSON, default=list, nullable=False, server_default="[]",
         comment="List of encounterIdentifier UUIDs already sent to FHIR Store"
     )
 
     # Background data hash for RDA-Paciente delta detection
-    background_data_hash = Column(
+    background_data_hash: Mapped[str | None] = mapped_column(
         String(64), nullable=True,
         comment="SHA-256 hash of background data fields (patientInfo, guardianInfo, allergies, etc.)"
     )
 
-    rda_paciente_sent = Column(
+    rda_paciente_sent: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, server_default="false",
         comment="Whether the RDA-Paciente bundle has been sent at least once"
     )
 
-    fhir_delivery_claimed_until = Column(
+    fhir_delivery_claimed_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
         comment=(
             "Set while one /sync sends this patient's RDA bundles, so a concurrent "
@@ -184,7 +184,7 @@ class Patient(Base):
         ),
     )
 
-    record_version = Column(
+    record_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default=text("1"),
         comment=(
             "Incremented by every /sync write. Clients send the version their copy "
@@ -193,11 +193,11 @@ class Patient(Base):
     )
     
     # Audit Metadata
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
-    organization = relationship("Organization", back_populates="patients")
+    organization: Mapped["Organization"] = relationship("Organization", back_populates="patients")
 
     # Composite unique constraint — one frontend_patient_id per org
     __table_args__ = (
@@ -229,28 +229,28 @@ class NfcKey(Base):
 
     __tablename__ = "nfc_keys"
 
-    version = Column(
+    version: Mapped[int] = mapped_column(
         Integer, primary_key=True,
         comment="Key version, stamped into the NFC payload header",
     )
-    wrapped_key = Column(
+    wrapped_key: Mapped[str] = mapped_column(
         String, nullable=False,
         comment="Base64 of nonce+ciphertext+tag, sealed under the KEK",
     )
-    kek_id = Column(
+    kek_id: Mapped[str] = mapped_column(
         String, nullable=False,
         comment="Fingerprint of the KEK that sealed this row — not the secret",
     )
-    status = Column(
+    status: Mapped[str] = mapped_column(
         String, nullable=False, server_default="live", index=True,
         comment="'live' (delivered to devices) or 'revoked' (never delivered)",
     )
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    revoked_at = Column(DateTime(timezone=True), nullable=True)
-    revoked_by = Column(String, ForeignKey("users.id"), nullable=True)
-    revoke_reason = Column(String, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
+    revoke_reason: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class NfcKeyringState(Base):
@@ -264,9 +264,9 @@ class NfcKeyringState(Base):
 
     __tablename__ = "nfc_keyring_state"
 
-    id = Column(Integer, primary_key=True, default=1)
-    current_version = Column(Integer, nullable=False)
-    updated_at = Column(
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    current_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
@@ -282,18 +282,18 @@ class NfcKeyEvent(Base):
 
     __tablename__ = "nfc_key_events"
 
-    id = Column(
+    id: Mapped[str] = mapped_column(
         String, primary_key=True, index=True,
         default=lambda: str(uuid.uuid4()),
     )
-    action = Column(
+    action: Mapped[str] = mapped_column(
         String, nullable=False, index=True,
         comment="'generated', 'rotated', 'revoked' or 'imported'",
     )
-    version = Column(Integer, nullable=False, index=True)
-    actor_id = Column(String, ForeignKey("users.id"), nullable=True)
-    reason = Column(String, nullable=True)
-    at = Column(
+    version: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    actor_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
@@ -327,40 +327,40 @@ class NfcKeyVersionObservation(Base):
 
     __tablename__ = "nfc_key_version_observations"
 
-    id = Column(
+    id: Mapped[str] = mapped_column(
         String, primary_key=True, index=True,
         default=lambda: str(uuid.uuid4()),
     )
-    device_ref = Column(
+    device_ref: Mapped[str] = mapped_column(
         String(64), index=True, nullable=False,
         comment="HMAC-SHA256 of the normalized chip UID: no UID is stored",
     )
-    device_role = Column(
+    device_role: Mapped[str] = mapped_column(
         String, nullable=False, server_default="patient",
         comment="'patient' or 'guardian' device",
     )
-    key_version = Column(
+    key_version: Mapped[int] = mapped_column(
         Integer, index=True, nullable=False,
         comment="NFC key version that decrypted this chip",
     )
-    had_header = Column(
+    had_header: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false",
         comment="Whether the payload carried a version header (version >= 1)",
     )
-    observed_at = Column(
+    observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
         comment="When the device read the chip (client clock)",
     )
-    reported_at = Column(
+    reported_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
         comment="When the server received it — may lag by days for a brigade "
                 "that was offline",
     )
-    reported_by = Column(
+    reported_by: Mapped[str | None] = mapped_column(
         String, ForeignKey("users.id"), index=True, nullable=True,
         comment="User whose device reported the sighting",
     )
-    organization_id = Column(
+    organization_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("organizations.id"), index=True, nullable=True,
         comment="Retained for traceability only, never for access control",
     )
@@ -387,30 +387,30 @@ class RetiredDeviceUid(Base):
     """
     __tablename__ = "retired_device_uids"
 
-    id = Column(
+    id: Mapped[str] = mapped_column(
         String, primary_key=True, index=True,
         default=lambda: str(uuid.uuid4()),
     )
-    device_uid = Column(
+    device_uid: Mapped[str] = mapped_column(
         String, index=True, nullable=False,
         comment="The retired hardware tag UID — no longer bound to any patient",
     )
-    patient_id = Column(
+    patient_id: Mapped[str] = mapped_column(
         String, ForeignKey("patients.id"), index=True, nullable=False,
         comment="Patient whose record this UID was retired from",
     )
-    reason = Column(
+    reason: Mapped[str] = mapped_column(
         String, nullable=False,
         comment="Why the UID was retired — 'lost', 'damaged' or 'replaced'",
     )
-    device_role = Column(
+    device_role: Mapped[str] = mapped_column(
         String, nullable=False, server_default="patient",
         comment="Which device was retired — 'patient' or 'guardian' device",
     )
-    retired_at = Column(
+    retired_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )
-    retired_by = Column(
+    retired_by: Mapped[str | None] = mapped_column(
         String, nullable=True,
         comment="User id that performed the retirement, when known",
     )
@@ -434,18 +434,18 @@ class RevokedToken(Base):
     """
     __tablename__ = "revoked_tokens"
 
-    jti = Column(
+    jti: Mapped[str] = mapped_column(
         String, primary_key=True,
         comment="JWT ID claim from the revoked token"
     )
-    revoked_at = Column(
+    revoked_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )
-    expires_at = Column(
+    expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
         comment="Original token expiry — safe to delete row after this time"
     )
-    replaced_by_jti = Column(
+    replaced_by_jti: Mapped[str | None] = mapped_column(
         String, nullable=True,
         comment=(
             "For a rotated refresh token, the refresh token issued in its place. "
@@ -462,14 +462,14 @@ class LoginFailure(Base):
     """
     __tablename__ = "login_failures"
 
-    key = Column(
+    key: Mapped[str] = mapped_column(
         String(64), primary_key=True,
         comment="HMAC-SHA256 of the normalized email: no email is stored",
     )
-    failures = Column(Integer, nullable=False, comment="Failures in the current streak")
-    first_failure_at = Column(DateTime(timezone=True), nullable=False)
-    last_failure_at = Column(DateTime(timezone=True), nullable=False, index=True)
-    blocked_until = Column(
+    failures: Mapped[int] = mapped_column(Integer, nullable=False, comment="Failures in the current streak")
+    first_failure_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_failure_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    blocked_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
         comment="Sign-in is paused for this account until then",
     )
@@ -495,30 +495,30 @@ class EmergencyAccessLog(Base):
     """
     __tablename__ = "emergency_access_log"
 
-    id = Column(
+    id: Mapped[str] = mapped_column(
         String, primary_key=True, index=True,
         default=lambda: str(uuid.uuid4()),
     )
-    client_event_id = Column(
+    client_event_id: Mapped[str] = mapped_column(
         String, unique=True, index=True, nullable=False,
         comment="Client-generated UUID — idempotency/dedup key across retries",
     )
-    patient_uid = Column(
+    patient_uid: Mapped[str] = mapped_column(
         String, index=True, nullable=False,
         comment="Hardware UID of the record that was accessed",
     )
-    patient_name = Column(
+    patient_name: Mapped[str | None] = mapped_column(
         String, nullable=True,
         comment=(
             "No longer written (the UID identifies the record); kept for entries "
             "synced before September 2026"
         ),
     )
-    user_id = Column(
+    user_id: Mapped[str | None] = mapped_column(
         String, nullable=True,
         comment="Acting user reported by the client (the break-glass actor)",
     )
-    uploaded_by = Column(
+    uploaded_by: Mapped[str | None] = mapped_column(
         String, ForeignKey("users.id"), nullable=True, index=True,
         comment=(
             "Authenticated user whose session synced the entry. user_id is what "
@@ -526,19 +526,19 @@ class EmergencyAccessLog(Base):
             "for entries synced before the column existed."
         ),
     )
-    organization_id = Column(
+    organization_id: Mapped[str] = mapped_column(
         String, ForeignKey("organizations.id"), nullable=False,
         comment="Organization of the authenticated caller that synced the entry",
     )
-    reason = Column(
+    reason: Mapped[str] = mapped_column(
         String, nullable=False,
         comment="Why the emergency access happened (e.g. guardian_absent_offline)",
     )
-    occurred_at = Column(
+    occurred_at: Mapped[str] = mapped_column(
         String, nullable=False,
         comment="Timestamp as reported by the client (ISO 8601; may be naive local time)",
     )
-    received_at = Column(
+    received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
         comment="Server receipt time — the defensible audit timestamp",
     )
@@ -564,35 +564,35 @@ class PatientAccessLog(Base):
     """
     __tablename__ = "patient_access_log"
 
-    id = Column(
+    id: Mapped[str] = mapped_column(
         String, primary_key=True, index=True,
         default=lambda: str(uuid.uuid4()),
     )
-    patient_id = Column(
+    patient_id: Mapped[str] = mapped_column(
         String, ForeignKey("patients.id"), nullable=False, index=True,
         comment="Server id of the patient whose record was accessed",
     )
-    actor_id = Column(
+    actor_id: Mapped[str] = mapped_column(
         String, ForeignKey("users.id"), nullable=False, index=True,
         comment="Authenticated user who made the request",
     )
-    organization_id = Column(
+    organization_id: Mapped[str] = mapped_column(
         String, ForeignKey("organizations.id"), nullable=False, index=True,
         comment="Organization of the actor at the time of the access",
     )
-    channel = Column(
+    channel: Mapped[str] = mapped_column(
         String, nullable=False,
         comment="'scan' (patient device), 'search' (identity lookup) or 'sync' (write)",
     )
-    guardian_factor = Column(
+    guardian_factor: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false"),
         comment="Whether the guardian device was presented and matched",
     )
-    reason = Column(
+    reason: Mapped[str | None] = mapped_column(
         String, nullable=True,
         comment="Reason given by the caller, when the channel accepts one",
     )
-    accessed_at = Column(
+    accessed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True,
         # Set by the app (microseconds everywhere, so "newest first" is exact);
         # the database default covers rows written by anything else.

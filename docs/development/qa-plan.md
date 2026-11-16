@@ -134,7 +134,7 @@ Create a new branch from `main` using the following prefixes:
 Before pushing your branch, you must ensure:
 
 1. Lint checks pass (`uv run ruff check`).
-2. Scoped type checks pass (`uv run mypy app/core/rate_limit.py app/core/logging.py --ignore-missing-imports`).
+2. Type checks pass over all of `app/` (`uv run mypy app`; settings in `pyproject.toml`).
 3. All local tests pass with coverage (`uv run pytest --cov=app tests/`).
 
 ### Step 3: Opening the Pull Request

@@ -721,7 +721,7 @@ async def sync_patient(
         # the RDA must say exactly what HWB holds.
         saved_patient_id = str(saved_patient.id)
         saved_record_version = saved_patient.record_version
-        stored_record = saved_patient.full_record_json
+        stored_record = saved_patient.full_record_json or {}
         # Matched by the app's own patientId, not resolved by the patient device.
         own_record = saved_patient.frontend_patient_id == patient_data.patientId
         stored_model: Optional[PatientFullRecord] = None

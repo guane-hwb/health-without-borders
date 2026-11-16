@@ -7,10 +7,11 @@ code depends on the abstract FHIRStoreBackend Protocol.
 
 import logging
 import threading
-from typing import Optional
+from typing import Optional, cast
 
 import google.auth
 import requests
+from google.auth.credentials import Credentials
 from google.auth.transport.requests import Request
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -45,7 +46,7 @@ class GCPHealthcareBackend(FHIRStoreBackend):
         self.dataset_id = dataset_id
         self.fhir_store_id = fhir_store_id
         self.location = location or self.DEFAULT_LOCATION
-        self._credentials = None
+        self._credentials: Optional[Credentials] = None
         self._credentials_lock = threading.Lock()
         self._session = self._build_session()
 
@@ -80,7 +81,8 @@ class GCPHealthcareBackend(FHIRStoreBackend):
                 self._credentials, _ = google.auth.default(scopes=self.SCOPES)
             if not self._credentials.valid:
                 self._credentials.refresh(Request())
-            return self._credentials.token
+            # refresh() either sets the token or raises.
+            return cast(str, self._credentials.token)
 
     def _is_configured(self) -> bool:
         return bool(

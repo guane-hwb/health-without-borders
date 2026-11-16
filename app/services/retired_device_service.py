@@ -71,6 +71,9 @@ def list_retired_device_hashes(
             since = since.replace(tzinfo=timezone.utc)
         floor = since.astimezone(timezone.utc) - SINCE_OVERLAP
         query = query.filter(RetiredDeviceUid.retired_at > floor)
-    hashes = {retired_device_hash(uid) for (uid,) in query.all()}
-    hashes.discard(None)
+    hashes = {
+        digest
+        for (uid,) in query.all()
+        if (digest := retired_device_hash(uid)) is not None
+    }
     return sorted(hashes), server_time

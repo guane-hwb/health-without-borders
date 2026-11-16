@@ -102,7 +102,8 @@ def reserve_attempt(db: Session, email: str) -> None:
             raise _paused(math.ceil(remaining))
 
     window = timedelta(seconds=settings.LOGIN_FAILURE_WINDOW_SECONDS)
-    row = db.get(LoginFailure, key, populate_existing=True)
+    # The upsert above wrote this row in the same transaction.
+    row = db.get_one(LoginFailure, key, populate_existing=True)
     if now - _as_utc(first_failure_at) > window:
         # The earlier failures are too old to count: a new streak starts here.
         failures = 0

@@ -150,7 +150,8 @@ class GeminiMedicalCodingService:
             ],
             config=config,
         )
-        return response.text
+        # No text (a blocked answer) fails json.loads like a malformed one.
+        return response.text or ""
 
     # -----------------------------------------------------------------
     # extract_diagnoses
