@@ -358,15 +358,48 @@ class GuardianConsent(BaseModel):
     )
 
 
+#: Guardian relationship "Otro": the text the user wrote goes in relationshipOther.
+GUARDIAN_RELATIONSHIP_OTHER = "05"
+MAX_RELATIONSHIP_OTHER_LENGTH = 100
+
+
 class GuardianInfo(BaseModel):
     """Información del cuidador/tutor del menor."""
     name: str
-    relationship: str
+    relationship: str = Field(
+        ...,
+        description=(
+            "Parentesco: 01 Padres, 02 Hermanos, 03 Tíos, 04 Abuelos, 05 Otro "
+            "(el texto va en relationshipOther). Los registros anteriores "
+            "pueden tener texto libre ('Madre'), que se acepta igual."
+        ),
+    )
+    relationshipOther: Optional[str] = Field(
+        None,
+        description=(
+            "Parentesco escrito por el usuario cuando relationship es '05', "
+            f"hasta {MAX_RELATIONSHIP_OTHER_LENGTH} caracteres. Con cualquier "
+            "otro relationship se guarda null."
+        ),
+    )
     phone: str
     device_uid: Optional[str] = Field(None, description="Hardware ID del dispositivo NFC del cuidador")
     documentType: Optional[str] = Field(None, description="Tipo de documento del cuidador")
     documentNumber: Optional[str] = Field(None, description="Número de documento del cuidador")
     consent: Optional[GuardianConsent] = Field(None, description="Consentimiento informado — Ley 1581/2012")
+
+    @model_validator(mode="after")
+    def _other_text_only_for_other(self) -> "GuardianInfo":
+        other = (self.relationshipOther or "").strip()
+        if self.relationship.strip() != GUARDIAN_RELATIONSHIP_OTHER or not other:
+            self.relationshipOther = None
+            return self
+        if len(other) > MAX_RELATIONSHIP_OTHER_LENGTH:
+            raise ValueError(
+                f"relationshipOther must be at most {MAX_RELATIONSHIP_OTHER_LENGTH} characters."
+            )
+        self.relationshipOther = other
+        return self
 
 
 # ============================================================================

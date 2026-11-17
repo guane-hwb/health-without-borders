@@ -157,15 +157,23 @@ def mirror_columns(record: dict) -> dict:
     }
 
 
-def _without_policy_version(guardian):
+def _guardian_for_hash(guardian):
     """
-    The consent's policyVersion is not in the RDA either; leaving it out keeps
-    every stored hash valid now that the field is kept.
+    The guardian as the hash sees it. Fields added later must not change the
+    hash of a record that does not use them, or every patient's RDA-Paciente
+    would be resent once:
+
+    - the consent's policyVersion is not in the RDA, so it is always left out;
+    - relationshipOther is (Patient.contact), so it counts only when set.
     """
-    if not isinstance(guardian, dict) or not isinstance(guardian.get("consent"), dict):
+    if not isinstance(guardian, dict):
         return guardian
-    consent = {k: v for k, v in guardian["consent"].items() if k != "policyVersion"}
-    return {**guardian, "consent": consent}
+    if guardian.get("relationshipOther") is None:
+        guardian = {k: v for k, v in guardian.items() if k != "relationshipOther"}
+    if isinstance(guardian.get("consent"), dict):
+        consent = {k: v for k, v in guardian["consent"].items() if k != "policyVersion"}
+        guardian = {**guardian, "consent": consent}
+    return guardian
 
 
 def compute_background_hash(record: dict) -> str:
@@ -196,8 +204,8 @@ def compute_background_hash(record: dict) -> str:
         patient_info = {k: v for k, v in patient_info.items() if k not in _NOT_IN_RDA_PACIENTE}
     background_fields = {
         "patientInfo": patient_info,
-        "guardianInfo": _without_policy_version(record.get("guardianInfo")),
-        "guardian2Info": _without_policy_version(record.get("guardian2Info")),
+        "guardianInfo": _guardian_for_hash(record.get("guardianInfo")),
+        "guardian2Info": _guardian_for_hash(record.get("guardian2Info")),
         "backgroundHistory": record.get("backgroundHistory"),
         "allergies": record.get("allergies"),
     }
