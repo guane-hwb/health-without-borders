@@ -96,6 +96,8 @@ Stores the core identity data of migrant children. Relational columns mirror the
 | `created_at` | DateTime | Default: now() | Audit metadata — record creation timestamp. |
 | `updated_at` | DateTime | Default: now(), onupdate | Audit metadata — last modification timestamp. |
 
+**Guardian relationship.** `guardianInfo.relationship` and `guardian2Info.relationship` hold the app's codes: `01` Padres, `02` Hermanos, `03` Tíos, `04` Abuelos and `05` Otro (requested by the app team, 2026-11-17). With `05`, `relationshipOther` keeps the text the user wrote (up to 100 characters); with any other value it is stored as `null`. Records from before the codes hold free text ("Madre"), which is still accepted, so the field is not checked against the list. The RDA's `Patient.contact.relationship.text` carries the name, not the code: "Padres", the written text for `05` ("Otro" when there is none), or the old free text as is. An unset `relationshipOther` is left out of `background_data_hash`, so adding the field resent no RDA-Paciente; a written one counts, since it reaches the RDA.
+
 **Constraints:**
 
 - `UNIQUE(device_uid)` — A physical patient device is linked to exactly one patient globally. This is the primary identity key for cross-organization sync (see § 3.1).
