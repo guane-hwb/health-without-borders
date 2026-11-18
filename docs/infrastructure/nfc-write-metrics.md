@@ -35,7 +35,7 @@ them; this telemetry measures them.
 | `payload_bytes` | integer, 0–65,535 bytes | The encrypted payload. |
 | `message_bytes` | integer, 0–65,535 bytes | The whole NDEF message written. |
 | `chip_capacity` | integer, 0–65,535 bytes | The NDEF capacity the chip reported. |
-| `consultations_kept`, `consultations_total` | integer, 0–1,000, or null | Guardian copy only: consultations written to the chip, out of how many the record held. Null for a patient device. |
+| `consultations_kept`, `consultations_total` | integer, 0–1,000, or null | Guardian copy only: consultations written to the chip, out of how many the copy would carry on a chip with room for everything (the most recent, at most three). Null for a patient device. |
 | `vaccines_kept`, `vaccines_total` | integer, 0–1,000, or null | The same, for vaccines. |
 | `written_at` | date-time **with an offset** | The device's clock at write time. A value without an offset is refused (`422`): read as UTC, it would shift the write by the device's own offset. |
 
@@ -51,7 +51,7 @@ twice counts twice.
 
 **Entries that contradict themselves are dropped**, not stored: a message
 smaller than its payload, a message larger than the chip's capacity, a copy
-that kept more consultations or vaccines than the record held, or a kept count
+that kept more consultations or vaccines than its total, or a kept count
 without its total (or the reverse). No real write produces one; it can only
 come from a measuring bug, and storing it would bend the sizes everyone reads.
 The batch is still accepted (`stored` < `received`) so the device does not
@@ -152,14 +152,14 @@ write really had. With an even number of writes the median is the lower of the
 two middle ones; with two writes, both are the smaller one. Read small groups
 with that in mind.
 
-**What counts as trimmed.** In the app (health-without-borders-frontend,
-`lib/src/core/nfc/nfc_guardian_payload.dart` at develop 25ec698), a guardian
-copy keeps at most the three most recent consultations and the three most
-recent vaccines, before any trimming for capacity. If the app reports the record's full counts
-as `*_total`, as `GuardianPayloadFit` holds them, a record with more than three
-consultations counts as trimmed even when the chip had room. The summary cannot
-tell the bound from the capacity; in the rows, a trimmed write well below its
-chip's capacity was cut by the bound.
+**What counts as trimmed.** A guardian copy carries at most the three most
+recent consultations and the three most recent vaccines
+(health-without-borders-frontend, `nfc_guardian_payload.dart`), whatever the
+chip. The app reports as `*_total` what the copy would carry on a chip with
+room for everything — the record's count, capped at three — not the record's
+whole count. So `kept < total` means the chip's capacity left history out, and
+nothing else: a patient with five consultations whose copy kept its three most
+recent is not trimmed.
 
 ---
 

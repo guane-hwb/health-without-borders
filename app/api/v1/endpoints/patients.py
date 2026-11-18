@@ -1318,7 +1318,7 @@ def sync_nfc_write_metrics(
 
     **Entries that contradict themselves** are dropped: a message smaller than
     its payload or larger than the chip, a copy that kept more consultations or
-    vaccines than the record held, or a kept count without its total (or the
+    vaccines than its total, or a kept count without its total (or the
     reverse). No real write produces one. `stored` is then lower than
     `received`, and the log says how many were dropped and why, never the
     values.
@@ -1369,9 +1369,10 @@ def get_nfc_write_metric_summary(
     Writes made inside `window_days` are grouped by device role, payload format
     and chip capacity. Each group reports how many writes there were; the
     median, p90 and largest NDEF message, in bytes; the median share of the
-    chip's capacity a message filled; and how many writes kept fewer
-    consultations or vaccines than the record held, with how many of each were
-    left out.
+    chip's capacity a message filled; and how many writes had consultations or
+    vaccines left out by the chip's capacity (kept below total, where total is
+    what the copy carries on a chip with room for everything), with how many of
+    each.
 
     Median and p90 are nearest-rank, the size at index `int(q × (n − 1))` of
     the sorted sizes, so always a size some write had; with an even count the

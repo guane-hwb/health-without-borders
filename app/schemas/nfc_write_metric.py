@@ -52,7 +52,10 @@ class NfcWriteMetricEntry(BaseModel):
         None,
         ge=0,
         le=1000,
-        description="Guardian copy only: consultations in the record it was built from",
+        description=(
+            "Guardian copy only: consultations it would carry on a chip with "
+            "room for everything (the most recent, at most three)"
+        ),
     )
     vaccines_kept: Optional[int] = Field(
         None,
@@ -64,7 +67,10 @@ class NfcWriteMetricEntry(BaseModel):
         None,
         ge=0,
         le=1000,
-        description="Guardian copy only: vaccines in the record it was built from",
+        description=(
+            "Guardian copy only: vaccines it would carry on a chip with room "
+            "for everything (the most recent, at most three)"
+        ),
     )
     written_at: AwareDatetime = Field(
         ...,
@@ -113,8 +119,8 @@ class NfcWriteMetricGroup(BaseModel):
     trimmed_writes: int = Field(
         ...,
         description=(
-            "Writes that kept fewer consultations or fewer vaccines than the "
-            "record held"
+            "Writes whose chip capacity left out consultations or vaccines "
+            "(kept below total)"
         ),
     )
     consultations_dropped: int = Field(

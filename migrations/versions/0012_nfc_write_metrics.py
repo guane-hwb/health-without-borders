@@ -6,8 +6,8 @@ Create Date: 2026-11-17
 
 For every chip it writes, the app reports how big the encrypted payload and
 the NDEF message were, the capacity the chip reported and, for a guardian
-copy, how many consultations and vaccines it kept out of how many the record
-held. nfc_write_metrics keeps those numbers so the next payload format can be
+copy, how many consultations and vaccines it kept out of how many it would
+carry on a chip with room for everything (at most three of each). nfc_write_metrics keeps those numbers so the next payload format can be
 sized from field data. No chip UID, no patient, no clinical content; the
 reporter, the organization and the build come from the request.
 
@@ -47,11 +47,11 @@ def upgrade() -> None:
         sa.Column('consultations_kept', sa.Integer(), nullable=True,
                   comment='Guardian copy: consultations written to the chip; NULL if not reported'),
         sa.Column('consultations_total', sa.Integer(), nullable=True,
-                  comment='Guardian copy: consultations in the record; NULL if not reported'),
+                  comment='Guardian copy: consultations it carries with room for all (max 3); NULL if not reported'),
         sa.Column('vaccines_kept', sa.Integer(), nullable=True,
                   comment='Guardian copy: vaccines written to the chip; NULL if not reported'),
         sa.Column('vaccines_total', sa.Integer(), nullable=True,
-                  comment='Guardian copy: vaccines in the record; NULL if not reported'),
+                  comment='Guardian copy: vaccines it carries with room for all (max 3); NULL if not reported'),
         sa.Column('written_at', sa.DateTime(timezone=True), nullable=False,
                   comment='When the device wrote the chip (client clock)'),
         sa.Column('app_version', sa.String(length=64), server_default='none', nullable=False,

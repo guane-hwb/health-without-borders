@@ -373,7 +373,8 @@ class NfcWriteMetric(Base):
     For every chip it writes, the app reports the size of the encrypted payload
     and of the whole NDEF message, the NDEF capacity the chip reported and, for
     a guardian copy, how many consultations and vaccines it kept out of how
-    many the record held. A new payload format has to be sized from these
+    many it would carry on a chip with room for everything (at most three of
+    each). A new payload format has to be sized from these
     numbers: how close writes come to each chip's capacity, and how often the
     guardian copy is trimmed to fit, can only be measured in the field.
 
@@ -424,7 +425,7 @@ class NfcWriteMetric(Base):
     )
     consultations_total: Mapped[int | None] = mapped_column(
         Integer, nullable=True,
-        comment="Guardian copy: consultations in the record; NULL if not reported",
+        comment="Guardian copy: consultations it carries with room for all (max 3); NULL if not reported",
     )
     vaccines_kept: Mapped[int | None] = mapped_column(
         Integer, nullable=True,
@@ -432,7 +433,7 @@ class NfcWriteMetric(Base):
     )
     vaccines_total: Mapped[int | None] = mapped_column(
         Integer, nullable=True,
-        comment="Guardian copy: vaccines in the record; NULL if not reported",
+        comment="Guardian copy: vaccines it carries with room for all (max 3); NULL if not reported",
     )
     written_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
