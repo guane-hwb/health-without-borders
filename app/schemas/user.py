@@ -1,7 +1,9 @@
+from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from app.core.text_normalizer import normalize_document_number
 from app.db.models import UserRole
 
 #: bcrypt only reads the first 72 bytes; anything after them is silently ignored.
@@ -38,11 +40,61 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+class PractitionerDocumentType(str, Enum):
+    """
+    Identity documents a professional can hold: the ColombianPersonIdentifier
+    codes (see app.schemas.patient.DocumentType) less those for minors and
+    unidentified people (CN, RC, TI, AS, MS, SI).
+    """
+    CC = "CC"    # Cédula de ciudadanía
+    CE = "CE"    # Cédula de extranjería
+    PA = "PA"    # Pasaporte
+    CD = "CD"    # Carné diplomático
+    SC = "SC"    # Salvoconducto de permanencia
+    PE = "PE"    # Permiso Especial de Permanencia
+    PT = "PT"    # Permiso Temporal de Permanencia
+    PPT = "PPT"  # Permiso por protección temporal
+    DE = "DE"    # Documento Extranjero
+
+
+#: users.document_number is VARCHAR(32).
+MAX_USER_DOCUMENT_NUMBER_LENGTH = 32
+
+
+def clean_document_number(value: Optional[str]) -> Optional[str]:
+    """Stored as typed, trimmed; blank (or separators only) means no document."""
+    if value is None:
+        return None
+    value = value.strip()
+    if not normalize_document_number(value):
+        return None
+    if len(value) > MAX_USER_DOCUMENT_NUMBER_LENGTH:
+        raise ValueError(
+            f"document_number must be at most {MAX_USER_DOCUMENT_NUMBER_LENGTH} characters."
+        )
+    return value
+
+
+DOCUMENT_PAIR_MESSAGE = (
+    "Send document_type and document_number together (both null to clear them)."
+)
+
+
 class UserBase(BaseModel):
     email: EmailStr
     full_name: str = Field(..., min_length=3, description="Full name of the user")
     role: UserRole = Field(default=UserRole.doctor, description="Role of the user")
     is_active: Optional[bool] = True
+    document_type: Optional[PractitionerDocumentType] = Field(
+        None,
+        description=(
+            "Identity document type of the professional. The app fills the "
+            "practitioner of the visits it records with it (RDA Elem. 49.1)"
+        ),
+    )
+    document_number: Optional[str] = Field(
+        None, description="Identity document number of the professional (RDA Elem. 49.2)"
+    )
 
 class UserCreate(UserBase):
     """
@@ -54,10 +106,44 @@ class UserCreate(UserBase):
 
     _normalize_email = field_validator("email")(normalize_email)
     _check_password = field_validator("password")(check_password_length)
+    _clean_document = field_validator("document_number")(clean_document_number)
+
+    @model_validator(mode="after")
+    def _document_comes_in_pairs(self) -> "UserCreate":
+        if (self.document_type is None) != (self.document_number is None):
+            raise ValueError(DOCUMENT_PAIR_MESSAGE)
+        return self
+
 
 class UserUpdate(BaseModel):
-    """Payload to toggle a user's active state (soft deactivate)."""
-    is_active: bool = Field(..., description="New active state for the user")
+    """
+    Body of PATCH /users/{id}: the active state, the identity document, or both.
+    A field left out is not changed.
+    """
+    is_active: Optional[bool] = Field(None, description="New active state for the user")
+    document_type: Optional[PractitionerDocumentType] = Field(
+        None, description="Identity document type; null together with document_number clears it"
+    )
+    document_number: Optional[str] = Field(
+        None, description="Identity document number; null together with document_type clears it"
+    )
+
+    _clean_document = field_validator("document_number")(clean_document_number)
+
+    @model_validator(mode="after")
+    def _one_change_at_least(self) -> "UserUpdate":
+        sent = self.model_fields_set
+        if not sent:
+            raise ValueError("Send is_active, or document_type with document_number.")
+        if "is_active" in sent and self.is_active is None:
+            raise ValueError("is_active cannot be null.")
+        document_fields = sent & {"document_type", "document_number"}
+        if document_fields and (
+            len(document_fields) == 1
+            or (self.document_type is None) != (self.document_number is None)
+        ):
+            raise ValueError(DOCUMENT_PAIR_MESSAGE)
+        return self
 
 class PasswordChange(BaseModel):
     """Body of POST /users/me/password."""
