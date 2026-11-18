@@ -19,7 +19,7 @@ from app.core.text_normalizer import (
 )
 from app.db.errors import violates
 from app.db.models import Patient, RetiredDeviceUid
-from app.schemas.patient import UNKNOWN_NATIONALITY_CODE, PatientFullRecord
+from app.schemas.patient import UNKNOWN_NATIONALITY_CODE, PatientFullRecord, PatientInfo
 from app.services.iso3166 import to_alpha3
 from app.services.record_merger import drops_declarative_items, merge_patient_records
 
@@ -96,7 +96,7 @@ class DuplicateIdentityError(Exception):
 # ---------------------------------------------------------------------------
 
 #: patientInfo fields stored and returned to the app but absent from the RDA.
-_NOT_IN_RDA_PACIENTE = frozenset({"ethnicCommunity"})
+_NOT_IN_RDA_PACIENTE = frozenset({"ethnicCommunity", "isBloodTypeCertified"})
 
 
 _DEVICE_UID_INDEX = "ix_patients_device_uid"
@@ -704,6 +704,26 @@ def _identity_edits(stored_info: dict, incoming_info: dict) -> list[str]:
     return edits
 
 
+def _blood_type_certified(stored_info: dict) -> bool:
+    """Whether the stored record holds a certified blood type."""
+    return stored_info.get("isBloodTypeCertified") is True and bool(
+        (stored_info.get("bloodType") or "").strip()
+    )
+
+
+def _blood_type_edit(stored_info: dict, incoming: PatientInfo) -> bool:
+    """
+    Whether the payload tries to change a certified blood type: another value,
+    or isBloodTypeCertified sent as false. An empty blood type is not an edit
+    (a copy rebuilt from a device may lack it), and neither is a payload that
+    leaves the flag out (app builds from before the field).
+    """
+    incoming_blood = (incoming.bloodType or "").strip().upper()
+    if incoming_blood and incoming_blood != (stored_info.get("bloodType") or "").strip().upper():
+        return True
+    return "isBloodTypeCertified" in incoming.model_fields_set and not incoming.isBloodTypeCertified
+
+
 def _same_person(existing: Patient, patient_in: PatientFullRecord) -> bool:
     """
     Whether a payload that reached ``existing`` through its patient device UID is the
@@ -1019,6 +1039,21 @@ def create_or_update_patient(
             new_info[field] = old_info.get(field, new_info[field])
         new_info["secondLastName"] = old_info.get("secondLastName")
         new_info["secondName"] = old_info.get("secondName")
+
+        # RULE 1b: A CERTIFIED BLOOD TYPE IS FINAL (decided 2026-11-17)
+        # Once an exam certified it, no sync changes it or withdraws the
+        # certification, whatever the copy (stale, without baseVersion, found
+        # by the patient device). It runs before the merge, which takes
+        # patientInfo from the payload.
+        if _blood_type_certified(old_info):
+            if _blood_type_edit(old_info, patient_in.patientInfo):
+                logger.warning(
+                    "Certified blood type edit not applied patient=%s",
+                    safe_patient_ref(existing_patient.id),
+                )
+                conflicts.append("blood_type_certified_not_changed")
+            new_info["bloodType"] = old_info.get("bloodType")
+            new_info["isBloodTypeCertified"] = True
 
         keep_guardians = stale or resolved_by_tag
 
