@@ -35,7 +35,7 @@ If it was not created in Step 1, the `superadmin` provisions an `org_admin` for 
 
 **Step 3 — The `org_admin` creates clinical users:**
 
-The site's `org_admin` creates `doctor` and `nurse` accounts for the healthcare professionals who will use the mobile app. Each user is scoped to their organization.
+The site's `org_admin` creates `doctor` and `nurse` accounts for the healthcare professionals who will use the mobile app. Each user is scoped to their organization. The account should carry the professional's identity document (`document_type` and `document_number`): the app reads it from `GET /users/me` at sign-in and fills the practitioner of every visit with it, online and offline (Res. 866 Elems. 49.1, 49.2). For an account created without it, the `org_admin` (or the `superadmin`, for an `org_admin`) sets it with `PATCH /api/v1/users/{id}`; users cannot set their own.
 
 **Step 4 — Distribute credentials:**
 
