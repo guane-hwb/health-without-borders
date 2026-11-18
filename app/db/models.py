@@ -89,6 +89,17 @@ class User(Base):
         DateTime(timezone=True), nullable=True,
         comment="Last change or reset of the password; NULL if never changed",
     )
+    document_type: Mapped[str | None] = mapped_column(
+        String(5), nullable=True,
+        comment=(
+            "Identity document type of the professional (CC, CE, PA, PPT...); "
+            "the app puts it on the visits they record (RDA Elem. 49.1)"
+        ),
+    )
+    document_number: Mapped[str | None] = mapped_column(
+        String(32), nullable=True,
+        comment="Identity document number of the professional (RDA Elem. 49.2)",
+    )
 
     # Relationships
     organization: Mapped["Organization"] = relationship("Organization", back_populates="users")
