@@ -410,7 +410,10 @@ count twice until the older sightings leave the window.
 **Retention:** rows older than `NFC_KEY_SIGHTING_RETENTION_DAYS` (730 days, by
 the server's clock) are deleted whenever a batch is stored. That is long enough
 for patients who come back once a year or less to still count against a
-retirement; the report's window cannot be longer.
+retirement; the report's window cannot be longer. Write sizes are separate
+telemetry, with their own table and retention
+(`NFC_WRITE_METRIC_RETENTION_DAYS`, 365 days): see
+[NFC Write Metrics](nfc-write-metrics.md).
 
 **Versions that do not exist** in the ring, live or revoked, are dropped: no
 chip can be on one, and anyone with an account could otherwise fill the report

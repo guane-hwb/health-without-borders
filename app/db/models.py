@@ -377,6 +377,98 @@ class NfcKeyVersionObservation(Base):
     )
 
 
+class NfcWriteMetric(Base):
+    """
+    Append-only record of how big each NFC chip write was, against the chip.
+
+    For every chip it writes, the app reports the size of the encrypted payload
+    and of the whole NDEF message, the NDEF capacity the chip reported and, for
+    a guardian copy, how many consultations and vaccines it kept out of how
+    many it would carry on a chip with room for everything (at most three of
+    each). A new payload format has to be sized from these
+    numbers: how close writes come to each chip's capacity, and how often the
+    guardian copy is trimmed to fit, can only be measured in the field.
+
+    **Append-only on purpose**, and not de-duplicated: every write is a sample,
+    and two equal writes are two samples. Rows older than
+    ``NFC_WRITE_METRIC_RETENTION_DAYS`` are deleted.
+
+    No chip UID, no patient id and no clinical content: there is no column for
+    them. The consultation and vaccine counts say how much history a copy
+    carried, not what it said. The reporter and the time remain, as in
+    :class:`NfcKeyVersionObservation`, which is why rows do not outlive the
+    retention period.
+    """
+
+    __tablename__ = "nfc_write_metrics"
+
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, index=True,
+        default=lambda: str(uuid.uuid4()),
+    )
+    device_role: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="patient",
+        comment="'patient' or 'guardian' device",
+    )
+    payload_format: Mapped[int] = mapped_column(
+        Integer, nullable=False,
+        comment="Payload format written: 1 = CBOR + DEFLATE + AES-GCM, 2 = v2",
+    )
+    key_version: Mapped[int] = mapped_column(
+        Integer, nullable=False,
+        comment="NFC key version the payload was encrypted with",
+    )
+    payload_bytes: Mapped[int] = mapped_column(
+        Integer, nullable=False,
+        comment="Encrypted payload, in bytes",
+    )
+    message_bytes: Mapped[int] = mapped_column(
+        Integer, nullable=False,
+        comment="Whole NDEF message written, in bytes",
+    )
+    chip_capacity: Mapped[int] = mapped_column(
+        Integer, nullable=False,
+        comment="NDEF capacity the chip reported, in bytes",
+    )
+    consultations_kept: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+        comment="Guardian copy: consultations written to the chip; NULL if not reported",
+    )
+    consultations_total: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+        comment="Guardian copy: consultations it carries with room for all (max 3); NULL if not reported",
+    )
+    vaccines_kept: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+        comment="Guardian copy: vaccines written to the chip; NULL if not reported",
+    )
+    vaccines_total: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+        comment="Guardian copy: vaccines it carries with room for all (max 3); NULL if not reported",
+    )
+    written_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        comment="When the device wrote the chip (client clock)",
+    )
+    app_version: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default="none",
+        comment="X-App-Version of the reporting build: 'none' if absent, 'invalid' if malformed",
+    )
+    reported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True,
+        comment="When the server received it — may lag by days for a brigade "
+                "that was offline",
+    )
+    reported_by: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.id"), index=True, nullable=True,
+        comment="User whose device reported the write",
+    )
+    organization_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("organizations.id"), index=True, nullable=True,
+        comment="Organization of the reporting user; an org admin's summary is limited to it",
+    )
+
+
 class RetiredDeviceUid(Base):
     """
     Append-only ledger of NFC device UIDs retired from a patient record.
