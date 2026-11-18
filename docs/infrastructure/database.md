@@ -147,7 +147,19 @@ resolves to its patient through `/scan`), a role, a version, timestamps and the
 reporter. Rows older than `NFC_KEY_SIGHTING_RETENTION_DAYS` (730) are deleted.
 No clinical data, no key material.
 
-### 2.7. Standard Clinical Catalogs
+### 2.7. NFC Write-Size Telemetry (`nfc_write_metrics`)
+
+Append-only record of how big each chip write was, reported by the app, used
+to size the NFC payload format. Holds the device role, payload format, key
+version, payload and NDEF message sizes, the chip's NDEF capacity and, for a
+guardian copy, how many consultations and vaccines it kept out of how many the
+record held; plus `written_at` (the device's clock), the reporter, their
+organization, the reporting build (`app_version`, from `X-App-Version`) and
+`reported_at`. No chip UID (not even an HMAC), no patient id, no clinical
+content. Rows older than `NFC_WRITE_METRIC_RETENTION_DAYS` (365) are deleted.
+See [NFC Write Metrics](nfc-write-metrics.md).
+
+### 2.8. Standard Clinical Catalogs
 
 There are no catalog tables (the former `catalog_vaccines` and `catalog_cie10` were removed). The ICD catalogs used to validate the codes the LLM suggests are JSON files loaded into memory at startup: `app/data/icd10_codes.json` and `app/data/icd11_codes.json` (WHO ICD; source, languages and license status in `THIRD_PARTY_NOTICES.md` and [AI Integration](../architecture/ai-integration.md) § 5). Vaccine codes are stored as the app sends them (CVX); statistics group them after normalizing (`03` and `3` are one vaccine), but there is no vaccine catalog on the server.
 

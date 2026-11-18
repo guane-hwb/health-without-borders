@@ -143,6 +143,11 @@ class Settings(BaseSettings):
     # against retiring their chip's version. The usage report's window cannot
     # be longer.
     NFC_KEY_SIGHTING_RETENTION_DAYS: int = 730
+    # How long NFC write metrics are kept. Each says which staff member wrote
+    # a chip of which kind, and when (no chip, no patient); the payload-format
+    # decision they inform needs months of writes, not a history. A summary
+    # window longer than this finds nothing older.
+    NFC_WRITE_METRIC_RETENTION_DAYS: int = 365
 
     # --- REPORTING ---
     # Calendar dates and month boundaries in aggregated statistics are resolved

@@ -18,7 +18,7 @@ def _engine():
     return create_engine("sqlite://")
 
 
-HEAD = "0011"
+HEAD = "0012"
 
 
 def _upgrade(engine, revision: str) -> None:
@@ -243,3 +243,33 @@ def test_0009_runs_whatever_index_the_uid_column_has(index):
     assert "ix_nfc_key_version_observations_device_ref" in names
     assert index not in names
     assert _version(engine) == HEAD
+
+
+def test_0012_creates_the_write_metrics_table_and_drops_it_on_downgrade():
+    """NFC write-size telemetry: a new table, nothing existing touched."""
+    from alembic import command
+
+    engine = _engine()
+    _upgrade(engine, "0011")
+    assert "nfc_write_metrics" not in inspect(engine).get_table_names()
+
+    migrations.upgrade_to_head(engine)
+
+    names = {i["name"] for i in inspect(engine).get_indexes("nfc_write_metrics")}
+    assert {
+        "ix_nfc_write_metrics_reported_at",
+        "ix_nfc_write_metrics_organization_id",
+        "ix_nfc_write_metrics_reported_by",
+    } <= names
+    targets = {
+        (tuple(fk["constrained_columns"]), fk["referred_table"])
+        for fk in inspect(engine).get_foreign_keys("nfc_write_metrics")
+    }
+    assert targets == {(("reported_by",), "users"), (("organization_id",), "organizations")}
+
+    config = migrations.alembic_config()
+    with engine.begin() as conn:
+        config.attributes["connection"] = conn
+        command.downgrade(config, "0011")
+    assert "nfc_write_metrics" not in inspect(engine).get_table_names()
+    assert _version(engine) == "0011"

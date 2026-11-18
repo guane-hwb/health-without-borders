@@ -39,6 +39,11 @@ from app.schemas.nfc_key_version import (
     NfcKeyVersionSyncResponse,
     NfcKeyVersionUsageResponse,
 )
+from app.schemas.nfc_write_metric import (
+    NfcWriteMetricSummaryResponse,
+    NfcWriteMetricSyncRequest,
+    NfcWriteMetricSyncResponse,
+)
 from app.schemas.patient import (
     CodeSource,
     DeviceChangeView,
@@ -76,6 +81,11 @@ from app.services.nfc_key_service import (
 from app.services.nfc_key_version_service import (
     store_key_version_observations,
     summarize_key_version_usage,
+)
+from app.services.nfc_write_metric_service import (
+    MAX_WINDOW_DAYS,
+    store_write_metrics,
+    summarize_write_metrics,
 )
 from app.services.patient_service import (
     ConcurrentSyncError,
@@ -1267,6 +1277,139 @@ def get_nfc_key_version_usage(
         )
 
     return summarize_key_version_usage(db, window_days=window_days)
+
+
+@router.post(
+    "/nfc-write-metrics",
+    response_model=NfcWriteMetricSyncResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def sync_nfc_write_metrics(
+    payload: NfcWriteMetricSyncRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Report how big each NFC chip write was, against the chip's capacity.
+
+    The app writes an encrypted payload to every chip: a triage summary to the
+    patient device and, to the guardian device, a copy of the record bounded to
+    what fits. How close those writes come to each chip's capacity, and how often
+    the guardian copy has to be trimmed to fit, can only be measured where the
+    chips are written. These numbers size the next payload format.
+
+    **Not idempotent, by design.** Every write is appended. An entry carries no
+    chip or write identifier to de-duplicate on (that is the privacy design),
+    and two writes of the same size are two samples. A batch sent twice is
+    counted twice.
+
+    **Allowed roles:** `doctor`, `nurse`, `org_admin`. `org_admin` no longer
+    receives keys, but a device that signed in before that keeps its ring until
+    its session ends; refusing it would make the app retry the batch.
+
+    **Privacy:** entries carry sizes, the chip's capacity, a role, a payload
+    format, a key version, the guardian copy's counts and a timestamp. No chip
+    UID, no patient, no clinical content: the schema has no field for them,
+    and fields outside it are ignored. The server adds the reporting user, their
+    organization, the `X-App-Version` header (`none` when absent, `invalid` when
+    malformed) and its own clock. Rows are deleted after
+    `NFC_WRITE_METRIC_RETENTION_DAYS`.
+
+    **Entries that contradict themselves** are dropped: a message smaller than
+    its payload or larger than the chip, a copy that kept more consultations or
+    vaccines than the record held, or a kept count without its total (or the
+    reverse). No real write produces one. `stored` is then lower than
+    `received`, and the log says how many were dropped and why, never the
+    values.
+
+    **Responses:**
+    - `202`: Batch accepted. Body reports `received` and `stored`.
+    - `403`: Caller is not `doctor`, `nurse` or `org_admin`.
+    - `422`: Missing or malformed body fields (e.g. empty `entries`, a
+      `written_at` without an offset, a value out of range).
+    """
+    if current_user.role not in {
+        UserRole.doctor,
+        UserRole.nurse,
+        UserRole.org_admin,
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Access Denied: Only clinical staff and organization admins "
+                "can report NFC write metrics."
+            ),
+        )
+
+    stored = store_write_metrics(
+        db, payload.entries, current_user, app_version(request)
+    )
+    return NfcWriteMetricSyncResponse(received=len(payload.entries), stored=stored)
+
+
+@router.get(
+    "/nfc-write-metrics/summary",
+    response_model=NfcWriteMetricSummaryResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_nfc_write_metric_summary(
+    window_days: int = Query(
+        90,
+        ge=1,
+        le=MAX_WINDOW_DAYS,
+        description="Writes made in the last this many days, by the device's clock",
+    ),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Summarise how big NFC writes are against the chips they go to.
+
+    Writes made inside `window_days` are grouped by device role, payload format
+    and chip capacity. Each group reports how many writes there were; the
+    median, p90 and largest NDEF message, in bytes; the median share of the
+    chip's capacity a message filled; and how many writes kept fewer
+    consultations or vaccines than the record held, with how many of each were
+    left out.
+
+    Median and p90 are nearest-rank, the size at index `int(q × (n − 1))` of
+    the sorted sizes, so always a size some write had; with an even count the
+    median is the lower of the two middle ones. `utilization_median_pct` is
+    null for chips that reported a capacity of 0.
+
+    **The window is on `written_at`**, the device's clock, as the key-version
+    usage window is on `observed_at`: a brigade that was offline for a week
+    reports its writes late, and they still count on the days they were made.
+
+    **Scope by role:**
+    - `superadmin`: every organization.
+    - `org_admin`: the writes reported by users of their own organization.
+    - `doctor` / `nurse`: access denied.
+
+    **Responses:**
+    - `200`: Summary returned; `groups` is empty when nothing was written in
+      the window.
+    - `403`: Caller is not an administrator.
+    - `422`: `window_days` out of range (1 to 730). Rows older than
+      `NFC_WRITE_METRIC_RETENTION_DAYS` are already deleted, so a longer
+      window reads the same as that period.
+    """
+    if current_user.role not in {UserRole.org_admin, UserRole.superadmin}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only administrators can read NFC write metrics.",
+        )
+
+    # An org admin reads its own organization, as in /stats/overview.
+    organization_id = (
+        current_user.organization_id
+        if current_user.role == UserRole.org_admin
+        else None
+    )
+    return summarize_write_metrics(
+        db, window_days=window_days, organization_id=organization_id
+    )
 
 
 @router.post(
