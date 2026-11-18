@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.phi_sanitizer import safe_patient_ref
 from app.core.timezone import reporting_timezone
 from app.schemas.patient import (
+    GUARDIAN_RELATIONSHIP_OTHER,
     AllergyCategory,
     BiologicalSex,
     ChronicConditionItem,
@@ -204,8 +205,23 @@ def _allergy_category_display(cat: AllergyCategory) -> str:
     }.get(cat.value, "Otra")
 
 
+_RELATIONSHIP_DISPLAYS = {"01": "Padres", "02": "Hermanos", "03": "Tíos", "04": "Abuelos"}
+
+
 def _family_rel_display(rel: FamilyRelationship) -> str:
-    return {"01": "Padres", "02": "Hermanos", "03": "Tíos", "04": "Abuelos"}.get(rel.value, "Otro")
+    return _RELATIONSHIP_DISPLAYS.get(rel.value, "Otro")
+
+
+def _guardian_relationship_text(guardian) -> str:
+    """
+    Patient.contact.relationship.text for a guardian. The codes are the app's
+    (the family-history ones plus 05 "Otro"); the RDA used to get the bare
+    code. Records from before the codes hold free text, which goes as is.
+    """
+    code = (guardian.relationship or "").strip()
+    if code == GUARDIAN_RELATIONSHIP_OTHER:
+        return guardian.relationshipOther or "Otro"
+    return _RELATIONSHIP_DISPLAYS.get(code, code)
 
 
 def _diag_type_display(dt: DiagnosisType) -> str:
@@ -573,14 +589,14 @@ def _build_patient_resource(patient: PatientFullRecord) -> Dict[str, Any]:
     gi = patient.guardianInfo
     if gi and gi.name:
         contacts.append({
-            "relationship": [{"text": gi.relationship}],
+            "relationship": [{"text": _guardian_relationship_text(gi)}],
             "name": {"text": gi.name},
             "telecom": [{"system": "phone", "value": gi.phone}] if gi.phone else [],
         })
     gi2 = patient.guardian2Info
     if gi2 and gi2.name:
         contacts.append({
-            "relationship": [{"text": gi2.relationship}],
+            "relationship": [{"text": _guardian_relationship_text(gi2)}],
             "name": {"text": gi2.name},
             "telecom": [{"system": "phone", "value": gi2.phone}] if gi2.phone else [],
         })

@@ -617,6 +617,14 @@ async def sync_patient(
     change by sync. A payload that says otherwise gets
     `identity_edit_not_applied` in `conflicts` (an empty field is not an edit).
 
+    **Certified blood type:** once `patientInfo.isBloodTypeCertified` is true,
+    no sync changes `bloodType` or makes it false again, not even another
+    certified value. A payload that sends another blood type, or the flag as
+    `false`, gets `blood_type_certified_not_changed` in `conflicts`; an empty
+    blood type, or a payload without the flag (app builds from before it), is
+    not an edit. A certified `bloodType` must be one of O+, O-, A+, A-, B+, B-,
+    AB+, AB- (`422` otherwise); without a blood type the flag is false.
+
     **No `baseVersion`:** for an existing record the server cannot tell an old
     copy from a fresh one. If the payload would remove allergies or background
     items (chronic conditions, family history, medications, notes), the stored

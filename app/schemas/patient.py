@@ -23,7 +23,14 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any, List, Optional
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from app.services.iso3166 import to_numeric as _iso_to_numeric
 
@@ -302,6 +309,10 @@ class PatientIdentification(BaseModel):
     documentNumber: str = Field(..., description="Número de documento (Elem. 2.2)")
 
 
+#: The ABO/Rh groups the app offers; a certified blood type must be one of them.
+BLOOD_TYPES = ("O+", "O-", "A+", "A-", "B+", "B-", "AB+", "AB-")
+
+
 class PatientInfo(BaseModel):
     """Datos demográficos del paciente — Sección RDA Identificación."""
     identification: PatientIdentification
@@ -334,8 +345,41 @@ class PatientInfo(BaseModel):
     genderIdentity: Optional[GenderIdentity] = Field(None, description="Identidad de género (Elem. 4)")
     address: Address
     bloodType: Optional[str] = Field(None, description="Tipo de sangre (uso clínico interno)")
+    isBloodTypeCertified: bool = Field(
+        False,
+        description=(
+            "El tipo de sangre viene de un examen, no solo de lo que dijo el "
+            "cuidador. Una vez true, ninguna sincronización cambia bloodType "
+            "ni vuelve esto false (blood_type_certified_not_changed). Sin "
+            "bloodType es false. Certificado, bloodType debe ser uno de "
+            + ", ".join(BLOOD_TYPES) + "."
+        ),
+    )
     weight: Optional[float] = Field(None, description="Peso en Kg")
     height: Optional[float] = Field(None, description="Talla en cm")
+
+    @field_validator("isBloodTypeCertified", mode="before")
+    @classmethod
+    def _null_is_not_certified(cls, value: Any) -> Any:
+        return False if value is None else value
+
+    @model_validator(mode="after")
+    def _certified_needs_a_blood_type(self) -> "PatientInfo":
+        if not self.isBloodTypeCertified:
+            return self
+        blood = (self.bloodType or "").strip().upper()
+        if not blood:
+            # Nothing to certify. Assigned only when it was true, so a payload
+            # that left the field out still has it unset (see patient_service).
+            self.isBloodTypeCertified = False
+        elif blood not in BLOOD_TYPES:
+            raise ValueError(
+                "A certified patientInfo.bloodType must be one of "
+                + ", ".join(BLOOD_TYPES) + "."
+            )
+        else:
+            self.bloodType = blood
+        return self
 
 
 class GuardianConsent(BaseModel):
@@ -358,15 +402,48 @@ class GuardianConsent(BaseModel):
     )
 
 
+#: Guardian relationship "Otro": the text the user wrote goes in relationshipOther.
+GUARDIAN_RELATIONSHIP_OTHER = "05"
+MAX_RELATIONSHIP_OTHER_LENGTH = 100
+
+
 class GuardianInfo(BaseModel):
     """Información del cuidador/tutor del menor."""
     name: str
-    relationship: str
+    relationship: str = Field(
+        ...,
+        description=(
+            "Parentesco: 01 Padres, 02 Hermanos, 03 Tíos, 04 Abuelos, 05 Otro "
+            "(el texto va en relationshipOther). Los registros anteriores "
+            "pueden tener texto libre ('Madre'), que se acepta igual."
+        ),
+    )
+    relationshipOther: Optional[str] = Field(
+        None,
+        description=(
+            "Parentesco escrito por el usuario cuando relationship es '05', "
+            f"hasta {MAX_RELATIONSHIP_OTHER_LENGTH} caracteres. Con cualquier "
+            "otro relationship se guarda null."
+        ),
+    )
     phone: str
     device_uid: Optional[str] = Field(None, description="Hardware ID del dispositivo NFC del cuidador")
     documentType: Optional[str] = Field(None, description="Tipo de documento del cuidador")
     documentNumber: Optional[str] = Field(None, description="Número de documento del cuidador")
     consent: Optional[GuardianConsent] = Field(None, description="Consentimiento informado — Ley 1581/2012")
+
+    @model_validator(mode="after")
+    def _other_text_only_for_other(self) -> "GuardianInfo":
+        other = (self.relationshipOther or "").strip()
+        if self.relationship.strip() != GUARDIAN_RELATIONSHIP_OTHER or not other:
+            self.relationshipOther = None
+            return self
+        if len(other) > MAX_RELATIONSHIP_OTHER_LENGTH:
+            raise ValueError(
+                f"relationshipOther must be at most {MAX_RELATIONSHIP_OTHER_LENGTH} characters."
+            )
+        self.relationshipOther = other
+        return self
 
 
 # ============================================================================
@@ -896,8 +973,10 @@ class PatientSyncResponse(BaseModel):
             "missing_base_version: no baseVersion, and the payload would remove "
             "allergies or background items; the lists were united. "
             "identity_edit_not_applied: names, birth date, sex or document "
-            "differ from the stored ones, which a sync never changes. The rest "
-            "of the record was synced."
+            "differ from the stored ones, which a sync never changes. "
+            "blood_type_certified_not_changed: the stored blood type is "
+            "certified, and the payload sends another one or withdraws the "
+            "certification; neither is applied. The rest of the record was synced."
         ),
     )
     record: Optional[PatientFullRecord] = Field(
