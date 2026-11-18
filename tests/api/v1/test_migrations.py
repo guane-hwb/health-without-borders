@@ -18,7 +18,7 @@ def _engine():
     return create_engine("sqlite://")
 
 
-HEAD = "0012"
+HEAD = "0013"
 
 
 def _upgrade(engine, revision: str) -> None:
@@ -245,12 +245,12 @@ def test_0009_runs_whatever_index_the_uid_column_has(index):
     assert _version(engine) == HEAD
 
 
-def test_0012_creates_the_write_metrics_table_and_drops_it_on_downgrade():
+def test_0013_creates_the_write_metrics_table_and_drops_it_on_downgrade():
     """NFC write-size telemetry: a new table, nothing existing touched."""
     from alembic import command
 
     engine = _engine()
-    _upgrade(engine, "0011")
+    _upgrade(engine, "0012")
     assert "nfc_write_metrics" not in inspect(engine).get_table_names()
 
     migrations.upgrade_to_head(engine)
@@ -270,6 +270,6 @@ def test_0012_creates_the_write_metrics_table_and_drops_it_on_downgrade():
     config = migrations.alembic_config()
     with engine.begin() as conn:
         config.attributes["connection"] = conn
-        command.downgrade(config, "0011")
+        command.downgrade(config, "0012")
     assert "nfc_write_metrics" not in inspect(engine).get_table_names()
-    assert _version(engine) == "0011"
+    assert _version(engine) == "0012"

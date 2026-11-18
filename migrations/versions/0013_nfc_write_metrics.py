@@ -1,7 +1,7 @@
 """NFC write-size metrics reported by the app
 
-Revision ID: 0012
-Revises: 0011
+Revision ID: 0013
+Revises: 0012
 Create Date: 2026-11-17
 
 For every chip it writes, the app reports how big the encrypted payload and
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '0012'
-down_revision: Union[str, Sequence[str], None] = '0011'
+revision: str = '0013'
+down_revision: Union[str, Sequence[str], None] = '0012'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
