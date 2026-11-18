@@ -31,6 +31,7 @@ from app.schemas.token import TokenPair
 from app.schemas.user import (
     PasswordChange,
     PasswordResetResponse,
+    PractitionerDocumentType,
     UserCreate,
     UserResponse,
     UserUpdate,
@@ -138,6 +139,8 @@ def create_user(
         is_active=user_in.is_active,
         organization_id=target_org_id,
         must_change_password=True,  # the administrator chose it
+        document_type=user_in.document_type.value if user_in.document_type else None,
+        document_number=user_in.document_number,
     )
     
     db.add(db_user)
@@ -210,6 +213,13 @@ def get_current_user_profile(
         is_active=current_user.is_active,
         organization_id=current_user.organization_id,
         must_change_password=bool(current_user.must_change_password),
+        # The app keeps them to fill the practitioner of visits, offline too.
+        document_type=(
+            PractitionerDocumentType(current_user.document_type)
+            if current_user.document_type
+            else None
+        ),
+        document_number=current_user.document_number,
         **nfc_key_claims(
             role=current_user.role,
             db=db,
@@ -281,11 +291,16 @@ def update_user_status(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Activate or deactivate a user (soft state change).
+    Activate or deactivate a user (soft state change), or set their identity
+    document. A field left out of the body is not changed.
 
     Deactivating is the safe default for revoking access: the account and its
     audit trail are preserved while login and API access are blocked. It also
     revokes every session, so reactivating the account does not revive them.
+
+    `document_type` and `document_number` go together; both `null` clears
+    them. An administrator sets them, not the user: the app writes them into
+    the practitioner of every visit the user records.
 
     - **Allowed roles:** `superadmin`, `org_admin` (scoped to own org / clinical roles).
     - **Responses:**
@@ -293,18 +308,26 @@ def update_user_status(
     - `400`: Attempt to change own account.
     - `403`: Not enough privileges, cross-org, or targeting a superadmin/admin.
     - `404`: User not found.
+    - `422`: Empty body, `is_active: null`, or only one of the document fields.
     """
-    target = _load_manageable_target(user_id, db, current_user, action="deactivate")
-    if target.is_active and not user_in.is_active:
-        # Reactivating later must not revive tokens issued before (a stolen
-        # device's refresh token included).
-        revoke_all_sessions(target)
-    target.is_active = user_in.is_active
+    sent = user_in.model_fields_set
+    action = "deactivate" if "is_active" in sent else "update"
+    target = _load_manageable_target(user_id, db, current_user, action=action)
+    if "is_active" in sent:
+        if target.is_active and not user_in.is_active:
+            # Reactivating later must not revive tokens issued before (a stolen
+            # device's refresh token included).
+            revoke_all_sessions(target)
+        target.is_active = user_in.is_active
+    if "document_type" in sent:
+        target.document_type = user_in.document_type.value if user_in.document_type else None
+        target.document_number = user_in.document_number
     db.commit()
     db.refresh(target)
+    # Field names only: the document number is personal data.
     logger.info(
-        "actor_id=%s set user_id=%s active=%s",
-        current_user.id, target.id, target.is_active,
+        "actor_id=%s updated user_id=%s fields=%s active=%s",
+        current_user.id, target.id, ",".join(sorted(sent)), target.is_active,
     )
     return target
 

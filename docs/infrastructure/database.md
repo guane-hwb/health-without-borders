@@ -62,6 +62,8 @@ This table manages access credentials and roles. Users are strictly bound to an 
 | `full_name` | Varchar | Nullable | Human-readable name of the staff member. |
 | `role` | Varchar | Default: 'doctor' | RBAC assignment (`superadmin`, `org_admin`, `doctor`, `nurse`). |
 | `is_active` | Boolean | Default: True | Used for soft-deleting users to preserve audit logs. |
+| `document_type` | Varchar(5) | Nullable | Identity document type of the professional (CC, CE, PA, CD, SC, PE, PT, PPT, DE). The app fills the practitioner of each visit with it (Res. 866 Elem. 49.1). |
+| `document_number` | Varchar(32) | Nullable | Identity document number of the professional (Res. 866 Elem. 49.2). Not unique: one professional can hold accounts in two organizations. |
 
 ### 2.3. Patient Demographics (`patients`)
 
