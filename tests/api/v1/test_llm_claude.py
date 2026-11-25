@@ -26,7 +26,7 @@ from app.services.llm.schemas import (
     json_output_schema,
 )
 
-MODEL = "claude-opus-5-5"
+MODEL = "claude-sonnet-5-5"
 
 
 def _answer(payload, *, model=MODEL, stop_reason="end_turn", stop_details=None, text=True):
@@ -156,13 +156,13 @@ class TestExtractDiagnoses:
     def test_fallback_model_is_named_and_logged(self, service, catalog, app_log):
         service.client.beta.messages.create.return_value = _answer(
             {"diagnoses": [{"icd10Code": "J459", "description": "Asma"}]},
-            model="claude-opus-4-8",
+            model="claude-sonnet-5",
         )
 
         diagnoses = service.extract_diagnoses("tos", None, None, None)
 
-        assert diagnoses[0].model == "claude-opus-4-8"
-        assert "fallback model claude-opus-4-8" in app_log.text
+        assert diagnoses[0].model == "claude-sonnet-5"
+        assert "fallback model claude-sonnet-5" in app_log.text
 
     def test_refusal_gives_R69(self, service, app_log):
         service.client.beta.messages.create.return_value = _answer(
@@ -232,12 +232,12 @@ class TestBackgroundCoding:
 
 
 def test_provenance_keeps_the_model_that_answered():
-    answered = DiagnosisItem(icd10Code="J459", description="Asma", model="claude-opus-4-8")
+    answered = DiagnosisItem(icd10Code="J459", description="Asma", model="claude-sonnet-5")
     unnamed = DiagnosisItem(icd10Code="E11", description="Diabetes")
 
     marked = mark_ai_diagnoses([answered, unnamed], MODEL)
 
-    assert [d.model for d in marked] == ["claude-opus-4-8", MODEL]
+    assert [d.model for d in marked] == ["claude-sonnet-5", MODEL]
 
 
 class TestFactory:
@@ -254,13 +254,13 @@ class TestFactory:
 
     def test_anthropic_backend_uses_the_configured_model(self, monkeypatch):
         monkeypatch.setattr(settings, "LLM_BACKEND", "anthropic")
-        monkeypatch.setattr(settings, "LLM_MODEL_NAME", "claude-sonnet-5-5")
+        monkeypatch.setattr(settings, "LLM_MODEL_NAME", "claude-opus-5-5")
         monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-test")
 
         with patch("app.services.llm.factory.ClaudeMedicalCodingService") as claude_cls:
             get_llm_service()
 
-        claude_cls.assert_called_once_with(model_name="claude-sonnet-5-5", api_key="sk-test")
+        claude_cls.assert_called_once_with(model_name="claude-opus-5-5", api_key="sk-test")
 
     def test_anthropic_backend_without_key_does_not_start(self, monkeypatch):
         monkeypatch.setattr(settings, "LLM_BACKEND", "anthropic")

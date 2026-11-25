@@ -32,7 +32,7 @@ This repository contains the source code for the Backend API of the Health Witho
 * **Database:** PostgreSQL 15 (Cloud SQL in Production)
 * **ORM:** SQLAlchemy 2.0
 * **FHIR Store:** Google Cloud Healthcare API (R4)
-* **LLM:** Claude through the Anthropic API (`claude-opus-5-5`, set by `LLM_BACKEND`, `LLM_MODEL_NAME` and `LLM_EFFORT`); Google Vertex AI / Gemini remains selectable with `LLM_BACKEND=gemini`
+* **LLM:** Claude through the Anthropic API (`claude-sonnet-5-5`, set by `LLM_BACKEND`, `LLM_MODEL_NAME` and `LLM_EFFORT`); Google Vertex AI / Gemini remains selectable with `LLM_BACKEND=gemini`
 * **Package Manager:** `uv` (Astral)
 * **Infrastructure:** Docker, Google Artifact Registry, Google Cloud Build.
 

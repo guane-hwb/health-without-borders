@@ -42,10 +42,10 @@ from app.services.llm.validation import (
 logger = logging.getLogger(__name__)
 
 # The model the Claude backend uses when LLM_MODEL_NAME is not set.
-DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_MODEL = "claude-sonnet-5-5"
 
-# Thinking is always on and counts against max_tokens; the JSON answers
-# themselves are short. A cut answer (stop_reason "max_tokens") falls back to R69.
+# Adaptive thinking is on by default and counts against max_tokens; the JSON
+# answers themselves are short. A cut answer (stop_reason "max_tokens") falls back to R69.
 MAX_TOKENS = 16000
 
 # When a safety classifier declines a request, the API runs it again on a

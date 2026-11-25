@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     GCP_FHIR_STORE_ID: Optional[str] = None
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None
     # The model of the selected LLM_BACKEND; unset, each backend uses its own
-    # default (claude-opus-5-5, gemini-3.8-flash). Retirement dates:
+    # default (claude-sonnet-5-5, gemini-3.8-flash). Retirement dates:
     # docs/architecture/ai-integration.md.
     LLM_MODEL_NAME: Optional[str] = None
     # Only for LLM_BACKEND=gemini. Vertex AI region that processes the clinical notes sent to the LLM: the

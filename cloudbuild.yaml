@@ -96,7 +96,7 @@ steps:
       - '--remove-env-vars'
       - 'NFC_BOOTSTRAP_IMPORT,GCP_HL7_STORE_ID,HL7_SENDING_APP,HL7_SENDING_FACILITY,HL7_RECEIVING_APP,HL7_RECEIVING_FACILITY,HL7_PROCESSING_ID,HL7_VERSION_ID'
       - '--update-env-vars'
-      - 'INSTANCE_CONNECTION_NAME=migrants-unicef:us-central1:hwb-db-cluster,DB_USER=postgres,DB_NAME=hwb_db,GCP_PROJECT_ID=migrants-unicef,GCP_LOCATION=us-central1,GCP_DATASET_ID=hwb-dataset,GCP_FHIR_STORE_ID=hwb-fhir-store,ACCESS_TOKEN_EXPIRE_MINUTES=60,REFRESH_TOKEN_EXPIRE_MINUTES=10080,LLM_BACKEND=anthropic,LLM_MODEL_NAME=claude-opus-5-5,LLM_EFFORT=medium,LLM_LOCATION=us-central1'
+      - 'INSTANCE_CONNECTION_NAME=migrants-unicef:us-central1:hwb-db-cluster,DB_USER=postgres,DB_NAME=hwb_db,GCP_PROJECT_ID=migrants-unicef,GCP_LOCATION=us-central1,GCP_DATASET_ID=hwb-dataset,GCP_FHIR_STORE_ID=hwb-fhir-store,ACCESS_TOKEN_EXPIRE_MINUTES=60,REFRESH_TOKEN_EXPIRE_MINUTES=10080,LLM_BACKEND=anthropic,LLM_MODEL_NAME=claude-sonnet-5-5,LLM_EFFORT=medium,LLM_LOCATION=us-central1'
 
 # Maximum build time (15 minutes)
 timeout: '900s'

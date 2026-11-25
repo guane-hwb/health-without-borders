@@ -301,9 +301,9 @@ def test_the_deployment_names_backend_model_and_effort():
     # Anthropic API, with its key from Secret Manager.
     defaults = Settings.model_fields
     assert defaults["LLM_BACKEND"].default == "anthropic"
-    assert claude.DEFAULT_MODEL == "claude-opus-5-5"
+    assert claude.DEFAULT_MODEL == "claude-sonnet-5-5"
     deploy = (REPO / "cloudbuild.yaml").read_text()
-    assert "LLM_BACKEND=anthropic,LLM_MODEL_NAME=claude-opus-5-5,LLM_EFFORT=medium" in deploy
+    assert "LLM_BACKEND=anthropic,LLM_MODEL_NAME=claude-sonnet-5-5,LLM_EFFORT=medium" in deploy
     assert "ANTHROPIC_API_KEY=anthropic-api-key:latest" in deploy
 
 

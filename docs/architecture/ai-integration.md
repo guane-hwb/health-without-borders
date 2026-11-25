@@ -20,7 +20,7 @@ All three tasks run automatically during `POST /api/v1/patients/sync` before the
 
 ### Model Execution
 
-- **Model:** `claude-opus-5-5` (`LLM_MODEL_NAME`, set in `cloudbuild.yaml`; unset, each backend uses its own default). Thinking is always on with this model; `LLM_EFFORT` (default `medium`, set in `cloudbuild.yaml`) sets how much it thinks, and a higher level is slower, within the timeout below. The model rejects sampling parameters, so there is no `temperature`.
+- **Model:** `claude-sonnet-5-5` (`LLM_MODEL_NAME`, set in `cloudbuild.yaml`; unset, each backend uses its own default). Short, structured coding tasks do not need the largest model: on four synthetic cases (guane-hwb/health-without-borders#108) Claude Sonnet 5.5 and Claude Opus 5.5 gave the same ICD-10 codes, in 1.7–3.0 s against 2.0–6.3 s. In one of two Sonnet runs one ICD-11 code (CA23.Z) was not in the catalog; the validation drops such a code and keeps the ICD-10 one. Thinking is adaptive and on by default; `LLM_EFFORT` (default `medium`, set in `cloudbuild.yaml`) sets how much it thinks, and a higher level is slower, within the timeout below. The model rejects non-default sampling values, so there is no `temperature`.
 - **Gemini, the way back:** `gemini-3.8-flash`, a GA model (`LLM_MODEL_NAME`, set in `cloudbuild.yaml`). Google lists it as available from 2026-09-02 until at least 2027-09-02; check the [model versions page](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions) before that date. Until 2026-11 the service used `gemini-3-flash-preview`, a preview model without SLA; `gemini-2.5-pro`, which `.env.example` used to name, was retired from Vertex AI on 2026-10-20.
 - **Where the notes are processed:** with `anthropic`, the clinical notes leave Google Cloud and are processed by Anthropic's API, a processor other than the one that keeps the record (the FHIR Store). With `gemini`, Vertex AI processes them in `LLM_LOCATION` (`us-central1`, set in `cloudbuild.yaml`), the FHIR Store's region; `global` would let Google choose the region.
 - **Timeout and budget:** each call has a timeout (`LLM_TIMEOUT_SECONDS`, default 30 s) and is not retried; a timeout or error falls back to R69. One `/sync` makes at most `LLM_MAX_CALLS_PER_SYNC` calls (20), `LLM_MAX_CONCURRENT_CALLS` at a time (4), and starts none after `LLM_SYNC_BUDGET_SECONDS` (45 s). A new visit the budget does not reach gets the R69 fallback; a background item stays uncoded and a later `/sync` codes it. A visit whose four clinical notes are empty gets the R69 fallback without a call.
@@ -166,7 +166,7 @@ Set `LLM_BACKEND` in your `.env` file:
 
 | Value | Effect |
 |---|---|
-| `anthropic` (default) | Uses Claude through the Anthropic API with the model in `LLM_MODEL_NAME` (default `claude-opus-5-5`) and `ANTHROPIC_API_KEY`; without the key the service does not start |
+| `anthropic` (default) | Uses Claude through the Anthropic API with the model in `LLM_MODEL_NAME` (default `claude-sonnet-5-5`) and `ANTHROPIC_API_KEY`; without the key the service does not start |
 | `gemini` | Uses Google Vertex AI with the model in `LLM_MODEL_NAME` (default `gemini-3.8-flash`) |
 | `noop` | Returns deterministic fallback codes (R69) without any LLM call |
 
