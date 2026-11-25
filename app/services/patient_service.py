@@ -96,7 +96,7 @@ class DuplicateIdentityError(Exception):
 # ---------------------------------------------------------------------------
 
 #: patientInfo fields stored and returned to the app but absent from the RDA.
-_NOT_IN_RDA_PACIENTE = frozenset({"ethnicCommunity", "isBloodTypeCertified"})
+_NOT_IN_RDA_PACIENTE = frozenset({"ethnicCommunity", "isBloodTypeCertified", "muac"})
 
 
 _DEVICE_UID_INDEX = "ix_patients_device_uid"
@@ -1054,6 +1054,12 @@ def create_or_update_patient(
                 conflicts.append("blood_type_certified_not_changed")
             new_info["bloodType"] = old_info.get("bloodType")
             new_info["isBloodTypeCertified"] = True
+
+        # The arm circumference (muac) is newer than app builds still in use,
+        # which drop what they do not know: a payload without the field keeps
+        # the stored value instead of erasing it.
+        if "muac" not in patient_in.patientInfo.model_fields_set:
+            new_info["muac"] = old_info.get("muac")
 
         keep_guardians = stale or resolved_by_tag
 
