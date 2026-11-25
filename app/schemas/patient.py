@@ -312,6 +312,10 @@ class PatientIdentification(BaseModel):
 #: The ABO/Rh groups the app offers; a certified blood type must be one of them.
 BLOOD_TYPES = ("O+", "O-", "A+", "A-", "B+", "B-", "AB+", "AB-")
 
+#: Upper bound for the mid-upper arm circumference. Looser than the app's own
+#: check on purpose: the app's queue treats a 422 as permanent.
+MAX_MUAC_CM = 50
+
 
 class PatientInfo(BaseModel):
     """Datos demográficos del paciente — Sección RDA Identificación."""
@@ -357,6 +361,17 @@ class PatientInfo(BaseModel):
     )
     weight: Optional[float] = Field(None, description="Peso en Kg")
     height: Optional[float] = Field(None, description="Talla en cm")
+    muac: Optional[float] = Field(
+        None,
+        gt=0,
+        le=MAX_MUAC_CM,
+        description=(
+            "Circunferencia media de brazo en cm. Opcional; solo aplica de 6 a "
+            "59 meses y la app calcula la clasificación (rojo ≤ 11.5, amarillo "
+            "11.6–13.5, verde ≥ 13.6). Una sincronización sin el campo conserva "
+            "el valor guardado. No forma parte del RDA."
+        ),
+    )
 
     @field_validator("isBloodTypeCertified", mode="before")
     @classmethod
