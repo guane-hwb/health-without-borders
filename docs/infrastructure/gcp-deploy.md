@@ -157,13 +157,15 @@ To avoid hardcoded credentials in environment variables, store sensitive data in
 printf "<DB_PASSWORD>" | gcloud secrets create hwb-db-pass --data-file=-
 printf "<SECRET_KEY>" | gcloud secrets create hwb-secret-key --data-file=-
 openssl rand -hex 32 | tr -d '\n' | gcloud secrets create hwb-nfc-master-key --data-file=-
+# A key of the Guane organization in the Anthropic Console (LLM_BACKEND=anthropic).
+printf "<ANTHROPIC_API_KEY>" | gcloud secrets create anthropic-api-key --data-file=-
 
 ```
 
 The fourth secret, `nfc-kek`, is created only by following the KEK custody
 procedure ([NFC Key Management](nfc-key-management.md) § 10): its backup must
 exist before the service ever reads it. `cloudbuild.yaml` mounts `hwb-db-pass`,
-`hwb-secret-key` and `nfc-kek` as `:latest`; never add a version to an existing
+`hwb-secret-key`, `nfc-kek` and `anthropic-api-key` as `:latest`; never add a version to an existing
 one (same document, § 6 and § 10). `hwb-nfc-master-key` is mounted by hand for
 the first start with the KEK only, to import it as version 0 (same document,
 § 4); each deploy from `cloudbuild.yaml` removes it.
@@ -181,13 +183,13 @@ export RUNTIME_SA="hwb-backend@<GCP_PROJECT_ID>.iam.gserviceaccount.com"
 gcloud iam service-accounts create hwb-backend \
     --display-name="HWB backend (Cloud Run runtime)"
 
-# Cloud SQL connection and Vertex AI (Gemini)
+# Cloud SQL connection, and Vertex AI for LLM_BACKEND=gemini (the way back)
 gcloud projects add-iam-policy-binding <GCP_PROJECT_ID> \
     --member="serviceAccount:${RUNTIME_SA}" --role="roles/cloudsql.client"
 gcloud projects add-iam-policy-binding <GCP_PROJECT_ID> \
     --member="serviceAccount:${RUNTIME_SA}" --role="roles/aiplatform.user"
 
-for SECRET in hwb-db-pass hwb-secret-key nfc-kek; do
+for SECRET in hwb-db-pass hwb-secret-key nfc-kek anthropic-api-key; do
   gcloud secrets add-iam-policy-binding "${SECRET}" \
       --member="serviceAccount:${RUNTIME_SA}" \
       --role="roles/secretmanager.secretAccessor"

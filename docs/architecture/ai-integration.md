@@ -8,7 +8,7 @@ Additionally, patients and guardians report family medical history and chronic c
 
 ## 2. Decision
 
-We integrated a Generative AI processor (**Google Vertex AI / Gemini**) to handle three medical coding tasks during the sync process:
+We integrated a Generative AI processor to handle three medical coding tasks during the sync process. Since 2026-11 it is **Claude, through the Anthropic API** (`LLM_BACKEND=anthropic`, `app/services/llm/claude.py`); before, it was **Google Vertex AI / Gemini**, which stays selectable with `LLM_BACKEND=gemini` as the way back. The three tasks are:
 
 1. **Diagnosis extraction** — Analyzes free-text clinical evaluation fields to produce structured ICD-10/11 coded diagnoses.
 2. **Family history coding** — Maps condition descriptions (e.g., "Diabetes") to ICD-10/11 codes.
@@ -20,19 +20,22 @@ All three tasks run automatically during `POST /api/v1/patients/sync` before the
 
 ### Model Execution
 
-- **Model:** `gemini-3.8-flash`, a GA model (`LLM_MODEL_NAME`, set in `cloudbuild.yaml`). Google lists it as available from 2026-09-02 until at least 2027-09-02; check the [model versions page](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions) before that date. Until 2026-11 the service used `gemini-3-flash-preview`, a preview model without SLA; `gemini-2.5-pro`, which `.env.example` used to name, was retired from Vertex AI on 2026-10-20.
-- **Region:** `us-central1` (`LLM_LOCATION`, set in `cloudbuild.yaml`), the FHIR Store's region, so the clinical notes are processed where the record is kept. `global` would let Google choose the region.
-- **Timeout and budget:** each call has a timeout (`LLM_TIMEOUT_SECONDS`, default 30 s); a timeout or error falls back to R69. One `/sync` makes at most `LLM_MAX_CALLS_PER_SYNC` calls (20), `LLM_MAX_CONCURRENT_CALLS` at a time (4), and starts none after `LLM_SYNC_BUDGET_SECONDS` (45 s). A new visit the budget does not reach gets the R69 fallback; a background item stays uncoded and a later `/sync` codes it. A visit whose four clinical notes are empty gets the R69 fallback without a call.
-- **Configuration:** `temperature=0.0` (Greedy Decoding) for deterministic coding. `thinking_config` enabled for internal step-by-step reasoning.
+- **Model:** `claude-sonnet-5-5` (`LLM_MODEL_NAME`, set in `cloudbuild.yaml`; unset, each backend uses its own default). Short, structured coding tasks do not need the largest model: on four synthetic cases (guane-hwb/health-without-borders#108) Claude Sonnet 5.5 and Claude Opus 5.5 gave the same ICD-10 codes, in 1.7–3.0 s against 2.0–6.3 s. In one of two Sonnet runs one ICD-11 code (CA23.Z) was not in the catalog; the validation drops such a code and keeps the ICD-10 one. Thinking is adaptive and on by default; `LLM_EFFORT` (default `medium`, set in `cloudbuild.yaml`) sets how much it thinks, and a higher level is slower, within the timeout below. The model rejects non-default sampling values, so there is no `temperature`.
+- **Gemini, the way back:** `gemini-3.8-flash`, a GA model (`LLM_MODEL_NAME`, set in `cloudbuild.yaml`). Google lists it as available from 2026-09-02 until at least 2027-09-02; check the [model versions page](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions) before that date. Until 2026-11 the service used `gemini-3-flash-preview`, a preview model without SLA; `gemini-2.5-pro`, which `.env.example` used to name, was retired from Vertex AI on 2026-10-20.
+- **Where the notes are processed:** with `anthropic`, the clinical notes leave Google Cloud and are processed by Anthropic's API, a processor other than the one that keeps the record (the FHIR Store). With `gemini`, Vertex AI processes them in `LLM_LOCATION` (`us-central1`, set in `cloudbuild.yaml`), the FHIR Store's region; `global` would let Google choose the region.
+- **Timeout and budget:** each call has a timeout (`LLM_TIMEOUT_SECONDS`, default 30 s) and is not retried; a timeout or error falls back to R69. One `/sync` makes at most `LLM_MAX_CALLS_PER_SYNC` calls (20), `LLM_MAX_CONCURRENT_CALLS` at a time (4), and starts none after `LLM_SYNC_BUDGET_SECONDS` (45 s). A new visit the budget does not reach gets the R69 fallback; a background item stays uncoded and a later `/sync` codes it. A visit whose four clinical notes are empty gets the R69 fallback without a call.
+- **Configuration (Gemini):** `temperature=0.0` (Greedy Decoding) for deterministic coding. `thinking_config` enabled for internal step-by-step reasoning.
+- **Refusals (Claude):** a request that a safety classifier declines is run again, inside the same call, on a fallback model the API chooses by the refusal category (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`). The diagnosis records the model that answered. If every model declines, or the answer is cut (`max_tokens`), the result is R69.
 
 ### Safety & Compliance
 
-- **Data Privacy:** By using `vertexai=True`, the request is routed through GCP's enterprise infrastructure. Data is NOT used to train Google's consumer models.
-- **Safety Settings:** Harm Block Thresholds are set to `BLOCK_NONE` to prevent legitimate anatomical or clinical terms from being falsely flagged.
+- **Data Privacy (Claude):** the request goes to Anthropic's commercial API with a key of the Guane organization (`ANTHROPIC_API_KEY`, from the Secret Manager secret `anthropic-api-key`). Before it codes real patients, the data agreement under which HWB holds them must allow this processor, and Anthropic's terms for API data (training and retention) must be checked against it. Only the four clinical text fields and the background descriptions are sent; the code adds no name or document number, but the free text carries whatever the clinician wrote in it.
+- **Data Privacy (Gemini):** By using `vertexai=True`, the request is routed through GCP's enterprise infrastructure. Data is NOT used to train Google's consumer models.
+- **Safety Settings (Gemini):** Harm Block Thresholds are set to `BLOCK_NONE` to prevent legitimate anatomical or clinical terms from being falsely flagged. Claude has no such setting; its refusals are handled as above.
 
 ### Validation Layer
 
-- **Structured Output:** Each task uses a dedicated Gemini response schema (`DIAGNOSIS_RESPONSE_SCHEMA`, `FAMILY_HISTORY_RESPONSE_SCHEMA`, `CHRONIC_CONDITION_RESPONSE_SCHEMA`) to enforce the exact JSON structure returned.
+- **Structured Output:** Each task has a dedicated response schema (`DIAGNOSIS_RESPONSE_SCHEMA`, `FAMILY_HISTORY_RESPONSE_SCHEMA`, `CHRONIC_CONDITION_RESPONSE_SCHEMA`) that enforces the exact JSON structure returned. Gemini takes them as written, in the Vertex AI dialect; Claude takes the same schemas converted to standard JSON Schema (`json_output_schema`, the `*_OUTPUT_SCHEMA` constants), with the list of diagnoses under a `diagnoses` key. Both backends share the validation below (`app/services/llm/validation.py`).
 - **Pydantic Parsing:** Raw JSON is immediately parsed by `DiagnosisItem` Pydantic models.
 - **Post-LLM Terminology Validation:** Every ICD-10/11 code returned by the LLM is validated against the Vulcano IHCE terminology catalogs (`app/data/icd10_codes.json` and `app/data/icd11_codes.json`). If an ICD-10 code is not in the catalog, it is replaced with the honest fallback `R69`. If an ICD-11 code is invalid, it is stripped (set to `null`) since ICD-11 is optional per the IG; the response schemas declare `icd11Code` nullable.
 - **Terminal codes:** the prompts and the validation apply one rule. When the text gives no detail, a 3-character category that has subcategories is coded as its "unspecified" subcategory: the model is asked for it, and a category it returns anyway is completed (`E14` → `E149`, `J45` → `J459`). A category without a "9" subcategory stays as it is (`Z00`), and one without subcategories is complete (`E86`, `R69`).
@@ -76,7 +79,7 @@ Fallback on error: `R69`, with the clinician's text untouched.
 
 ### 4.4. Provenance of AI output
 
-Every diagnosis the LLM produces is stored with `source` (`ai_suggested`, or `ai_fallback` when the call failed, the code was not in the catalog or there was no call), `model` and `generatedAt`; a diagnosis the client sends for a new visit is marked `clinician`. In the RDA, a `Condition` is `confirmed` only for a clinician diagnosis of type 02/03 (confirmed); AI suggestions, fallbacks, legacy diagnoses with no source and diagnostic impressions (01) are sent as `provisional`. Only visits new to the server are sent to the LLM.
+Every diagnosis the LLM produces is stored with `source` (`ai_suggested`, or `ai_fallback` when the call failed, the code was not in the catalog or there was no call), `model` (the model that answered: with Claude, a fallback model after a refusal) and `generatedAt`; a diagnosis the client sends for a new visit is marked `clinician`. In the RDA, a `Condition` is `confirmed` only for a clinician diagnosis of type 02/03 (confirmed); AI suggestions, fallbacks, legacy diagnoses with no source and diagnostic impressions (01) are sent as `provisional`. Only visits new to the server are sent to the LLM.
 
 ## 5. Terminology Validation
 
@@ -140,11 +143,13 @@ The LLM service is accessed through a Protocol-based abstraction layer that deco
 ```
 app/services/llm/
 ├── base.py       # MedicalCodingService Protocol — the contract
+├── claude.py     # Anthropic API / Claude implementation (default)
 ├── gemini.py     # Google Vertex AI / Gemini implementation
 ├── noop.py       # No-op implementation (for local dev without LLM access)
 ├── factory.py    # Reads LLM_BACKEND config, returns right instance
 ├── prompts.py    # Provider-agnostic prompt builders
-├── schemas.py    # Provider-agnostic structured output schemas
+├── schemas.py    # Output schemas: Vertex AI dialect and standard JSON Schema
+├── validation.py # Post-LLM catalog validation and R69 fallbacks, shared
 └── __init__.py   # Re-exports medical_llm_processor singleton + Protocol
 
 app/services/
@@ -153,7 +158,7 @@ app/services/
 
 The endpoint imports `medical_llm_processor` from `app.services.llm`. It never imports a concrete LLM client. The factory reads the `LLM_BACKEND` environment variable at startup to decide which implementation to use.
 
-Note that `prompts.py` and `schemas.py` are provider-agnostic — prompts are plain strings and the response schemas are plain dicts. Any new LLM backend can reuse them. The terminology validation in `gemini.py` uses the shared `terminology` singleton from `app.services.terminology`.
+Note that `prompts.py` and `schemas.py` are provider-agnostic — prompts are plain strings and the response schemas are plain dicts. Any new LLM backend can reuse them. The terminology validation in `validation.py`, used by both backends, relies on the shared `terminology` singleton from `app.services.terminology`.
 
 ### Configuration
 
@@ -161,12 +166,13 @@ Set `LLM_BACKEND` in your `.env` file:
 
 | Value | Effect |
 |---|---|
-| `gemini` (default) | Uses Google Vertex AI with the model in `LLM_MODEL_NAME` |
+| `anthropic` (default) | Uses Claude through the Anthropic API with the model in `LLM_MODEL_NAME` (default `claude-sonnet-5-5`) and `ANTHROPIC_API_KEY`; without the key the service does not start |
+| `gemini` | Uses Google Vertex AI with the model in `LLM_MODEL_NAME` (default `gemini-3.8-flash`) |
 | `noop` | Returns deterministic fallback codes (R69) without any LLM call |
 
 ### Adding a New LLM Backend
 
-To support OpenAI, Anthropic, local Llama, or any other provider:
+To support OpenAI, local Llama, or any other provider:
 
 1. Create a new module in `app/services/llm/` implementing the `MedicalCodingService` Protocol — three methods: `extract_diagnoses()`, `code_family_history_item()`, and `code_chronic_condition()`.
 2. Register it in `factory.py` with a new branch in `get_llm_service()`.

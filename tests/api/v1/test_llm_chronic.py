@@ -63,7 +63,7 @@ class TestCodeChronicConditionHappyPath:
         }
         gemini_service._call = MagicMock(return_value=json.dumps(expected))
 
-        with patch("app.services.llm.gemini.terminology") as mock_term:
+        with patch("app.services.llm.validation.terminology") as mock_term:
             mock_term.validate_icd10.return_value = True
             mock_term.terminal_icd10.side_effect = lambda code: code.replace(".", "")
             mock_term.validate_icd11.return_value = True
@@ -80,7 +80,7 @@ class TestCodeChronicConditionHappyPath:
             "description": "Hipertensión esencial (primaria)",
         }))
 
-        with patch("app.services.llm.gemini.terminology") as mock_term:
+        with patch("app.services.llm.validation.terminology") as mock_term:
             mock_term.validate_icd10.return_value = True
             mock_term.terminal_icd10.side_effect = lambda code: code.replace(".", "")
             mock_term.validate_icd11.return_value = True
@@ -98,7 +98,7 @@ class TestCodeChronicConditionHappyPath:
             "description": "Asma, no especificada",
         }))
 
-        with patch("app.services.llm.gemini.terminology") as mock_term:
+        with patch("app.services.llm.validation.terminology") as mock_term:
             mock_term.validate_icd10.return_value = True
             mock_term.terminal_icd10.side_effect = lambda code: code.replace(".", "")
             mock_term.validate_icd11.return_value = True
