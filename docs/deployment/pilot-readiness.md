@@ -15,7 +15,7 @@ Before onboarding a pilot site, verify that all cloud infrastructure is operatio
 | Cloud SQL instance running | `gcloud sql instances describe <INSTANCE>` shows `RUNNABLE` | [GCP Deployment](../infrastructure/gcp-deploy.md) |
 | FHIR Store accessible | Healthcare API dashboard shows the store with R4, referential integrity enabled | [FHIR Store Configuration](../infrastructure/healthcare-api.md) |
 | Cloud Run service healthy | `GET /health-check` returns `200 OK` | [GCP Deployment](../infrastructure/gcp-deploy.md) |
-| Secret Manager configured | `hwb-db-pass`, `hwb-secret-key`, `hwb-nfc-master-key` and `nfc-kek` exist and are bound to Cloud Run | [GCP Deployment § Security](../infrastructure/gcp-deploy.md#4-security-secret-manager-setup) |
+| Secret Manager configured | `hwb-db-pass`, `hwb-secret-key`, `hwb-nfc-master-key`, `nfc-kek` and `anthropic-api-key` exist and are bound to Cloud Run | [GCP Deployment § Security](../infrastructure/gcp-deploy.md#4-security-secret-manager-setup) |
 | CI/CD pipeline green | Latest Cloud Build on `develop` succeeded (lint + tests + deploy) | [QA & PR Workflow](../development/qa-plan.md) |
 | ICD-10/11 terminology loaded | Application startup logs show `"Terminology loaded: N ICD-10 codes, M ICD-11 codes"` | [AI & NLP Integration § Terminology](../architecture/ai-integration.md#5-terminology-validation) |
 

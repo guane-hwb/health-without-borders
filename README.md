@@ -17,7 +17,7 @@ This repository contains the source code for the Backend API of the Health Witho
 ## Key Features
 
 * **FHIR R4 Interoperability:** Generates RDA (Resumen Digital de Atención en Salud) bundles compliant with Colombia's Resolution 1888/2025 and the IHCE Implementation Guide.
-* **AI-Assisted Medical Coding:** Gemini LLM integration for automated ICD-10/11 code extraction from clinical notes and family history coding.
+* **AI-Assisted Medical Coding:** Claude (Anthropic API) integration for automated ICD-10/11 code extraction from clinical notes and family history coding.
 * **Offline-First:** Optimized sync endpoints for mobile devices with limited connectivity.
 * **Delta Sync:** Only new FHIR bundles are generated and sent — no duplicate transmissions.
 * **Robust Security:** JWT authentication, RBAC with multi-tenancy, and a guardian device check before a minor's record is returned from a scan of the patient device (the server checks the guardian device's UID; it is not a second factor).
@@ -32,7 +32,7 @@ This repository contains the source code for the Backend API of the Health Witho
 * **Database:** PostgreSQL 15 (Cloud SQL in Production)
 * **ORM:** SQLAlchemy 2.0
 * **FHIR Store:** Google Cloud Healthcare API (R4)
-* **LLM:** Google Vertex AI (Gemini; `gemini-3.8-flash` in `us-central1`, set by `LLM_MODEL_NAME` and `LLM_LOCATION`)
+* **LLM:** Claude through the Anthropic API (`claude-opus-5-5`, set by `LLM_BACKEND`, `LLM_MODEL_NAME` and `LLM_EFFORT`); Google Vertex AI / Gemini remains selectable with `LLM_BACKEND=gemini`
 * **Package Manager:** `uv` (Astral)
 * **Infrastructure:** Docker, Google Artifact Registry, Google Cloud Build.
 
@@ -63,11 +63,13 @@ health-without-borders/
 │       │   └── factory.py            # Backend selection via FHIR_BACKEND env var
 │       ├── llm/                      # LLM abstraction (vendor-neutral)
 │       │   ├── base.py               # MedicalCodingService Protocol
+│       │   ├── claude.py             # Anthropic API / Claude backend (default)
 │       │   ├── gemini.py             # Google Vertex AI / Gemini backend
 │       │   ├── noop.py               # No-op backend (dev/testing)
 │       │   ├── factory.py            # Backend selection via LLM_BACKEND env var
 │       │   ├── prompts.py            # Provider-agnostic prompt builders
-│       │   └── schemas.py            # Provider-agnostic output schemas
+│       │   ├── schemas.py            # Output schemas (Vertex AI and JSON Schema)
+│       │   └── validation.py         # Post-LLM catalog validation and R69 fallbacks
 │       ├── fhir_service.py           # FHIR R4 RDA bundle generation
 │       └── patient_service.py        # Patient CRUD & strict lookup
 ├── migrations/                       # Alembic database migrations (applied at startup)

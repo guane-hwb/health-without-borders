@@ -122,12 +122,13 @@ def mark_ai_diagnoses(diagnoses: List[DiagnosisItem], model: str) -> List[Diagno
     """
     Stamp LLM-produced diagnoses with their provenance. A fallback keeps
     AI_FALLBACK; every diagnosis the model returned, R69 included, is
-    AI_SUGGESTED.
+    AI_SUGGESTED. A backend that knows which model answered (a fallback model
+    after a refusal) sets ``model`` itself, and that name is kept.
     """
     generated_at = datetime.now(timezone.utc)
     for diagnosis in diagnoses:
         if diagnosis.source != CodeSource.AI_FALLBACK:
             diagnosis.source = CodeSource.AI_SUGGESTED
-        diagnosis.model = model
+        diagnosis.model = diagnosis.model or model
         diagnosis.generatedAt = generated_at
     return diagnoses

@@ -20,13 +20,16 @@ import pytest
 
 from app.core.config import Settings, settings
 from app.schemas.patient import DiagnosisItem
-from app.services.llm import prompts
+from app.services.llm import claude, gemini, prompts
 from app.services.llm.base import FALLBACK_ICD10_CODE, ai_code_source, fallback_coding
-from app.services.llm.gemini import _validate_and_fix_diagnosis, _validate_and_fix_dict
 from app.services.llm.schemas import (
     CHRONIC_CONDITION_RESPONSE_SCHEMA,
     DIAGNOSIS_RESPONSE_SCHEMA,
     FAMILY_HISTORY_RESPONSE_SCHEMA,
+)
+from app.services.llm.validation import (
+    validate_and_fix_diagnosis,
+    validate_and_fix_dict,
 )
 from app.services.terminology import TerminologyService, terminology
 from tests.api.v1.test_llm_provenance import (
@@ -262,10 +265,10 @@ def test_without_the_full_catalog_codes_are_only_checked_for_shape():
 
 
 def test_llm_answers_are_completed_to_terminal_codes():
-    diagnosis = _validate_and_fix_diagnosis(DiagnosisItem(icd10Code="J45", description="Asma"))
+    diagnosis = validate_and_fix_diagnosis(DiagnosisItem(icd10Code="J45", description="Asma"))
     assert diagnosis.icd10Code == "J459"
-    assert _validate_and_fix_dict({"icd10Code": "E14", "icd11Code": None})["icd10Code"] == "E149"
-    assert _validate_and_fix_dict({"icd10Code": "Z00129"})["fallback"] is True
+    assert validate_and_fix_dict({"icd10Code": "E14", "icd11Code": None})["icd10Code"] == "E149"
+    assert validate_and_fix_dict({"icd10Code": "Z00129"})["fallback"] is True
 
 
 def test_every_prompt_example_is_a_terminal_catalog_code():
@@ -293,13 +296,22 @@ def test_icd11_is_nullable_in_every_response_schema():
 # ---------------------------------------------------------------------------
 
 
-def test_a_ga_model_in_the_fhir_store_region():
+def test_the_deployment_names_backend_model_and_effort():
+    # The deployment says who processes the clinical notes: Claude through the
+    # Anthropic API, with its key from Secret Manager.
     defaults = Settings.model_fields
-    assert defaults["LLM_MODEL_NAME"].default == "gemini-3.8-flash"
-    assert defaults["LLM_LOCATION"].default == "us-central1"
+    assert defaults["LLM_BACKEND"].default == "anthropic"
+    assert claude.DEFAULT_MODEL == "claude-opus-5-5"
     deploy = (REPO / "cloudbuild.yaml").read_text()
-    assert "LLM_MODEL_NAME=gemini-3.8-flash" in deploy
-    assert "LLM_LOCATION=us-central1" in deploy
+    assert "LLM_BACKEND=anthropic,LLM_MODEL_NAME=claude-opus-5-5,LLM_EFFORT=medium" in deploy
+    assert "ANTHROPIC_API_KEY=anthropic-api-key:latest" in deploy
+
+
+def test_the_way_back_is_a_ga_gemini_model_in_the_fhir_store_region():
+    defaults = Settings.model_fields
+    assert gemini.DEFAULT_MODEL == "gemini-3.8-flash"
+    assert defaults["LLM_LOCATION"].default == "us-central1"
+    assert "LLM_LOCATION=us-central1" in (REPO / "cloudbuild.yaml").read_text()
 
 
 def test_background_items_without_text_are_not_coded(client, db_session, counting_llm):

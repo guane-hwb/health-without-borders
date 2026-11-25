@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Optional
+from typing import Literal, Optional
 
 from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -58,10 +58,17 @@ class Settings(BaseSettings):
     # --- INTEROPERABILITY BACKEND SELECTION ---
     # Controls which concrete implementation is used for the FHIR Store and LLM.
     # Supported values for FHIR_BACKEND: "gcp", "noop"
-    # Supported values for LLM_BACKEND: "gemini", "noop"
+    # Supported values for LLM_BACKEND: "anthropic", "gemini", "noop"
     # This makes the application vendor-neutral and deployable outside GCP.
     FHIR_BACKEND: str = "gcp"
-    LLM_BACKEND: str = "gemini"
+    LLM_BACKEND: str = "anthropic"
+
+    # --- ANTHROPIC (only used when LLM_BACKEND=anthropic) ---
+    # From Secret Manager in Cloud Run (cloudbuild.yaml); never in the image.
+    ANTHROPIC_API_KEY: Optional[str] = None
+    # How hard Claude thinks before it codes. Higher is slower; each call must
+    # fit in LLM_TIMEOUT_SECONDS and a /sync in LLM_SYNC_BUDGET_SECONDS.
+    LLM_EFFORT: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
 
     # --- GOOGLE CLOUD PLATFORM (only used when FHIR_BACKEND=gcp or LLM_BACKEND=gemini) ---
     GCP_PROJECT_ID: Optional[str] = None
@@ -69,10 +76,11 @@ class Settings(BaseSettings):
     GCP_DATASET_ID: Optional[str] = None
     GCP_FHIR_STORE_ID: Optional[str] = None
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None
-    # A GA model: preview models carry no SLA and can change or go away without
-    # notice. Retirement dates: docs/architecture/ai-integration.md.
-    LLM_MODEL_NAME: str = "gemini-3.8-flash"
-    # Vertex AI region that processes the clinical notes sent to the LLM: the
+    # The model of the selected LLM_BACKEND; unset, each backend uses its own
+    # default (claude-opus-5-5, gemini-3.8-flash). Retirement dates:
+    # docs/architecture/ai-integration.md.
+    LLM_MODEL_NAME: Optional[str] = None
+    # Only for LLM_BACKEND=gemini. Vertex AI region that processes the clinical notes sent to the LLM: the
     # FHIR Store's region, so the notes stay where the record is kept. "global"
     # lets Google pick the region.
     LLM_LOCATION: str = "us-central1"
